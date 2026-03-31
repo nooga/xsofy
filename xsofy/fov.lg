@@ -1,0 +1,88 @@
+(ns xsofy.fov
+  (:require [xsofy.terrain :as terrain]))
+
+;; Shadowcasting FOV — direct port of the roguebasin recursive algorithm
+;; http://www.roguebasin.com/index.php/FOV_using_recursive_shadowcasting
+
+(def ^:private mults
+  ;; xx xy yx yy
+  [[ 1  0  0  1]
+   [ 0  1  1  0]
+   [ 0 -1  1  0]
+   [-1  0  0  1]
+   [-1  0  0 -1]
+   [ 0 -1 -1  0]
+   [ 0  1 -1  0]
+   [ 1  0  0 -1]])
+
+(defn- blocked? [grid w h x y]
+  (or (< x 0) (>= x w) (< y 0) (>= y h)
+      (not (terrain/transparent? grid w h x y))))
+
+(defn- cast-octant [visible grid w h cx cy radius row start end xx xy yx yy]
+  (when (and (<= row radius) (>= start end))
+    (let [new-start (atom start)
+          r2 (* radius radius)]
+      (let [done (atom false)]
+        (doseq [j (range (- row) 1)]
+          (when-not @done
+            (let [dx j
+                  dy (- row)
+                  ax (+ cx (* dx xx) (* dy xy))
+                  ay (+ cy (* dx yx) (* dy yy))
+                  l-slope (/ (- dx 0.5) (+ dy 0.5))
+                  r-slope (/ (+ dx 0.5) (- dy 0.5))]
+              (when-not (< @new-start r-slope)
+                (if (> end l-slope)
+                  (reset! done true)
+                  (do
+                    (let [ddx (- ax cx) ddy (- ay cy)]
+                      (when (and (<= (+ (* ddx ddx) (* ddy ddy)) r2)
+                                 (>= ax 0) (< ax w) (>= ay 0) (< ay h))
+                        (swap! visible conj [ax ay])))
+                    (let [wall (blocked? grid w h ax ay)]
+                      (if wall
+                        (do
+                          ;; check if previous cell was open
+                          (when (> j (- row))
+                            (let [prev-x (+ cx (* (dec dx) xx) (* dy xy))
+                                  prev-y (+ cy (* (dec dx) yx) (* dy yy))]
+                              (when-not (blocked? grid w h prev-x prev-y)
+                                (cast-octant visible grid w h cx cy radius
+                                             (inc row) @new-start l-slope
+                                             xx xy yx yy))))
+                          (reset! new-start r-slope))
+                        ;; open cell — check if previous was wall
+                        (when (and (> j (- row))
+                                   (blocked? grid w h
+                                             (+ cx (* (dec dx) xx) (* dy xy))
+                                             (+ cy (* (dec dx) yx) (* dy yy))))
+                          (reset! new-start r-slope))))))))))
+        ;; if last cell in row was open, recurse
+        (let [last-ax (+ cx (* 0 xx) (* (- row) xy))
+              last-ay (+ cy (* 0 yx) (* (- row) yy))]
+          (when (and (not @done)
+                     (not (blocked? grid w h last-ax last-ay)))
+            (cast-octant visible grid w h cx cy radius
+                         (inc row) @new-start end xx xy yx yy)))))))
+
+(defn- reveal-line [result grid w h ox oy radius dx dy]
+  (loop [i 1]
+    (when (<= i radius)
+      (let [x (+ ox (* i dx))
+            y (+ oy (* i dy))]
+        (when (and (>= x 0) (< x w) (>= y 0) (< y h))
+          (swap! result conj [x y])
+          (when (terrain/transparent? grid w h x y)
+            (recur (inc i))))))))
+
+(defn compute-fov [grid w h ox oy radius]
+  (let [result (atom #{[ox oy]})]
+    ;; cast cardinal directions explicitly (they sit on octant boundaries)
+    (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
+      (reveal-line result grid w h ox oy radius dx dy))
+    ;; cast 8 octants for everything else
+    (doseq [oct (range 8)]
+      (let [[xx xy yx yy] (nth mults oct)]
+        (cast-octant result grid w h ox oy radius 1 1.0 0.0 xx xy yx yy)))
+    @result))

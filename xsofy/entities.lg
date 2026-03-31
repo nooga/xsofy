@@ -1,0 +1,270 @@
+(ns xsofy.entities)
+
+;; --- Registry ---
+
+(def templates (atom {}))
+(def id-counter (atom 0))
+
+(defn next-id [prefix]
+  (let [n (swap! id-counter inc)]
+    (keyword (str (name prefix) "-" n))))
+
+;; --- Deep Merge ---
+
+(defn deep-merge [a b]
+  (reduce (fn [m [k v]]
+            (if (and (map? (get m k)) (map? v))
+              (assoc m k (deep-merge (get m k) v))
+              (assoc m k v)))
+          a b))
+
+;; --- Component Functions ---
+
+(defn visual [glyph color]
+  {:visual {:glyph glyph :color color}})
+
+(defn body [m]
+  {:body (merge {:hp 1 :strength 1 :armor 0} m)})
+
+(defn ai
+  ([behavior] (ai behavior {}))
+  ([behavior opts]
+   {:ai (merge {:behavior behavior :speed 1 :state :sleep :target nil :path nil}
+               opts)}))
+
+(defn melee [damage]
+  {:spells {:melee {:damage damage}}})
+
+(defn spell [sname m]
+  {:spells {sname m}})
+
+(defn drops [& items]
+  {:drops (vec items)})
+
+(defn immune [& elements]
+  {:properties (reduce (fn [acc el]
+                         (assoc acc (keyword (str (name el) "-immune")) true))
+                       {} elements)})
+
+(defn trait [id]
+  {:traits [id]})
+
+(defn sounds [m]
+  {:sounds m})
+
+;; --- Item Components ---
+
+(defn weapon [m]
+  {:item {:slot :weapon
+          :min-dmg (or (:min-dmg m) 1)
+          :max-dmg (or (:max-dmg m) 2)
+          :accuracy (or (:accuracy m) 100)
+          :speed (or (:speed m) 100)
+          :str-req (or (:str-req m) 1)
+          :enchant (or (:enchant m) 0)
+          :sneak-bonus (or (:sneak-bonus m) 3)}})
+
+(defn armor [m]
+  {:item {:slot :armor
+          :defense (or (:defense m) 10)
+          :str-req (or (:str-req m) 1)
+          :enchant (or (:enchant m) 0)}})
+
+(defn ring [m]
+  {:item {:slot :ring
+          :effect (:effect m)
+          :power (or (:power m) 1)}})
+
+(defn consumable [m]
+  {:item {:slot :consumable
+          :effect (:effect m)
+          :count (or (:count m) 1)}})
+
+(defn item-name [n]
+  {:item-name n})
+
+(defn item-desc [d]
+  {:item-desc d})
+
+;; --- Trait Registry ---
+
+(def trait-defs (atom {}))
+
+(defn deftrait* [id m]
+  (swap! trait-defs assoc id m))
+
+(defmacro deftrait [id & components]
+  `(deftrait* ~id (reduce deep-merge {} [~@components])))
+
+;; --- Creature Registration ---
+
+(defn resolve-traits [m]
+  (let [trait-ids (get m :traits [])
+        trait-map (reduce (fn [acc tid]
+                            (if-let [t (get @trait-defs tid)]
+                              (deep-merge acc t)
+                              (do (println "WARNING: unknown trait" tid) acc)))
+                          {} trait-ids)]
+    (-> (deep-merge trait-map m)
+        (dissoc :traits))))
+
+(defn register! [id template]
+  (swap! templates assoc id (resolve-traits template)))
+
+(defmacro defcreature [id & components]
+  `(register! ~(keyword (name id))
+              (reduce deep-merge {} [~@components])))
+
+;; --- Item Registration ---
+
+(defmacro defitem [id & components]
+  `(register! ~(keyword (name id))
+              (reduce deep-merge {:entity-type :item} [~@components])))
+
+;; --- Instantiation ---
+
+(defn spawn [world species pos]
+  (let [template (get @templates species)
+        _ (when (nil? template) (throw (str "Unknown species: " species)))
+        id (next-id species)
+        body (:body template)
+        instance (-> template
+                     (assoc :id id
+                            :template species
+                            :pos pos
+                            :ticks 0)
+                     (assoc-in [:body :max-hp] (:hp body))
+                     (update :ai merge {:state :sleep :target nil :path nil})
+                     (update :status #(or % {})))]
+    (assoc-in world [:entities id] instance)))
+
+(defn spawn-item [world species pos]
+  (let [template (get @templates species)
+        _ (when (nil? template) (throw (str "Unknown item: " species)))
+        id (next-id species)
+        instance (-> template
+                     (assoc :id id
+                            :template species
+                            :pos pos))]
+    (assoc-in world [:entities id] instance)))
+
+;; --- Entity Queries ---
+
+(defn entity-at [world pos]
+  (->> (:entities world)
+       (vals)
+       (filter #(= pos (:pos %)))
+       (first)))
+
+(defn items-at [world pos]
+  (->> (:entities world)
+       (vals)
+       (filter #(and (= pos (:pos %))
+                     (= :item (:entity-type %))))))
+
+(defn creature-at [world pos]
+  (->> (:entities world)
+       (vals)
+       (filter #(and (= pos (:pos %))
+                     (not= :item (:entity-type %))))
+       (first)))
+
+(defn alive? [entity]
+  (> (get-in entity [:body :hp] 0) 0))
+
+;; --- Entity Modification ---
+
+(defn update-entity [world id f & args]
+  (apply update-in world [:entities id] f args))
+
+(defn remove-entity [world id]
+  (update world :entities dissoc id))
+
+;; --- Inventory ---
+
+(def max-inventory 26)
+
+(defn inventory [world owner-id]
+  (or (get-in world [:entities owner-id :inventory]) []))
+
+(defn inventory-full? [world owner-id]
+  (>= (count (inventory world owner-id)) max-inventory))
+
+(defn pickup-item [world item-id owner-id]
+  (if (inventory-full? world owner-id)
+    nil ;; return nil to signal failure
+    (-> world
+        (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
+        (assoc-in [:entities item-id :pos] nil))))
+
+(defn drop-item [world item-id owner-id]
+  (let [owner-pos (get-in world [:entities owner-id :pos])]
+    (-> world
+        (update-in [:entities owner-id :inventory]
+                   #(vec (remove (fn [id] (= id item-id)) %)))
+        (assoc-in [:entities item-id :pos] owner-pos))))
+
+;; --- Equipment ---
+
+(defn equipped [world owner-id slot]
+  (get-in world [:entities owner-id :equipment slot]))
+
+(defn equip-item [world item-id owner-id]
+  (let [item (get-in world [:entities item-id])
+        slot (get-in item [:item :slot])]
+    (when (and item slot (not= slot :consumable))
+      (let [current (equipped world owner-id slot)
+            w (if current
+                ;; unequip current item
+                (update-in world [:entities owner-id :equipment] dissoc slot)
+                world)]
+        (assoc-in w [:entities owner-id :equipment slot] item-id)))))
+
+(defn unequip-item [world owner-id slot]
+  (update-in world [:entities owner-id :equipment] dissoc slot))
+
+;; --- Combat with Equipment ---
+
+(defn get-weapon [world entity-id]
+  (let [wep-id (equipped world entity-id :weapon)]
+    (when wep-id (get-in world [:entities wep-id]))))
+
+(defn get-armor [world entity-id]
+  (let [arm-id (equipped world entity-id :armor)]
+    (when arm-id (get-in world [:entities arm-id]))))
+
+(defn get-weapon-damage [world entity-id]
+  (let [wep (get-weapon world entity-id)]
+    (if wep
+      (or (get-in wep [:item :max-dmg]) 1)
+      1)))
+
+(defn get-armor-defense [world entity-id]
+  (let [arm (get-armor world entity-id)]
+    (if arm
+      (or (get-in arm [:item :defense]) 0)
+      0)))
+
+(defn damage-entity [world id amount]
+  (let [entity (get-in world [:entities id])
+        armor-val (+ (get-in entity [:body :armor] 0)
+                     (get-armor-defense world id))
+        actual (max 1 (- amount armor-val))
+        new-hp (- (get-in entity [:body :hp]) actual)]
+    (if (<= new-hp 0)
+      ;; drop inventory + creature drops on death
+      (let [inv (or (get-in world [:entities id :inventory]) [])
+            drops (or (:drops entity) [])
+            pos (:pos entity)
+            ;; drop held items
+            w (reduce (fn [w iid]
+                        (if (get-in w [:entities iid])
+                          (assoc-in w [:entities iid :pos] pos)
+                          w))
+                      world inv)
+            ;; spawn creature drops
+            w (reduce (fn [w drop-type]
+                        (spawn-item w drop-type pos))
+                      w drops)]
+        (remove-entity w id))
+      (assoc-in world [:entities id :body :hp] new-hp))))

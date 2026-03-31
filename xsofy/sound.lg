@@ -1,0 +1,99 @@
+(ns xsofy.sound
+  (:require [math]))
+
+;; --- Sound System ---
+;; Entities emit sounds. The system delivers them as messages
+;; based on distance from the player. Sounds have:
+;;   :msg-near  — player can see the source
+;;   :msg-mid   — close but not visible (behind wall)
+;;   :msg-far   — distant
+;;   :radius    — max hearing distance
+;;   :pos       — where it happened
+
+(def near-threshold 3)
+(def mid-threshold 8)
+
+(defn distance [p1 p2]
+  (let [[x1 y1] p1
+        [x2 y2] p2
+        dx (- x2 x1)
+        dy (- y2 y1)]
+    (math/sqrt (+ (* dx dx) (* dy dy)))))
+
+(defn deliver-sound [world sound]
+  (let [player-pos (get-in world [:entities :player :pos])
+        fov (or (:fov world) #{})
+        spos (:pos sound)
+        dist (if (and player-pos spos) (distance player-pos spos) 999)
+        radius (or (:radius sound) 15)
+        visible (contains? fov spos)]
+    (if (> dist radius)
+      world ;; too far to hear
+      (let [msg (cond
+                  visible           (:msg-near sound)
+                  (< dist mid-threshold) (:msg-mid sound)
+                  :else             (:msg-far sound))]
+        (if msg
+          (update world :log #(conj (or % []) msg))
+          world)))))
+
+(defn deliver-sounds [world sounds]
+  (reduce deliver-sound world sounds))
+
+;; --- Sound Definitions ---
+
+(defn footstep [pos who]
+  {:pos pos :radius 10
+   :msg-near nil  ;; you can see them, no need for sound
+   :msg-mid  (str "You hear footsteps.")
+   :msg-far  (str "You hear distant footsteps.")})
+
+(defn door-open [pos who]
+  {:pos pos :radius 15
+   :msg-near (str "The " who " opens a door.")
+   :msg-mid  "You hear hinges creak."
+   :msg-far  "You hear a distant creak."})
+
+(defn snoring [pos who]
+  {:pos pos :radius 8
+   :msg-near (str "The " who " is snoring.")
+   :msg-mid  "You hear snoring."
+   :msg-far  nil})
+
+;; --- Default death/combat sounds ---
+
+(defn death-cry [pos who]
+  {:pos pos :radius 20
+   :msg-near (str "The " who " shrieks and falls!")
+   :msg-mid  "You hear a shriek!"
+   :msg-far  "You hear a distant shriek."})
+
+(defn combat-hit [pos who target]
+  {:pos pos :radius 12
+   :msg-near nil
+   :msg-mid  "You hear fighting."
+   :msg-far  "You hear distant fighting."})
+
+;; --- Per-creature sound tables ---
+;; Each creature can have :sounds on its template:
+;;   {:death {:near "..." :mid "..." :far "..."}
+;;    :idle  [{:near "..." :mid "..." :far "..." :chance 5}]}
+
+(defn creature-death [pos who sounds]
+  (let [d (:death sounds)]
+    (if d
+      {:pos pos :radius 20
+       :msg-near (or (:near d) (str "The " who " dies."))
+       :msg-mid  (or (:mid d) "You hear something die.")
+       :msg-far  (or (:far d) nil)}
+      (death-cry pos who))))
+
+(defn creature-idle [pos who sounds]
+  (let [options (:idle sounds)]
+    (when (and options (seq options))
+      (let [pick (nth options (rand-int (count options)))]
+        (when (< (rand-int 100) (or (:chance pick) 5))
+          {:pos pos :radius (or (:radius pick) 10)
+           :msg-near (:near pick)
+           :msg-mid  (:mid pick)
+           :msg-far  (:far pick)})))))

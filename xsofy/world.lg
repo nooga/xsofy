@@ -1,0 +1,553 @@
+(ns xsofy.world
+  (:require [xsofy.terrain :as terrain]
+            [xsofy.fov :as fov]
+            [xsofy.entities :as ent]
+            [xsofy.combat :as combat]
+            [xsofy.ai :as ai]
+            [xsofy.sound :as snd]
+            [xsofy.lighting :as light]
+            [xsofy.effects :as fx]
+            [xsofy.items :as items]
+            [xsofy.debug :as dbg]
+            [xsofy.bestiary]))
+
+(def view-radius 12)
+
+;; --- Depth-based creature spawning ---
+
+(def depth-creatures
+  {1 [:rat :rat :goblin :goblin]
+   2 [:rat :goblin :goblin :archer]
+   3 [:goblin :goblin :archer :slime]})
+
+(defn creatures-for-depth [depth]
+  (get depth-creatures (min depth 3) [:goblin]))
+
+(defn populate-room [world room-center grid tw th depth]
+  (let [pool (creatures-for-depth depth)
+        num-creatures (rand-int 3)
+        num-items (rand-int 2)
+        [rx ry] room-center]
+    ;; spawn creatures
+    (let [w (loop [world world n num-creatures]
+              (if (<= n 0) world
+                (let [species (nth pool (rand-int (count pool)))
+                      ox (+ rx (- (rand-int 5) 2))
+                      oy (+ ry (- (rand-int 5) 2))]
+                  (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
+                           (terrain/walkable? grid tw th ox oy)
+                           (nil? (ent/creature-at world [ox oy])))
+                    (recur (ent/spawn world species [ox oy]) (dec n))
+                    (recur world (dec n))))))]
+      ;; spawn items
+      (loop [world w n num-items]
+        (if (<= n 0) world
+          (let [item-type (items/random-loot depth)
+                ox (+ rx (- (rand-int 5) 2))
+                oy (+ ry (- (rand-int 5) 2))]
+            (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
+                     (terrain/walkable? grid tw th ox oy))
+              (recur (ent/spawn-item world item-type [ox oy]) (dec n))
+              (recur world (dec n)))))))))
+
+;; --- FOV ---
+
+(defn update-fov [world]
+  (if-not (get-in world [:entities :player])
+    world
+    (let [{:keys [terrain width height]} world
+          [px py] (get-in world [:entities :player :pos])
+          visible (fov/compute-fov terrain width height px py view-radius)
+          memory (reduce (fn [mem [x y]]
+                           (assoc mem [x y] (terrain/tget terrain width x y)))
+                         (get world :memory {})
+                         visible)
+          lights (or (:lights world)
+                     (light/collect-terrain-lights terrain width height))]
+      (assoc world :fov visible :memory memory :lights lights))))
+
+;; --- World Creation ---
+
+(defn generate-floor [w h depth player]
+  (dbg/log "generate-floor" w h "depth:" depth)
+  (let [{:keys [grid rooms]} (terrain/generate-level w h)
+        [px py] (first rooms)]
+    (dbg/log "  rooms:" (count rooms) "player-pos:" [px py])
+    (let [lights (light/collect-terrain-lights grid w h)
+          world {:terrain grid
+                 :width w
+                 :height h
+                 :entities {:player (assoc player :pos [px py])}
+                 :fov #{}
+                 :memory {}
+                 :lights lights
+                 :stains {}
+                 :gases {}
+                 :log []
+                 :turn 0
+                 :depth depth
+                 :running true}]
+      (dbg/log "  populating rooms")
+      (let [populated (reduce (fn [wrld room]
+                                (dbg/log "    populate room:" room)
+                                (populate-room wrld room grid w h depth))
+                              world
+                              (rest rooms))]
+        (dbg/log "  rooms populated, running update-fov")
+        (let [result (update-fov populated)]
+          (dbg/log "  generate-floor done")
+          result)))))
+
+(defn make-player []
+  (let [template (get @ent/templates :player)]
+    (-> template
+        (assoc :id :player
+               :template :player
+               :pos [0 0]
+               :ticks 0
+               :status {})
+        (assoc-in [:body :max-hp] (get-in template [:body :hp])))))
+
+(defn make-world [w h]
+  (let [world (generate-floor w h 1 (make-player))]
+    (assoc world :floors {} :gold 0)))
+
+;; --- Floor Transition ---
+;; Saves current floor, extracts player + inventory items,
+;; restores or generates target floor, injects player + items.
+
+(defn extract-player-items [world]
+  "Returns [player, {item-id -> item-entity}] with items removed from world entities."
+  (let [player (get-in world [:entities :player])
+        inv (or (:inventory player) [])
+        equip (or (:equipment player) {})
+        equip-ids (vec (filter some? (vals equip)))
+        all-ids (distinct (concat inv equip-ids))
+        items (reduce (fn [m id]
+                        (if-let [item (get-in world [:entities id])]
+                          (assoc m id item)
+                          m))
+                      {} all-ids)]
+    [player items]))
+
+(defn save-current-floor [world]
+  "Save current floor state (without player or player items) into :floors."
+  (let [[player items] (extract-player-items world)
+        inv-ids (or (:inventory player) [])
+        equip-ids (vec (filter some? (vals (or (:equipment player) {}))))
+        all-ids (set (concat inv-ids equip-ids [:player]))
+        ;; remove player and their items from entities
+        floor-entities (reduce dissoc (:entities world) all-ids)
+        floor {:terrain (:terrain world)
+               :width (:width world)
+               :height (:height world)
+               :entities floor-entities
+               :stains (or (:stains world) {})
+               :gases (or (:gases world) {})
+               :lights (:lights world)
+               :memory (or (:memory world) {})}]
+    (assoc-in world [:floors (:depth world)] floor)))
+
+(defn inject-player [world player items pos]
+  "Add player and their inventory items into the world at pos."
+  (let [player (assoc player :pos pos)
+        w (assoc-in world [:entities :player] player)]
+    (reduce (fn [w [id item]]
+              (assoc-in w [:entities id] (assoc item :pos nil)))
+            w items)))
+
+(defn restore-floor [world depth player items]
+  "Restore a saved floor, placing player at stairs."
+  (let [floor (get-in world [:floors depth])
+        ;; find stairs-up (14) to place player coming from below
+        ;; find stairs-down (13) to place player coming from above
+        terrain (:terrain floor)
+        w (:width floor)
+        h (:height floor)]
+    (-> {:terrain terrain
+         :width w
+         :height h
+         :entities (:entities floor)
+         :fov #{}
+         :memory (:memory floor)
+         :lights (:lights floor)
+         :stains (:stains floor)
+         :gases (:gases floor)
+         :log (:log world)
+         :turn (:turn world)
+         :gold (or (:gold world) 0)
+         :depth depth
+         :floors (:floors world)
+         :running true}
+        (inject-player player items nil))))
+
+;; --- Message Log ---
+
+;; --- Environment Effects ---
+
+(defn trample-grass [world x y]
+  "Walking on grass turns it to floor."
+  (let [{:keys [terrain width]} world
+        tile (terrain/tget terrain width x y)]
+    (when (= tile 2)
+      (terrain/tset! terrain width x y 1))
+    world))
+
+(defn splatter-blood [world x y amount]
+  "Combat leaves blood stains. Big hits splatter to neighbors."
+  (if (> amount 3)
+    (fx/splatter world x y :blood (min 4 (quot amount 2)) 1)
+    (if (> amount 1)
+      (fx/add-stain world x y :blood 1)
+      world)))
+
+;; --- Message Log ---
+
+(def max-log 50)
+
+(defn log-msg [world msg]
+  (update world :log (fn [log]
+                       (let [log (or log [])
+                             last-entry (peek log)
+                             ;; collapse consecutive identical messages
+                             new-log (if (and last-entry (map? last-entry) (= msg (:msg last-entry)))
+                                       (assoc log (dec (count log))
+                                              {:msg msg :count (inc (:count last-entry))})
+                                       (if (and last-entry (string? last-entry) (= msg last-entry))
+                                         (assoc log (dec (count log))
+                                                {:msg msg :count 2})
+                                         (conj log msg)))]
+                         (if (> (count new-log) max-log)
+                           (vec (drop (- (count new-log) max-log) new-log))
+                           new-log)))))
+
+(defn entity-name [entity]
+  (let [k (or (:template entity) (:id entity))]
+    (if k (name k) "something")))
+
+;; --- Stairs ---
+
+(defn find-tile [terrain w h tile-type]
+  "Find first position of a tile type."
+  (loop [y 0]
+    (if (>= y h) nil
+      (let [found (loop [x 0]
+                    (if (>= x w) nil
+                      (if (= tile-type (terrain/tget terrain w x y))
+                        [x y]
+                        (recur (inc x)))))]
+        (if found found (recur (inc y)))))))
+
+(defn change-floor [world new-depth]
+  (let [{:keys [width height depth]} world
+        [player items] (extract-player-items world)
+        saved (save-current-floor world)]
+    (if (get-in saved [:floors new-depth])
+      ;; restore existing floor
+      (let [floor (get-in saved [:floors new-depth])
+            spawn-tile (if (> new-depth depth) 14 13)
+            spawn-pos (find-tile (:terrain floor) (:width floor) (:height floor) spawn-tile)
+            spawn-pos (or spawn-pos [5 5])
+            player (assoc player :ticks 0)
+            w (restore-floor saved new-depth player items)]
+        (-> (assoc-in w [:entities :player :pos] spawn-pos)
+            update-fov
+            (log-msg (if (> new-depth depth)
+                       (str "You descend to depth " new-depth ".")
+                       (str "You ascend to depth " new-depth ".")))))
+      ;; generate new floor
+      (let [new-player (assoc player :pos [0 0])  ;; pos set by generate-floor
+            new-world (generate-floor width height new-depth new-player)
+            spawn-pos (get-in new-world [:entities :player :pos])]
+        ;; re-inject with proper items
+        ;; reset player ticks to 0 so they act first on new floor
+        (let [player (assoc player :ticks 0)]
+          (-> new-world
+              (assoc :log (:log saved)
+                     :turn (:turn saved)
+                     :gold (or (:gold saved) 0)
+                     :floors (:floors saved))
+              (inject-player player items spawn-pos)
+              (log-msg (str "You descend to depth " new-depth "."))))))))
+
+(defn descend [world]
+  (let [{:keys [terrain width depth]} world
+        [px py] (get-in world [:entities :player :pos])
+        tile (terrain/tget terrain width px py)]
+    (if (= tile 13)
+      (change-floor world (inc depth))
+      (log-msg world "There are no stairs here."))))
+
+(defn ascend [world]
+  (let [{:keys [terrain width depth]} world
+        [px py] (get-in world [:entities :player :pos])
+        tile (terrain/tget terrain width px py)]
+    (if (= tile 14)
+      (if (> depth 1)
+        (change-floor world (dec depth))
+        (log-msg world "You see daylight above. You're not ready to leave yet."))
+      (log-msg world "There are no stairs here."))))
+
+;; --- Combat ---
+
+(defn melee-attack [world attacker-id target-id]
+  (let [attacker (get-in world [:entities attacker-id])
+        target (get-in world [:entities target-id])]
+    (if (or (nil? attacker) (nil? target))
+      world
+      (let [result (combat/resolve-attack world attacker-id target-id)
+            atk-name (entity-name attacker)
+            def-name (entity-name target)]
+        (if (nil? result)
+          world
+          (let [target-pos (:pos target)
+                player-involved (or (= attacker-id :player) (= target-id :player))]
+            (if (:hit result)
+              (let [dmg (:damage result)
+                    sneak (:sneak result)
+                    w (let [w2 (ent/damage-entity world target-id dmg)]
+                        (if target-pos
+                          (splatter-blood w2 (first target-pos) (second target-pos) dmg)
+                          w2))
+                    killed (nil? (get-in w [:entities target-id]))
+                    sneak-txt (if sneak " (sneak attack!)" "")]
+                (let [target-sounds (:sounds target)
+                      death-sound (if target-sounds
+                                    (snd/creature-death target-pos def-name target-sounds)
+                                    (snd/death-cry target-pos def-name))]
+                  (cond
+                    ;; player attacking
+                    (= attacker-id :player)
+                    (let [w (if killed
+                              (log-msg w (str "You kill the " def-name "!" sneak-txt))
+                              (log-msg w (str "You hit the " def-name " for " dmg "." sneak-txt)))]
+                      (if killed
+                        (snd/deliver-sound w death-sound)
+                        w))
+                    ;; creature attacking player
+                    (= target-id :player)
+                    (if killed
+                      (log-msg w (str "The " atk-name " kills you!"))
+                      (log-msg w (str "The " atk-name " hits you for " dmg ".")))
+                    ;; creature vs creature
+                    :else
+                    (let [w (if killed
+                              (snd/deliver-sound w death-sound)
+                              w)]
+                      (snd/deliver-sound w (snd/combat-hit target-pos atk-name def-name))))))
+              ;; miss
+              (if (= attacker-id :player)
+                (log-msg world (str "You miss the " def-name "."))
+                (if (= target-id :player)
+                  (log-msg world (str "The " atk-name " misses you."))
+                  world)))))))))
+
+;; --- Pickup ---
+
+(defn pickup [world]
+  (let [pos (get-in world [:entities :player :pos])
+        floor-items (ent/items-at world pos)]
+    (if (seq floor-items)
+      (let [item (first floor-items)
+            iname (or (:item-name item)
+                      (name (or (:template item) (:id item))))
+            result (ent/pickup-item world (:id item) :player)]
+        (if result
+          (log-msg result (str "You pick up the " iname "."))
+          (log-msg world "Your inventory is full.")))
+      (log-msg world "Nothing here to pick up."))))
+
+;; --- Use/Consume ---
+
+(defn use-item [world item-id]
+  (let [item (get-in world [:entities item-id])
+        effect (get-in item [:item :effect])
+        iname (or (:item-name item)
+                   (name (or (:template item) (:id item))))]
+    (case effect
+      :heal
+      (let [heal-amt 15
+            player (get-in world [:entities :player])
+            max-hp (get-in player [:body :max-hp] 50)
+            cur-hp (get-in player [:body :hp] 0)
+            new-hp (min max-hp (+ cur-hp heal-amt))]
+        (-> world
+            (assoc-in [:entities :player :body :hp] new-hp)
+            (update-in [:entities :player :inventory]
+                       #(vec (remove (fn [id] (= id item-id)) %)))
+            (ent/remove-entity item-id)
+            (log-msg (str "You drink the " iname ". Healed for " (- new-hp cur-hp) "."))))
+
+      :strength
+      (-> world
+          (update-in [:entities :player :body :strength] inc)
+          (update-in [:entities :player :body :max-hp] #(+ % 3))
+          (update-in [:entities :player :body :hp] #(+ % 3))
+          (update-in [:entities :player :inventory]
+                     #(vec (remove (fn [id] (= id item-id)) %)))
+          (ent/remove-entity item-id)
+          (log-msg "You feel stronger!"))
+
+      ;; default
+      (log-msg world (str "You can't use the " iname ".")))))
+
+;; --- Tick System ---
+;; Every entity with :ai has :ticks. Lowest ticks acts next.
+;; Player has :ticks too. Actions cost ticks (move=100, attack=weapon speed).
+
+(def move-cost 100)
+(def regen-rate 1000) ;; ticks to fully heal (same as brogue)
+
+(defn add-ticks [world entity-id cost]
+  (if-let [entity (get-in world [:entities entity-id])]
+    (let [hp (get-in entity [:body :hp] 0)
+          max-hp (get-in entity [:body :max-hp] 0)
+          ;; accumulate regen ticks, heal 1 hp per (regen-rate / max-hp) ticks
+          old-regen (or (:regen-ticks entity) 0)
+          new-regen (+ old-regen cost)
+          threshold (if (> max-hp 0) (quot regen-rate max-hp) regen-rate)
+          healed (if (> threshold 0) (quot new-regen threshold) 0)
+          remainder (if (> threshold 0) (rem new-regen threshold) 0)
+          new-hp (min max-hp (+ hp healed))]
+      (-> world
+          (update-in [:entities entity-id :ticks] #(+ (or % 0) cost))
+          (assoc-in [:entities entity-id :body :hp] new-hp)
+          (assoc-in [:entities entity-id :regen-ticks] remainder)))
+    world))
+
+(defn next-actor [world]
+  "Returns the entity-id with lowest :ticks, or nil if none."
+  (let [actors (->> (:entities world)
+                    (vals)
+                    (filter #(or (:ai %) (= :player (:id %))))
+                    (filter #(some? (:pos %)))
+                    (vec))]
+    (when (seq actors)
+      (let [sorted (sort-by #(or (:ticks %) 0) actors)]
+        (:id (first sorted))))))
+
+(defn creature-turn [world creature-id]
+  (let [entity (get-in world [:entities creature-id])]
+    (if (nil? entity) world
+      (let [w (ai/update-ai-state world creature-id)
+            ai-state (get-in w [:entities creature-id :ai :state])
+            w (if (or (= ai-state :sleep) (= ai-state nil))
+                (let [e (get-in w [:entities creature-id])
+                      ename (let [k (or (:template e) (:id e))]
+                              (if k (name k) "???"))
+                      s (when e (snd/creature-idle (:pos e) ename (:sounds e)))]
+                  (if s (snd/deliver-sound w s) w))
+                w)
+            w (ai/ai-act w creature-id melee-attack)]
+        (add-ticks w creature-id move-cost)))))
+
+(defn run-until-player-turn [world]
+  "Process creature turns until it's the player's turn (or player dies)."
+  (loop [w world
+         safety 100]  ;; prevent infinite loop
+    (if (<= safety 0) w
+      (let [actor (next-actor w)]
+        (cond
+          (nil? actor) w
+          (= :player actor) w
+          (nil? (get-in w [:entities :player])) w
+          :else (recur (creature-turn w actor) (dec safety)))))))
+
+;; --- Player Action ---
+
+(defn do-pickup [w pos]
+  (loop [w w
+         items (vec (ent/items-at w pos))]
+    (if (empty? items) w
+      (let [item (first items)
+            iname (or (:item-name item)
+                      (name (or (:template item) (:id item))))]
+        (if (= :gold (:template item))
+          (recur (-> w
+                     (update :gold #(+ (or % 0) 1))
+                     (ent/remove-entity (:id item))
+                     (log-msg "You pick up gold."))
+                 (rest items))
+          (let [result (ent/pickup-item w (:id item) :player)]
+            (if result
+              (recur (log-msg result (str "You pick up the " iname "."))
+                     (rest items))
+              (recur (log-msg w "Your inventory is full.")
+                     []))))))))
+
+(defn player-move [world dx dy]
+  (let [{:keys [terrain width height]} world
+        [px py] (get-in world [:entities :player :pos])
+        nx (+ px dx)
+        ny (+ py dy)
+        tile (terrain/tget terrain width nx ny)]
+    (cond
+      ;; closed door — open it
+      (= tile 11)
+      (do (terrain/tset! terrain width nx ny 12)
+          (-> world
+              (add-ticks :player move-cost)
+              (update :turn inc)
+              update-fov
+              (log-msg "You open the door.")))
+
+      ;; walkable
+      (terrain/walkable? terrain width height nx ny)
+      (let [target (ent/creature-at world [nx ny])]
+        (if (and target (not= :player (:id target)))
+          (let [result (combat/resolve-attack world :player (:id target))
+                speed (if result (or (:speed result) move-cost) move-cost)
+                w (melee-attack world :player (:id target))]
+            (-> w
+                (add-ticks :player speed)
+                (update :turn inc)
+                update-fov))
+          (let [w (-> world
+                      (trample-grass nx ny)
+                      (assoc-in [:entities :player :pos] [nx ny])
+                      (add-ticks :player move-cost)
+                      (update :turn inc)
+                      update-fov)]
+            (do-pickup w [nx ny]))))
+
+      ;; wall
+      :else
+      (log-msg world "Blocked."))))
+
+;; --- Turn Processing ---
+
+(defn update-world [world action]
+  (case action
+    :descend (descend world)
+    :ascend (ascend world)
+    :messages (assoc world :screen :messages)
+    :pickup (pickup world)
+    :inventory (assoc world :screen :inventory)
+    :equip-menu (assoc world :screen :quick-menu :menu-action :equip)
+    :unequip-menu (assoc world :screen :quick-menu :menu-action :unequip)
+    :drop-menu (assoc world :screen :quick-menu :menu-action :drop)
+    :use-menu (assoc world :screen :quick-menu :menu-action :use)
+    (let [w (case action
+              :up    (player-move world 0 -1)
+              :down  (player-move world 0 1)
+              :left  (player-move world -1 0)
+              :right (player-move world 1 0)
+              :wait  (-> world
+                         (add-ticks :player move-cost)
+                         (update :turn inc)
+                         (log-msg "You wait."))
+              :quit  (assoc world :running false)
+              world)
+          acted (> (:turn w) (:turn world))
+          w (if acted
+              (let [w2 (run-until-player-turn w)]
+                (if (get-in w2 [:entities :player])
+                  (update-fov w2)
+                  w2))
+              w)]
+      ;; check for player death
+      (if (nil? (get-in w [:entities :player]))
+        (-> w
+            (log-msg "You die...")
+            (assoc :screen :death))
+        w))))

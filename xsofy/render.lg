@@ -1,0 +1,557 @@
+(ns xsofy.render
+  (:require [term]
+            [xsofy.terrain :as terrain]
+            [xsofy.entities :as ent]
+            [xsofy.lighting :as light]
+            [xsofy.effects :as fx]
+            [xsofy.ui :as ui]))
+
+;; --- Color Helpers ---
+
+(defn dim-color [rgb factor]
+  (let [[r g b] rgb]
+    [(int (* r factor)) (int (* g factor)) (int (* b factor))]))
+
+;; --- Tile Rendering ---
+
+(defn style-tile [tile]
+  (get terrain/tile-styles tile {:fg [80 80 80] :bg [10 10 10]}))
+
+(def memory-dim 0.25)
+
+;; --- Map Panel ---
+
+;; deterministic hash for per-cell color variation
+(defn cell-hash [x y]
+  (let [h (+ (* x 374761393) (* y 668265263))]
+    (bit-and (bit-xor h (bit-shift-right h 13)) 255)))
+
+(defn jitter-color [rgb x y amount]
+  (if (nil? rgb)
+    [80 80 80]
+    (let [h (cell-hash x y)
+          offset (- (rem h (* 2 amount)) amount)
+          r (nth rgb 0 80)
+          g (nth rgb 1 80)
+          b (nth rgb 2 80)]
+      [(max 0 (min 255 (+ r offset)))
+       (max 0 (min 255 (+ g (quot offset 2))))
+       (max 0 (min 255 (+ b (quot offset 3))))])))
+
+(defn render-map-tile [r x y tile visible remembered light-val stain gas]
+  (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+    (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+    (cond
+      visible
+      (let [style (style-tile tile)
+            ch (get terrain/tile-chars tile "?")
+            fg0 (if (= tile 2) (jitter-color (:fg style) x y 20) (:fg style))
+            bg0 (if (= tile 2) (jitter-color (:bg style) x y 8) (:bg style))]
+        ;; apply stain, gas, lighting
+        (let [bg1 (if (and stain (map? stain))
+                    (fx/stain-tint bg0 (:type stain) (or (:intensity stain) 1))
+                    bg0)
+              fg1 (if gas (fx/gas-tint fg0 gas) fg0)
+              bg2 (if gas (fx/gas-tint bg1 gas) bg1)]
+          (let [[fr fg fb] (if light-val (light/apply-light fg1 light-val) fg1)
+                [br bgg bb] (if light-val (light/apply-light bg2 light-val) bg2)]
+            (term/set-fg fr fg fb)
+            (term/set-bg br bgg bb)
+            (term/write ch))))
+
+      remembered
+      (let [style (style-tile remembered)
+            ch (get terrain/tile-chars remembered "?")
+            [fr fg fb] (dim-color (:fg style) memory-dim)
+            [br bgg bb] (dim-color (:bg style) memory-dim)]
+        (term/set-fg fr fg fb)
+        (term/set-bg br bgg bb)
+        (term/write ch))
+
+      :else
+      (let [[br bgg bb] ui/bg]
+        (term/set-fg br bgg bb)
+        (term/set-bg br bgg bb)
+        (term/write " ")))))
+
+(defn render-map [world r]
+  (let [{:keys [terrain width height fov memory]} world
+        lights (or (:lights world) [])
+        stains (or (:stains world) {})
+        gases (or (:gases world) {})]
+    (dotimes [y (min height (:h r))]
+      (dotimes [x (min width (:w r))]
+        (let [visible (contains? fov [x y])
+              remembered (get memory [x y])
+              tile (when visible (terrain/tget terrain width x y))
+              lv (when visible (light/light-at x y lights))
+              stain (when visible (get stains [x y]))
+              gas (when visible (get gases [x y]))]
+          (render-map-tile r x y tile visible remembered lv stain gas))))))
+
+(defn render-entity [world r entity]
+  (when-let [pos (:pos entity)]
+    (let [{:keys [fov]} world
+          lights (or (:lights world) [])
+          [x y] pos]
+      (when (and (contains? fov [x y])
+                 (>= x 0) (< x (:w r))
+                 (>= y 0) (< y (:h r)))
+        (let [tile (terrain/tget (:terrain world) (:width world) x y)
+              tile-bg (:bg (style-tile tile))
+              lv (light/light-at x y lights)
+              bg-lit (if lv (light/apply-light tile-bg lv) tile-bg)
+              [fr fg fb] (get-in entity [:visual :color] [200 60 60])
+              glyph (get-in entity [:visual :glyph] "?")]
+          (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+          (term/set-fg fr fg fb)
+          (let [[br bgg bb] bg-lit] (term/set-bg br bgg bb))
+          (term/write glyph))))))
+
+(defn render-map-entities [world r]
+  ;; render order: items first, then creatures, then player on top
+  (let [ents (vals (:entities world))
+        items (filter #(= :item (:entity-type %)) ents)
+        creatures (filter #(and (not= :item (:entity-type %))
+                                (not= :player (:id %))) ents)
+        player (get-in world [:entities :player])]
+    (doseq [e items] (render-entity world r e))
+    (doseq [e creatures] (render-entity world r e))
+    (when player (render-entity world r player))))
+
+;; --- Sidebar Panel ---
+
+(defn render-creature-entry [r i c]
+  (let [chp (or (get-in c [:body :hp]) 0)
+        cmhp (or (get-in c [:body :max-hp]) 1)
+        tpl (:template c)
+        eid (:id c)
+        cname (if tpl (name tpl) (if eid (name eid) "???"))
+        color (or (get-in c [:visual :color]) [200 60 60])
+        glyph (or (get-in c [:visual :glyph]) "?")
+        row (+ 8 (* i 3))]
+    (when (< (+ row 1) (:h r))
+      (ui/write-line r row (str " " glyph " " cname) color ui/bg)
+      (ui/bar r (+ row 1) (str " " chp "/" cmhp)
+              chp cmhp
+              [140 30 30] [40 12 12] [180 150 130]))))
+
+(defn render-sidebar [world r]
+  (ui/clear-rect r)
+  (when-let [player (get-in world [:entities :player])]
+    (let [hp (or (get-in player [:body :hp]) 0)
+          max-hp (or (get-in player [:body :max-hp]) 1)
+          str_ (or (get-in player [:body :strength]) 0)
+          wep (ent/get-weapon world :player)
+          arm (ent/get-armor world :player)
+          wep-name (if wep (or (:item-name wep) "weapon") "fists")
+          arm-name (if arm (or (:item-name arm) "armor") "none")
+          dmg-str (if wep
+                    (str (get-in wep [:item :min-dmg] 1) "-" (get-in wep [:item :max-dmg] 2))
+                    "1-2")
+          def-val (if arm (or (get-in arm [:item :defense]) 0) 0)]
+      (ui/write-line r 0 " @ You" [255 220 80] ui/bg)
+      (ui/bar r 1 (str " HP " hp "/" max-hp)
+              hp max-hp
+              [140 30 30] [40 12 12] [220 180 160])
+      (ui/write-line r 2 (str " Str " str_ "  Def " def-val)
+                     [140 130 110] ui/bg)
+      (ui/write-line r 3 (str " " wep-name " (" dmg-str ")") [160 160 180] ui/bg)
+      (ui/write-line r 4 (str " " arm-name) [140 130 110] ui/bg)
+      (ui/write-line r 5 (str " Depth " (:depth world))
+                     [100 100 100] ui/bg)
+      (let [gold (or (:gold world) 0)]
+        (when (> gold 0)
+          (ui/write-line r 6 (str " Gold " gold)
+                         [255 220 50] ui/bg)))
+      (ui/write-line r 7 (apply str (repeat (:w r) "-"))
+                     [40 40 40] ui/bg))
+    ;; visible creatures
+    (let [fov (or (:fov world) #{})
+          ents (vec (vals (:entities world)))
+          creatures (vec (filter
+                           (fn [e]
+                             (and (some? e)
+                                  (some? (:id e))
+                                  (not= :player (:id e))
+                                  (some? (:pos e))
+                                  (some? (get-in e [:body :hp]))
+                                  (contains? fov (:pos e))))
+                           ents))
+          creatures (vec (sort-by (fn [e] (or (get-in e [:body :hp]) 0)) creatures))
+          max-shown (if (> (:h r) 10) (quot (- (:h r) 9) 3) 0)
+          n (min (count creatures) max-shown)]
+      (dotimes [i n]
+        (let [c (nth creatures i nil)]
+          (when (some? c)
+            (render-creature-entry r i c)))))))
+
+;; --- Log Panel ---
+
+(defn format-log-entry [entry]
+  (if (map? entry)
+    (str (:msg entry) " (x" (:count entry) ")")
+    (str entry)))
+
+(defn render-log [world r]
+  (ui/clear-rect r)
+  (let [log (vec (or (:log world) []))
+        n (:h r)
+        recent (if (> (count log) n) (subvec log (- (count log) n)) log)
+        cnt (count recent)]
+    (dotimes [i cnt]
+      (let [entry (nth recent i)
+            msg (format-log-entry entry)
+            age (- cnt i 1)
+            brightness (max 60 (- 220 (* age 50)))]
+        (ui/write-line r (+ (- n cnt) i) (str " " msg)
+                       [brightness
+                        (max 60 (- brightness 20))
+                        (max 40 (- brightness 80))]
+                       ui/bg)))))
+
+;; --- Item Display Helpers ---
+
+(defn item-display-name [world item-id]
+  (let [item (get-in world [:entities item-id])]
+    (if item
+      (let [iname (or (:item-name item)
+                      (name (or (:template item) (:id item))))
+            enchant (get-in item [:item :enchant] 0)
+            prefix (cond
+                     (> enchant 0) (str "+" enchant " ")
+                     (< enchant 0) (str enchant " ")
+                     :else "")]
+        (str prefix iname))
+      "???")))
+
+(defn item-stat-str [world item-id]
+  (let [item (get-in world [:entities item-id])
+        slot (get-in item [:item :slot])]
+    (case slot
+      :weapon (let [lo (get-in item [:item :min-dmg] 0)
+                    hi (get-in item [:item :max-dmg] 0)
+                    spd (get-in item [:item :speed] 100)
+                    sr (get-in item [:item :str-req] 1)
+                    spd-tag (cond (< spd 80) "fast" (> spd 150) "slow" :else "")]
+                (str lo "-" hi " dmg"
+                     (when (not= spd-tag "") (str " " spd-tag))
+                     " str:" sr))
+      :armor (let [def_ (get-in item [:item :defense] 0)
+                   sr (get-in item [:item :str-req] 1)]
+               (str def_ " def str:" sr))
+      nil)))
+
+;; --- Status Panel ---
+
+(defn render-status [world r]
+  (ui/write-line r 0 " hjkl:move  .:wait  euda:item  i:inv  <>:stairs  m:log  q:quit"
+                 [60 60 60] ui/bg))
+
+;; --- Quick Menu Overlay ---
+
+(defn menu-title [action]
+  (case action
+    :equip "Equip what?"
+    :unequip "Remove what?"
+    :drop "Drop what?"
+    :use "Use what?"
+    "Select item:"))
+
+(defn menu-filter [world action]
+  "Returns vec of [inv-index item-id] pairs matching the action."
+  (let [inv (or (get-in world [:entities :player :inventory]) [])
+        equipment (or (get-in world [:entities :player :equipment]) {})]
+    (vec (filter some?
+      (map-indexed
+        (fn [i item-id]
+          (let [item (get-in world [:entities item-id])
+                slot (get-in item [:item :slot])
+                equipped (some (fn [[s id]] (= id item-id)) equipment)]
+            (cond
+              (= action :equip)
+              (when (and slot (not= slot :consumable) (not equipped)) [i item-id])
+
+              (= action :unequip)
+              (when (and slot equipped) [i item-id])
+
+              (= action :drop)
+              [i item-id]
+
+              (= action :use)
+              (when (= slot :consumable) [i item-id])
+
+              :else nil)))
+        inv)))))
+
+(defn render-quick-menu [world]
+  (let [[tw th] (term/size)
+        action (or (:menu-action world) :equip)
+        items (menu-filter world action)
+        sel (or (:menu-sel world) -1)
+        letters "abcdefghijklmnopqrstuvwxyz"
+        menu-h (+ (count items) 4)
+        menu-w 36
+        mx (- (quot tw 2) (quot menu-w 2))
+        my (- (quot th 2) (quot menu-h 2))
+        r (ui/rect mx my menu-w menu-h)
+        inner (ui/box r (menu-title action) [220 200 160] [20 18 16])]
+    (ui/clear-rect inner)
+    (if (empty? items)
+      (ui/write-line inner 0 " Nothing available." [80 80 80] [20 18 16])
+      (dotimes [i (count items)]
+        (let [[inv-idx item-id] (nth items i)
+              item (get-in world [:entities item-id])
+              iname (item-display-name world item-id)
+              glyph (or (get-in item [:visual :color]) [200 200 200])
+              gch (or (get-in item [:visual :glyph]) "?")
+              letter (if (< inv-idx 26) (str (nth letters inv-idx)) "?")
+              selected (= i sel)
+              fg (if selected [255 255 220] (or (get-in item [:visual :color]) [200 200 200]))
+              bg (if selected [40 38 30] [20 18 16])
+              stats (item-stat-str world item-id)
+              stats-txt (if stats (str " [" stats "]") "")]
+          (ui/write-line inner i
+                         (str " " letter ") " gch " " iname stats-txt)
+                         fg bg))))
+    (ui/write-line inner (dec (:h inner))
+                   " [a-z] select  [esc] cancel"
+                   [60 60 60] [20 18 16])
+    (term/flush)))
+
+;; --- Message Log Screen (modal) ---
+
+(defn render-messages-screen [world]
+  (let [[tw th] (term/size)
+        r (ui/rect 1 1 tw th)
+        inner (ui/box r "Message Log" [180 170 140] ui/bg)
+        log (:log world)
+        visible-lines (- (:h inner) 1)
+        recent (take-last visible-lines log)
+        cnt (count recent)]
+    (ui/clear-rect inner)
+    (dotimes [i cnt]
+      (let [msg (format-log-entry (nth recent i))
+            age (- cnt i 1)
+            brightness (max 60 (- 220 (* age 6)))]
+        (ui/write-line inner i (str " " msg)
+                       [brightness
+                        (max 60 (- brightness 20))
+                        (max 40 (- brightness 80))]
+                       ui/bg)))
+    (ui/write-line inner (dec (:h inner))
+                   " [press any key to close]"
+                   [80 80 80] ui/bg)
+    (term/flush)))
+
+;; --- Inventory Screen (modal) ---
+
+(defn is-equipped? [world item-id]
+  (let [equip (or (get-in world [:entities :player :equipment]) {})]
+    (some (fn [[s id]] (= id item-id)) equip)))
+
+(defn render-item-detail [r y world item-id]
+  "Render item description and available commands starting at row y."
+  (let [item (get-in world [:entities item-id])]
+    (when item
+      (let [slot (get-in item [:item :slot])
+            desc (or (:item-desc item) "No description.")
+            equipped (is-equipped? world item-id)]
+        ;; description
+        (ui/write-line r y (str " " desc) [160 150 130] ui/bg)
+        ;; stats detail
+        (let [stats (item-stat-str world item-id)]
+          (when stats
+            (ui/write-line r (+ y 1) (str " Stats: " stats) [140 130 110] ui/bg)))
+        ;; comparison with equipped
+        (when (and (= slot :weapon) (not equipped))
+          (let [cur-wep (ent/get-weapon world :player)
+                cur-dmg (if cur-wep
+                          (str (get-in cur-wep [:item :min-dmg] 0) "-"
+                               (get-in cur-wep [:item :max-dmg] 0))
+                          "1-2")
+                new-dmg (str (get-in item [:item :min-dmg] 0) "-"
+                             (get-in item [:item :max-dmg] 0))]
+            (ui/write-line r (+ y 2) (str " Current: " cur-dmg " -> " new-dmg)
+                           [100 100 120] ui/bg)))
+        (when (and (= slot :armor) (not equipped))
+          (let [cur-arm (ent/get-armor world :player)
+                cur-def (if cur-arm (or (get-in cur-arm [:item :defense]) 0) 0)
+                new-def (or (get-in item [:item :defense]) 0)]
+            (ui/write-line r (+ y 2) (str " Current: " cur-def " -> " new-def " def")
+                           [100 100 120] ui/bg)))
+        ;; available commands
+        (let [cmds (cond
+                     (= slot :consumable) " [a] use  [d] drop"
+                     equipped             " [u] unequip  [d] drop"
+                     (and slot (not= slot :consumable)) " [e] equip  [d] drop"
+                     :else                " [d] drop")]
+          (ui/write-line r (+ y 4) cmds [120 120 100] ui/bg))))))
+
+(defn render-inventory-screen [world]
+  (let [[tw th] (term/size)
+        r (ui/rect 1 1 tw th)
+        inner (ui/box r "Inventory" [180 170 140] ui/bg)
+        inv (or (get-in world [:entities :player :inventory]) [])
+        equipment (or (get-in world [:entities :player :equipment]) {})
+        sel (or (:inv-sel world) -1)
+        letters "abcdefghijklmnopqrstuvwxyz"
+        ;; split: left for list, right for detail
+        list-w (min 35 (quot (:w inner) 2))
+        [list-r detail-r] (ui/rect-split-h inner list-w)]
+    (ui/clear-rect inner)
+    ;; equipment header
+    (ui/write-line list-r 0 " Equipment:" [220 200 160] ui/bg)
+    (let [wep-id (:weapon equipment)
+          arm-id (:armor equipment)
+          ring-id (:ring equipment)]
+      (ui/write-line list-r 1
+                     (str "  W: " (if wep-id (item-display-name world wep-id) "-"))
+                     (if wep-id [180 180 210] [60 60 60]) ui/bg)
+      (ui/write-line list-r 2
+                     (str "  A: " (if arm-id (item-display-name world arm-id) "-"))
+                     (if arm-id [180 180 210] [60 60 60]) ui/bg)
+      (ui/write-line list-r 3
+                     (str "  R: " (if ring-id (item-display-name world ring-id) "-"))
+                     (if ring-id [180 180 210] [60 60 60]) ui/bg))
+    ;; gold
+    (let [gold (or (:gold world) 0)]
+      (ui/write-line list-r 4 (str "  $ " gold) [255 220 50] ui/bg))
+    ;; backpack
+    (ui/write-line list-r 6 " Backpack:" [220 200 160] ui/bg)
+    (if (empty? inv)
+      (ui/write-line list-r 7 "  (empty)" [60 60 60] ui/bg)
+      (dotimes [i (min (count inv) (- (:h list-r) 9))]
+        (let [item-id (nth inv i nil)]
+          (when item-id
+            (let [item (get-in world [:entities item-id])
+                  iname (item-display-name world item-id)
+                  equipped (is-equipped? world item-id)
+                  color (or (get-in item [:visual :color]) [200 200 200])
+                  glyph (or (get-in item [:visual :glyph]) "?")
+                  letter (if (< i 26) (str (nth letters i)) "?")
+                  mark (if equipped "*" " ")
+                  selected (= i sel)
+                  fg (if selected [255 255 220] color)
+                  bg (if selected [40 38 30] ui/bg)]
+              (ui/write-line list-r (+ 7 i)
+                             (str mark letter ") " glyph " " iname)
+                             fg bg))))))
+    ;; detail panel
+    (ui/write-line detail-r 0 " Details:" [220 200 160] ui/bg)
+    (if (and (>= sel 0) (< sel (count inv)))
+      (render-item-detail detail-r 2 world (nth inv sel))
+      (ui/write-line detail-r 2 " Select an item (a-z)" [60 60 60] ui/bg))
+    ;; controls at bottom
+    (ui/write-line inner (- (:h inner) 1)
+                   " [a-z/jk] select  [esc/i] close"
+                   [60 60 60] ui/bg)
+    (term/flush)))
+
+;; --- Death Screen ---
+
+(defn render-death-screen [world]
+  (let [[tw th] (term/size)
+        r (ui/rect 1 1 tw th)]
+    (ui/clear-rect r)
+    (let [cx (quot tw 2)
+          cy (quot th 2)
+          tombstone ["        ___________"
+                     "       /           \\"
+                     "      /    R.I.P.   \\"
+                     "     /               \\"
+                     "    |                 |"
+                     "    |   Here lies a   |"
+                     "    |    brave soul   |"
+                     "    |   who delved    |"
+                     "    |    too deep     |"
+                     "    |                 |"
+                     "    |_________________|"
+                     "   /                   \\"
+                     "  /_____________________|"]
+          th-height (count tombstone)
+          th-width 25
+          start-y (- cy (quot th-height 2) 2)
+          start-x (- cx (quot th-width 2))]
+      ;; draw tombstone
+      (dotimes [i th-height]
+        (ui/write-at r (max 0 start-x) (+ start-y i)
+                     (nth tombstone i)
+                     [120 100 80] ui/bg))
+      ;; stats
+      (let [depth (or (:depth world) 1)
+            turn (or (:turn world) 0)
+            gold (or (:gold world) 0)
+            stats-y (+ start-y th-height 2)]
+        (ui/write-at r (- cx 14) stats-y
+                     (str "Depth " depth "  Turns " turn "  Gold " gold)
+                     [160 140 110] ui/bg)
+        ;; recent log
+        (let [log (or (:log world) [])
+              recent (take-last 5 log)
+              log-y (+ stats-y 2)]
+          (dotimes [i (count recent)]
+            (let [msg (format-log-entry (nth recent i))]
+              (ui/write-at r (- cx 20) (+ log-y i)
+                           msg
+                           [140 120 90] ui/bg))))
+        ;; prompt
+        (ui/write-at r (- cx 12) (- th 3)
+                     "[press any key to exit]"
+                     [80 80 80] ui/bg)))
+    (term/flush)))
+
+;; --- Public API ---
+
+(defn render-full [world]
+  (let [[tw th] (term/size)
+        panels (ui/layout tw th)]
+    ;; blank entire terminal with bg color
+    (ui/apply-bg ui/bg)
+    (ui/apply-fg ui/bg)
+    (dotimes [y th]
+      (term/move-cursor 1 (inc y))
+      (term/write (apply str (repeat tw " "))))
+    ;; render panels
+    (render-map world (:map panels))
+    (render-map-entities world (:map panels))
+    (render-sidebar world (:sidebar panels))
+    (render-log world (:log panels))
+    (render-status world (:status panels))
+    (term/flush)))
+
+(defn render-dirty [world prev-world]
+  (let [[tw th] (term/size)
+        panels (ui/layout tw th)
+        mr (:map panels)
+        old-fov (:fov prev-world)
+        new-fov (:fov world)]
+    (let [lights (or (:lights world) [])
+          stains (or (:stains world) {})
+          gases (or (:gases world) {})]
+      (doseq [[x y] old-fov]
+        (when (and (not (contains? new-fov [x y]))
+                   (< x (:w mr)) (< y (:h mr)))
+          (render-map-tile mr x y nil false (get (:memory world) [x y]) nil nil nil)))
+      (doseq [[x y] new-fov]
+        (when (and (< x (:w mr)) (< y (:h mr)))
+          (render-map-tile mr x y
+                           (terrain/tget (:terrain world) (:width world) x y)
+                           true nil
+                           (light/light-at x y lights)
+                           (get stains [x y])
+                           (get gases [x y]))))
+      (let [[opx opy] (get-in prev-world [:entities :player :pos])]
+        (when (and opx opy (< opx (:w mr)) (< opy (:h mr)))
+          (let [tile (terrain/tget (:terrain world) (:width world) opx opy)
+                vis (contains? new-fov [opx opy])]
+            (render-map-tile mr opx opy tile vis
+                             (get (:memory world) [opx opy])
+                             (when vis (light/light-at opx opy lights))
+                             (when vis (get stains [opx opy]))
+                             (when vis (get gases [opx opy])))))))
+    (render-map-entities world mr)
+    (render-sidebar world (:sidebar panels))
+    (render-log world (:log panels))
+    (render-status world (:status panels))
+    (term/flush)))

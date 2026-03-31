@@ -1,0 +1,265 @@
+(ns xsofy.main
+  (:require [term]
+            [os]
+            [string]
+            [xsofy.world :as world]
+            [xsofy.entities :as ent]
+            [xsofy.input :as input]
+            [xsofy.render :as render]
+            [xsofy.debug :as dbg]))
+
+(defn init-terminal []
+  (when (nil? (term/size))
+    (println "Not a terminal.")
+    (os/exit 1))
+  (term/raw-mode!)
+  (term/alternate-screen)
+  (term/hide-cursor)
+  (term/clear))
+
+(defn shutdown-terminal []
+  (term/reset-style)
+  (term/show-cursor)
+  (term/main-screen)
+  (term/flush)
+  (term/restore-mode!))
+
+(def inv-letters "abcdefghijklmnopqrstuvwxyz")
+
+(defn letter-to-index [k]
+  (string/index-of inv-letters k))
+
+(defn get-item-name [world item-id]
+  (let [item (get-in world [:entities item-id])]
+    (or (:item-name item) (name (or (:template item) (:id item) :unknown)))))
+
+(defn inv-sel [world]
+  (or (:inv-sel world) -1))
+
+(defn inv-count [world]
+  (count (or (get-in world [:entities :player :inventory]) [])))
+
+(defn sel-item-id [world]
+  (let [inv (or (get-in world [:entities :player :inventory]) [])
+        sel (inv-sel world)]
+    (when (and (>= sel 0) (< sel (count inv)))
+      (nth inv sel nil))))
+
+(defn inv-equip [world]
+  (if-let [item-id (sel-item-id world)]
+    (let [item (get-in world [:entities item-id])
+          slot (get-in item [:item :slot])
+          iname (get-item-name world item-id)]
+      (if (and slot (not= slot :consumable))
+        (-> (ent/equip-item world item-id :player)
+            (world/log-msg (str "You equip the " iname "."))
+            (assoc :screen :inventory))
+        (assoc world :screen :inventory)))
+    (assoc world :screen :inventory)))
+
+(defn inv-unequip [world]
+  (if-let [item-id (sel-item-id world)]
+    (let [item (get-in world [:entities item-id])
+          slot (get-in item [:item :slot])
+          iname (get-item-name world item-id)]
+      (if slot
+        (-> (ent/unequip-item world :player slot)
+            (world/log-msg (str "You remove the " iname "."))
+            (assoc :screen :inventory))
+        (assoc world :screen :inventory)))
+    (assoc world :screen :inventory)))
+
+(defn inv-drop [world]
+  (if-let [item-id (sel-item-id world)]
+    (let [iname (get-item-name world item-id)
+          equipment (or (get-in world [:entities :player :equipment]) {})
+          slot (get-in world [:entities item-id :item :slot])
+          equipped-id (when slot (get equipment slot))
+          w (if (= equipped-id item-id)
+              (ent/unequip-item world :player slot)
+              world)]
+      (-> (ent/drop-item w item-id :player)
+          (world/log-msg (str "You drop the " iname "."))
+          (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world))))))
+    (assoc world :screen :inventory)))
+
+(defn inv-use [world]
+  (if-let [item-id (sel-item-id world)]
+    (let [item (get-in world [:entities item-id])
+          slot (get-in item [:item :slot])]
+      (if (= slot :consumable)
+        (-> (world/use-item world item-id)
+            (dissoc :screen :inv-sel))
+        (assoc world :screen :inventory)))
+    (assoc world :screen :inventory)))
+
+(defn inventory-input [world k]
+  (let [sel (inv-sel world)
+        cnt (inv-count world)]
+    (cond
+      ;; close
+      (or (= k "\u001b") (= k "i"))
+      (-> world (dissoc :screen :inv-sel))
+
+      ;; navigate
+      (or (= k "j") (= k "\u001b[B"))
+      (assoc world :inv-sel (min (dec cnt) (inc sel)) :screen :inventory)
+
+      (or (= k "k") (= k "\u001b[A"))
+      (assoc world :inv-sel (max 0 (dec sel)) :screen :inventory)
+
+      ;; deselect
+      (= k " ")
+      (assoc world :inv-sel -1 :screen :inventory)
+
+      ;; actions on selected item (check before letter select)
+      (and (>= sel 0) (= k "e")) (inv-equip world)
+      (and (>= sel 0) (= k "u")) (inv-unequip world)
+      (and (>= sel 0) (= k "d")) (inv-drop world)
+      (and (>= sel 0) (= k "a")) (inv-use world)
+
+      ;; letter select
+      (and (= 1 (count k)) (some? (letter-to-index k)))
+      (let [idx (letter-to-index k)]
+        (if (and idx (< idx cnt))
+          (assoc world :inv-sel idx :screen :inventory)
+          world))
+
+      :else world)))
+
+(defn execute-menu-action [world action inv-idx]
+  (let [inv (or (get-in world [:entities :player :inventory]) [])
+        item-id (nth inv inv-idx nil)]
+    (if (nil? item-id)
+      world
+      (let [iname (get-item-name world item-id)
+            equipment (or (get-in world [:entities :player :equipment]) {})
+            item (get-in world [:entities item-id])
+            slot (get-in item [:item :slot])]
+        (case action
+          :equip
+          (if (and slot (not= slot :consumable))
+            (-> (ent/equip-item world item-id :player)
+                (world/log-msg (str "You equip the " iname ".")))
+            world)
+
+          :unequip
+          (if slot
+            (-> (ent/unequip-item world :player slot)
+                (world/log-msg (str "You remove the " iname ".")))
+            world)
+
+          :drop
+          (let [equipped-id (when slot (get equipment slot))
+                w (if (= equipped-id item-id)
+                    (ent/unequip-item world :player slot)
+                    world)]
+            (-> (ent/drop-item w item-id :player)
+                (world/log-msg (str "You drop the " iname "."))))
+
+          :use
+          (if (= slot :consumable)
+            (world/use-item world item-id)
+            world)
+
+          world)))))
+
+(defn quick-menu-input [world k]
+  (let [action (or (:menu-action world) :equip)
+        items (render/menu-filter world action)
+        sel (or (:menu-sel world) -1)]
+    (cond
+      ;; cancel
+      (= k "\u001b")
+      (dissoc world :screen :menu-action :menu-sel)
+
+      ;; navigate
+      (or (= k "j") (= k "\u001b[B"))
+      (assoc world :menu-sel (min (dec (count items)) (inc sel)))
+
+      (or (= k "k") (= k "\u001b[A"))
+      (assoc world :menu-sel (max 0 (dec sel)))
+
+      ;; space to confirm selection
+      (and (= k " ") (>= sel 0) (< sel (count items)))
+      (let [[inv-idx item-id] (nth items sel)]
+        (-> (execute-menu-action world action inv-idx)
+            (dissoc :screen :menu-action :menu-sel)))
+
+      ;; letter key — find matching item by inventory index and execute
+      (and (= 1 (count k)) (some? (letter-to-index k)))
+      (let [target-idx (letter-to-index k)
+            match (first (filter (fn [[inv-idx _]] (= inv-idx target-idx)) items))]
+        (if match
+          (let [[inv-idx item-id] match]
+            (-> (execute-menu-action world action inv-idx)
+                (dissoc :screen :menu-action :menu-sel)))
+          world))
+
+      :else world)))
+
+(defn game-loop
+  ([world]
+   (render/render-full world)
+   (game-loop world world (term/size)))
+  ([world prev-world prev-size]
+   (if-not (:running world)
+     world
+     (let [screen (or (:screen world) :game)]
+       (case screen
+         :messages
+         (do (render/render-messages-screen world)
+             (term/read-key)
+             (let [w (dissoc world :screen)]
+               (render/render-full w)
+               (recur w w (term/size))))
+
+         :inventory
+         (do (render/render-inventory-screen world)
+             (let [k (term/read-key)
+                   w (inventory-input world k)]
+               (if (:screen w)
+                 (recur w w prev-size)
+                 (do (render/render-full w)
+                     (recur w w (term/size))))))
+
+         :quick-menu
+         (do (render/render-quick-menu world)
+             (let [k (term/read-key)
+                   w (quick-menu-input world k)]
+               (if (:screen w)
+                 (recur w w prev-size)
+                 (do (render/render-full w)
+                     (recur w w (term/size))))))
+
+         :death
+         (do (render/render-death-screen world)
+             (term/read-key)
+             (assoc world :running false))
+
+         ;; default: game screen
+         (let [key (input/parse-key (term/read-key))
+               new-world (world/update-world world key)
+               cur-size (term/size)
+               resized (not= cur-size prev-size)
+               floor-changed (not= (:depth new-world) (:depth world))]
+           (if (or floor-changed resized (:screen new-world))
+             (do (when-not (:screen new-world)
+                   (render/render-full new-world))
+                 (recur new-world new-world cur-size))
+             (do (render/render-dirty new-world world)
+                 (recur new-world world cur-size)))))))))
+
+(defn -main []
+  (init-terminal)
+  (try
+    (let [world (world/make-world 60 30)]
+      (game-loop world))
+    (catch e
+      (shutdown-terminal)
+      (println "FATAL ERROR:")
+      (println e))
+    (finally
+      (shutdown-terminal))))
+
+(-main)

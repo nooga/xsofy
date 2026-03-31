@@ -1,0 +1,195 @@
+(ns xsofy.terrain)
+
+;; --- Tile Definitions ---
+
+(def tile-chars
+  {0 " "    ; void
+   1 "."    ; floor-stone
+   2 "\""    ; floor-grass (fungus/lichen)
+   3 "~"    ; water-shallow
+   4 "~"    ; water-deep
+   5 "."    ; blood
+   8 "#"    ; wall-stone
+   6 " "    ; chasm
+   7 "~"    ; lava
+   10 "."   ; ledge
+   9 "#"    ; wall-torch
+   11 "+"   ; door-closed
+   12 "'"   ; door-open
+   13 ">"   ; stairs-down
+   14 "<"}) ; stairs-up
+
+(def tile-styles
+  {0  {:fg [30 30 30]    :bg [10 10 10]}
+   1  {:fg [80 70 55]    :bg [22 20 18]}       ; floor-stone
+   2  {:fg [40 90 30]    :bg [18 28 14]}       ; grass/fungus: green on dark green
+   3  {:fg [50 80 140]   :bg [15 25 50]}       ; water-shallow: blue ripples
+   4  {:fg [30 50 120]   :bg [10 15 40]}       ; water-deep: dark blue
+   5  {:fg [120 20 20]   :bg [35 10 10]}       ; blood: dark red
+   6  {:fg [15 10 25]    :bg [4 2 8]}          ; chasm: deep void
+   7  {:fg [255 120 20]  :bg [140 40 10]}      ; lava: hot orange
+   10 {:fg [50 45 70]    :bg [20 18 40]}       ; ledge: dark blue-gray
+   8  {:fg [90 85 75]    :bg [45 42 38]}       ; wall-stone
+   9  {:fg [200 160 60]  :bg [55 48 38]}       ; wall-torch: warm glow
+   11 {:fg [140 110 60]  :bg [40 35 25]}       ; door-closed
+   12 {:fg [100 80 45]   :bg [22 20 18]}       ; door-open
+   13 {:fg [255 255 200] :bg [22 20 18]}       ; stairs-down
+   14 {:fg [200 200 150] :bg [22 20 18]}})     ; stairs-up
+
+;; light radius emitted by certain tiles
+(def tile-light
+  {7 {:radius 3 :color [200 80 20]}            ; lava: red-orange glow
+   9 {:radius 4 :color [200 150 60]}})         ; torch: warm orange glow
+
+(def walkable-tiles #{1 2 3 5 10 12 13 14})       ; ledge walkable too
+(def transparent-tiles #{0 1 2 3 4 5 6 7 10 12 13 14}) ; ledge transparent
+
+;; --- Terrain Access ---
+
+(defn tget [grid w x y]
+  (let [i (+ x (* y w))
+        len (alength grid)]
+    (if (and (>= i 0) (< i len))
+      (aget grid i)
+      0)))
+
+(defn tset! [grid w x y v]
+  (aset grid (+ x (* y w)) v))
+
+(defn walkable? [grid w h x y]
+  (when (and (>= x 0) (< x w) (>= y 0) (< y h))
+    (contains? walkable-tiles (tget grid w x y))))
+
+(defn transparent? [grid w h x y]
+  (if (and (>= x 0) (< x w) (>= y 0) (< y h))
+    (contains? transparent-tiles (tget grid w x y))
+    false))
+
+;; --- Terrain Helpers ---
+
+(defn make-terrain [w h]
+  (let [grid (byte-array (* w h))]
+    (dotimes [i (* w h)]
+      (aset grid i 8))
+    grid))
+
+;; --- Carving ---
+
+(defn carve-room! [grid w x1 y1 x2 y2]
+  (doseq [y (range y1 (inc y2))]
+    (doseq [x (range x1 (inc x2))]
+      (tset! grid w x y 1))))
+
+(defn carve-h-corridor! [grid w x1 x2 y]
+  (let [lo (min x1 x2)
+        hi (max x1 x2)]
+    (doseq [x (range lo (inc hi))]
+      (tset! grid w x y 1))))
+
+(defn carve-v-corridor! [grid w y1 y2 x]
+  (let [lo (min y1 y2)
+        hi (max y1 y2)]
+    (doseq [y (range lo (inc hi))]
+      (tset! grid w x y 1))))
+
+;; --- Level Generation ---
+
+(defn generate-level [w h]
+  (let [grid (make-terrain w h)
+        rooms (atom [])
+        num-rooms (+ 5 (rand-int 6))]
+    (dotimes [_ num-rooms]
+      (let [rw (+ 4 (rand-int 8))
+            rh (+ 3 (rand-int 5))
+            rx (+ 1 (rand-int (- w rw 2)))
+            ry (+ 1 (rand-int (- h rh 2)))]
+        (carve-room! grid w rx ry (+ rx rw -1) (+ ry rh -1))
+        (swap! rooms conj [(+ rx (quot rw 2)) (+ ry (quot rh 2))])))
+    (doseq [i (range 1 (count @rooms))]
+      (let [[x1 y1] (nth @rooms (dec i))
+            [x2 y2] (nth @rooms i)]
+        (if (< (rand) 0.5)
+          (do (carve-h-corridor! grid w x1 x2 y1)
+              (carve-v-corridor! grid w y1 y2 x2))
+          (do (carve-v-corridor! grid w y1 y2 x1)
+              (carve-h-corridor! grid w x1 x2 y2)))))
+    ;; place doors at corridor-room junctions
+    (doseq [y (range 1 (dec h))]
+      (doseq [x (range 1 (dec w))]
+        (when (= 1 (tget grid w x y))  ;; floor tile
+          ;; door candidate: wall on N+S and floor on E+W, or wall on E+W and floor on N+S
+          (let [n (tget grid w x (dec y))
+                s (tget grid w x (inc y))
+                e (tget grid w (inc x) y)
+                ww (tget grid w (dec x) y)
+                h-door (and (= 8 n) (= 8 s) (= 1 e) (= 1 ww))
+                v-door (and (= 8 e) (= 8 ww) (= 1 n) (= 1 s))]
+            (when (and (or h-door v-door) (< (rand) 0.6))
+              (tset! grid w x y 11))))))
+    ;; scatter grass/fungus in some rooms
+    (doseq [y (range 1 (dec h))]
+      (doseq [x (range 1 (dec w))]
+        (when (and (= 1 (tget grid w x y))
+                   (< (rand) 0.15))
+          (tset! grid w x y 2))))
+    ;; place torches on walls (adjacent to floor, ~10% chance)
+    (doseq [y (range 1 (dec h))]
+      (doseq [x (range 1 (dec w))]
+        (when (and (= 8 (tget grid w x y))
+                   (< (rand) 0.04))
+          ;; only if adjacent to a floor tile
+          (let [adj-floor (or (contains? walkable-tiles (tget grid w (inc x) y))
+                              (contains? walkable-tiles (tget grid w (dec x) y))
+                              (contains? walkable-tiles (tget grid w x (inc y)))
+                              (contains? walkable-tiles (tget grid w x (dec y))))]
+            (when adj-floor
+              (tset! grid w x y 9))))))
+    ;; occasional shallow water pools
+    (dotimes [_ (rand-int 3)]
+      (let [px (+ 2 (rand-int (- w 4)))
+            py (+ 2 (rand-int (- h 4)))]
+        (when (= 1 (tget grid w px py))
+          (doseq [dy (range -1 2)]
+            (doseq [dx (range -1 2)]
+              (let [tx (+ px dx) ty (+ py dy)]
+                (when (and (= 1 (tget grid w tx ty))
+                           (< (rand) 0.6))
+                  (tset! grid w tx ty 3))))))))
+    ;; occasional chasm with ledge border (30% chance)
+    (when (< (rand) 0.3)
+      (let [px (+ 3 (rand-int (- w 6)))
+            py (+ 3 (rand-int (- h 6)))
+            radius (+ 1 (rand-int 2))]
+        ;; carve chasm with ledge border — only in open floor
+        (doseq [dy (range (- (inc radius)) (+ radius 2))]
+          (doseq [dx (range (- (inc radius)) (+ radius 2))]
+            (let [tx (+ px dx) ty (+ py dy)
+                  dist-sq (+ (* dx dx) (* dy dy))
+                  tile (tget grid w tx ty)]
+              (when (or (= tile 1) (= tile 2))
+                (cond
+                  ;; inner: chasm
+                  (<= dist-sq (* radius radius))
+                  (tset! grid w tx ty 6)
+                  ;; ring: ledge
+                  (<= dist-sq (* (inc radius) (inc radius)))
+                  (tset! grid w tx ty 10))))))))
+    ;; occasional lava pool (20% chance)
+    (when (< (rand) 0.2)
+      (let [px (+ 2 (rand-int (- w 4)))
+            py (+ 2 (rand-int (- h 4)))]
+        (when (= 1 (tget grid w px py))
+          (tset! grid w px py 7)
+          (doseq [dy (range -1 2)]
+            (doseq [dx (range -1 2)]
+              (let [tx (+ px dx) ty (+ py dy)]
+                (when (and (or (= 1 (tget grid w tx ty))
+                               (= 2 (tget grid w tx ty)))
+                           (< (rand) 0.4))
+                  (tset! grid w tx ty 7))))))))
+    ;; stairs
+    (let [[sx sy] (first @rooms)
+          [ex ey] (last @rooms)]
+      (tset! grid w sx sy 14)
+      (tset! grid w ex ey 13))
+    {:grid grid :rooms @rooms}))

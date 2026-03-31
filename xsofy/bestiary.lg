@@ -1,0 +1,106 @@
+(ns xsofy.bestiary
+  (:require [xsofy.entities :refer [defcreature deftrait
+                                     visual body ai melee spell drops immune trait sounds]]))
+
+;; --- Player ---
+
+(defcreature player
+  (visual "@" [255 220 80])
+  (body {:hp 50 :max-hp 50 :strength 3})
+  (melee 5))
+
+;; --- Traits ---
+
+(deftrait :regenerating
+  {:status {:regen {:per-turn 1}}})
+
+;; --- Creatures ---
+
+(defcreature rat
+  (visual "r" [140 100 60])
+  (body {:hp 3 :strength 1})
+  (ai :pack)
+  (melee 1)
+  (sounds {:death {:near "The rat squeals and dies!"
+                   :mid  "You hear a squeal."
+                   :far  nil}
+           :idle  [{:near "The rat sniffs around."
+                    :mid  "You hear scratching."
+                    :far  nil
+                    :chance 3}]}))
+
+(defcreature goblin
+  (visual "g" [60 160 60])
+  (body {:hp 8 :strength 2})
+  (ai :hunter)
+  (melee 2)
+  (drops :gold)
+  (sounds {:death {:near "The goblin crumples with a grunt!"
+                   :mid  "You hear a grunt."
+                   :far  nil}
+           :idle  [{:near "The goblin mutters to itself."
+                    :mid  "You hear muttering."
+                    :far  nil
+                    :chance 4}
+                   {:near "The goblin picks its nose."
+                    :mid  nil :far nil
+                    :chance 2}]}))
+
+(defcreature archer
+  (visual "a" [60 140 100])
+  (body {:hp 6 :strength 1})
+  (ai :ranged {:preferred-range 5})
+  (melee 1)
+  (spell :ranged {:damage 2 :range 6})
+  (drops :gold)
+  (sounds {:death {:near "The archer gasps and collapses!"
+                   :mid  "You hear a gasp."
+                   :far  nil}}))
+
+(defcreature troll
+  (trait :regenerating)
+  (visual "T" [60 120 60])
+  (body {:hp 20 :strength 4 :armor 1})
+  (ai :hunter)
+  (melee 4)
+  (drops :gold :gold)
+  (sounds {:death {:near "The troll roars and topples!"
+                   :mid  "You hear a thunderous crash."
+                   :far  "You hear a distant rumble."}
+           :idle  [{:near "The troll snores loudly."
+                    :mid  "You hear loud snoring."
+                    :far  "You hear distant snoring."
+                    :chance 8
+                    :radius 15}
+                   {:near "The troll scratches itself."
+                    :mid  nil :far nil
+                    :chance 2}]}))
+
+(defcreature fire-imp
+  (visual "i" [255 120 30])
+  (body {:hp 5 :strength 1})
+  (ai :aggressive {:speed 2})
+  (melee 2)
+  (spell :breath {:damage 3 :element :fire})
+  (immune :fire)
+  (sounds {:death {:near "The fire imp pops like an ember!"
+                   :mid  "You hear a sharp pop."
+                   :far  nil}
+           :idle  [{:near "The fire imp crackles and sparks."
+                    :mid  "You hear crackling."
+                    :far  nil
+                    :chance 5}]}))
+
+(defcreature slime
+  (visual "s" [100 200 100])
+  (body {:hp 12 :strength 1})
+  (ai :hunter {:speed 2})
+  (melee 1)
+  {:properties {:splits-on-hit true}}
+  (sounds {:death {:near "The slime dissolves with a hiss."
+                   :mid  "You hear a wet hiss."
+                   :far  nil}
+           :idle  [{:near "The slime squelches."
+                    :mid  "You hear squelching."
+                    :far  nil
+                    :chance 4}]}))

@@ -1,0 +1,136 @@
+(ns xsofy.effects
+  (:require [xsofy.terrain :as terrain]))
+
+;; --- Effects Layer ---
+;; Two sparse persistent maps on the world:
+;;   :stains {[x y] {:type :blood :intensity 3}}
+;;   :gases  {[x y] {:methane 5 :poison 2}}
+;;
+;; Stains: cosmetic, rarely change. Blood, acid, water puddles.
+;; Gases: spread every turn via CA. Multiple gas types mix in one cell.
+
+(def neighbors
+  [[-1 -1] [0 -1] [1 -1]
+   [-1  0]         [1  0]
+   [-1  1] [0  1] [1  1]])
+
+;; --- Stains ---
+
+(defn add-stain [world x y stype intensity]
+  (let [stains (or (:stains world) {})
+        current (get stains [x y])
+        old-int (if (and current (map? current)) (or (:intensity current) 0) 0)
+        new-intensity (min 5 (+ old-int intensity))]
+    (assoc world :stains (assoc stains [x y] {:type stype :intensity new-intensity}))))
+
+(defn splatter [world cx cy stype intensity radius]
+  "Splatter stain at center and randomly to neighbors within radius."
+  (let [w (add-stain world cx cy stype intensity)]
+    (reduce (fn [w [dx dy]]
+              (let [nx (+ cx dx) ny (+ cy dy)]
+                (if (and (<= (+ (* dx dx) (* dy dy)) (* radius radius))
+                         (< (rand-int 3) intensity))
+                  (add-stain w nx ny stype (max 1 (dec intensity)))
+                  w)))
+            w
+            neighbors)))
+
+;; --- Stain Colors ---
+
+(def stain-colors
+  {:blood {:fg [120 20 20] :bg [35 10 10]}
+   :acid  {:fg [60 180 30] :bg [20 50 10]}
+   :water {:fg [40 60 120] :bg [12 18 40]}
+   :slime {:fg [60 140 40] :bg [18 40 12]}})
+
+(defn stain-tint [base-rgb stype intensity]
+  "Blend base tile color toward stain color based on intensity."
+  (let [colors (get stain-colors stype {:fg [80 80 80] :bg [30 30 30]})
+        t (min 0.8 (* (float (or intensity 1)) 0.15))
+        [br bg bb] base-rgb
+        [sr sg sb] (:bg colors)]
+    [(int (+ (* br (- 1.0 t)) (* sr t)))
+     (int (+ (* bg (- 1.0 t)) (* sg t)))
+     (int (+ (* bb (- 1.0 t)) (* sb t)))]))
+
+;; --- Gases ---
+
+(def gas-min-density 0.5)
+(def gas-diffusion 0.12)  ;; fraction that spreads to each neighbor per tick
+
+(defn add-gas [world x y gtype density]
+  (update-in world [:gases [x y]] #(assoc (or % {}) gtype (+ (or (get % gtype) 0) density))))
+
+(defn gas-passable? [terrain w h x y]
+  "Can gas flow into this cell?"
+  (and (>= x 0) (< x w) (>= y 0) (< y h)
+       (terrain/transparent? terrain w h x y)))
+
+(defn step-gases [world]
+  "One CA tick: each gas in each cell diffuses to neighbors."
+  (let [{:keys [terrain width height]} world
+        gases (or (:gases world) {})
+        new-gases (atom {})]
+    ;; for each cell with gas, diffuse to neighbors
+    (doseq [[[x y] cell-gases] gases]
+      (doseq [[gtype density] cell-gases]
+        (when (> density gas-min-density)
+          (let [spread (* density gas-diffusion)
+                passable-n (vec (filter (fn [[dx dy]]
+                                          (gas-passable? terrain width height
+                                                         (+ x dx) (+ y dy)))
+                                        neighbors))
+                n-count (count passable-n)
+                per-neighbor (if (> n-count 0) (/ spread (float n-count)) 0)
+                remaining (- density (* per-neighbor n-count))]
+            ;; keep remaining in current cell
+            (swap! new-gases update [x y]
+                   #(assoc (or % {}) gtype (+ (or (get % gtype) 0) remaining)))
+            ;; spread to neighbors
+            (doseq [[dx dy] passable-n]
+              (let [nx (+ x dx) ny (+ y dy)]
+                (swap! new-gases update [nx ny]
+                       #(assoc (or % {}) gtype
+                               (+ (or (get % gtype) 0) per-neighbor)))))))))
+    ;; prune cells below threshold
+    (let [pruned (reduce (fn [m [pos cell]]
+                           (let [filtered (reduce (fn [c [g d]]
+                                                    (if (> d gas-min-density)
+                                                      (assoc c g d) c))
+                                                  {} cell)]
+                             (if (empty? filtered) m
+                               (assoc m pos filtered))))
+                         {} @new-gases)]
+      (assoc world :gases pruned))))
+
+;; --- Gas Colors ---
+
+(def gas-colors
+  {:methane  [60 40 20]
+   :poison   [40 100 40]
+   :smoke    [80 80 80]
+   :steam    [120 120 140]
+   :confuse  [140 60 140]})
+
+(defn gas-tint [base-rgb cell-gases]
+  "Tint a tile based on gases present. Denser gas = stronger tint."
+  (if (or (nil? cell-gases) (empty? cell-gases))
+    base-rgb
+    (reduce (fn [[br bg bb] [gtype density]]
+              (let [color (get gas-colors gtype [80 80 80])
+                    t (min 0.6 (* (float density) 0.08))
+                    [gr gg gb] color]
+                [(int (+ (* br (- 1.0 t)) (* gr t)))
+                 (int (+ (* bg (- 1.0 t)) (* gg t)))
+                 (int (+ (* bb (- 1.0 t)) (* gb t)))]))
+            base-rgb
+            cell-gases)))
+
+;; --- Gas FOV Impact ---
+;; Dense gas reduces visibility
+
+(defn gas-blocks-vision? [gases x y]
+  (let [cell (get gases [x y])]
+    (when cell
+      (let [total (reduce + 0 (vals cell))]
+        (> total 4)))))

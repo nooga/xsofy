@@ -1,0 +1,115 @@
+(ns xsofy.combat
+  (:require [xsofy.entities :as ent]
+            [math]))
+
+;; --- Strength Modifier ---
+
+(defn strength-modifier [strength str-req]
+  (let [diff (- strength str-req)]
+    (if (>= diff 0)
+      (* diff 0.25)
+      (* diff 2.5))))
+
+;; --- Enchantment Scaling ---
+
+(defn enchant-scale [net-enchant]
+  (math/pow 1.28 (float net-enchant)))
+
+;; --- Damage Roll ---
+
+(defn roll-damage [min-dmg max-dmg net-enchant]
+  (let [base (+ min-dmg (rand-int (max 1 (inc (- max-dmg min-dmg)))))
+        scale (enchant-scale net-enchant)]
+    (max 1 (int (* base scale)))))
+
+;; --- Hit Chance ---
+
+(defn hit-chance [accuracy defense]
+  (let [chance (* accuracy (math/pow 0.987 (float defense)))]
+    (max 0 (min 100 (int chance)))))
+
+(defn hit? [accuracy defense]
+  (< (rand-int 100) (hit-chance accuracy defense)))
+
+;; --- Attack Speed ---
+
+(def unarmed-speed 100)
+(def move-speed 100)
+
+(defn attack-speed [weapon did-hit]
+  (if weapon
+    (let [base (or (get-in weapon [:item :speed]) 100)]
+      (if (and (> base 100) (not did-hit))
+        100
+        base))
+    unarmed-speed))
+
+;; --- Sneak Attack ---
+
+(defn sneak-multiplier [weapon]
+  (if weapon
+    (or (get-in weapon [:item :sneak-bonus]) 3)
+    3))
+
+;; --- Attacker Stats ---
+
+(defn attacker-stats [world attacker-id]
+  (let [attacker (get-in world [:entities attacker-id])
+        str_ (get-in attacker [:body :strength] 1)
+        wep (ent/get-weapon world attacker-id)
+        creature-dmg (get-in attacker [:spells :melee :damage])]
+    (if wep
+      {:str str_
+       :min-dmg (or (get-in wep [:item :min-dmg]) 1)
+       :max-dmg (or (get-in wep [:item :max-dmg]) 2)
+       :accuracy (or (get-in wep [:item :accuracy]) 100)
+       :enchant (or (get-in wep [:item :enchant]) 0)
+       :str-req (or (get-in wep [:item :str-req]) 1)
+       :weapon wep}
+      ;; unarmed / creature melee
+      {:str str_
+       :min-dmg (if creature-dmg (max 1 (- creature-dmg 1)) 1)
+       :max-dmg (if creature-dmg (+ creature-dmg 1) 2)
+       :accuracy 80
+       :enchant 0
+       :str-req 1
+       :weapon nil})))
+
+;; --- Defender Stats ---
+
+(defn defender-stats [world target-id]
+  (let [target (get-in world [:entities target-id])
+        base-def (get-in target [:body :armor] 0)
+        arm (ent/get-armor world target-id)
+        target-str (get-in target [:body :strength] 1)
+        ai-state (get-in target [:ai :state])]
+    (if arm
+      (let [arm-def (or (get-in arm [:item :defense]) 0)
+            arm-enchant (or (get-in arm [:item :enchant]) 0)
+            arm-req (or (get-in arm [:item :str-req]) 1)
+            arm-net (+ arm-enchant (strength-modifier target-str arm-req))]
+        {:defense (+ base-def arm-def (int (* arm-net 10)))
+         :ai-state ai-state})
+      {:defense base-def
+       :ai-state ai-state})))
+
+;; --- Full Attack Resolution ---
+
+(defn resolve-attack [world attacker-id target-id]
+  (let [attacker (get-in world [:entities attacker-id])
+        target (get-in world [:entities target-id])]
+    (when (and attacker target)
+      (let [atk (attacker-stats world attacker-id)
+            def_ (defender-stats world target-id)
+            net-enchant (+ (:enchant atk) (strength-modifier (:str atk) (:str-req atk)))
+            sneak (= (:ai-state def_) :sleep)
+            did-hit (or sneak (hit? (:accuracy atk) (:defense def_)))
+            raw-dmg (if did-hit (roll-damage (:min-dmg atk) (:max-dmg atk) net-enchant) 0)
+            sneak-mult (if (and did-hit sneak) (sneak-multiplier (:weapon atk)) 1)
+            final-dmg (if did-hit (max 1 (* raw-dmg sneak-mult)) 0)
+            speed (attack-speed (:weapon atk) did-hit)]
+        {:hit did-hit
+         :damage final-dmg
+         :speed speed
+         :sneak (and did-hit sneak (> sneak-mult 1))
+         :net-enchant net-enchant}))))

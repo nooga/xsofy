@@ -1,0 +1,137 @@
+(ns xsofy.ui
+  (:require [term]))
+
+;; --- Rect ---
+
+(defn rect [x y w h] {:x x :y y :w w :h h})
+
+(defn rect-split-h
+  "Split rect horizontally at column n. Returns [left right]."
+  [r n]
+  [(rect (:x r) (:y r) n (:h r))
+   (rect (+ (:x r) n) (:y r) (- (:w r) n) (:h r))])
+
+(defn rect-split-v
+  "Split rect vertically at row n. Returns [top bottom]."
+  [r n]
+  [(rect (:x r) (:y r) (:w r) n)
+   (rect (:x r) (+ (:y r) n) (:w r) (- (:h r) n))])
+
+;; --- Color Math ---
+
+(defn lerp-color [a b t]
+  (let [[ar ag ab] (or a [0 0 0])
+        [br bg bb] (or b [0 0 0])
+        t (or t 0.0)]
+    [(int (+ ar (* (- br ar) t)))
+     (int (+ ag (* (- bg ag) t)))
+     (int (+ ab (* (- bb ab) t)))]))
+
+;; --- Drawing Primitives ---
+
+(def bg [10 10 10])
+
+(defn apply-fg [rgb]
+  (let [[r g b] rgb] (term/set-fg r g b)))
+
+(defn apply-bg [rgb]
+  (let [[r g b] rgb] (term/set-bg r g b)))
+
+(defn clear-rect [r]
+  (apply-fg bg)
+  (apply-bg bg)
+  (dotimes [y (:h r)]
+    (term/move-cursor (:x r) (+ (:y r) y))
+    (term/write (apply str (repeat (:w r) " ")))))
+
+(defn write-at [r x y text fg bgg]
+  (when (and r (>= y 0) (< y (:h r)) (>= x 0))
+    (let [text (or (str text) "")
+          avail (- (:w r) x)
+          text (if (> (count text) avail) (subs text 0 (max 0 avail)) text)]
+      (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+      (apply-fg fg)
+      (apply-bg bgg)
+      (term/write text))))
+
+(defn write-line [r y text fg bgg]
+  (when (and r (>= y 0) (< y (:h r)))
+    (let [w (:w r)
+          text (or (str text) "")
+          text (if (> (count text) w) (subs text 0 w) text)
+          pad (- w (count text))]
+      (term/move-cursor (:x r) (+ (:y r) y))
+      (apply-fg fg)
+      (apply-bg bgg)
+      (term/write text)
+      (when (> pad 0)
+        (term/write (apply str (repeat pad " ")))))))
+
+;; --- Smooth Bar ---
+;; Renders a bar using background colors.
+;; Each cell: full-color if completely filled, blended if partial, empty-color if empty.
+;; Text is overlaid on top.
+
+(defn bar [r y text current maximum fill-color empty-color text-color]
+  (when (and (>= y 0) (< y (:h r)) (> (:w r) 0))
+    (let [w (:w r)
+          current (or current 0)
+          maximum (or maximum 1)
+          ratio (if (> maximum 0) (/ (float current) (float maximum)) 0.0)
+          fill-pixels (* ratio w)
+          text (if (> (count text) w) (subs text 0 w) text)
+          text-padded (str text (apply str (repeat (- w (count text)) " ")))]
+      (dotimes [i w]
+        (let [ch (str (nth text-padded i))
+              ;; how much of this cell is filled (0.0 to 1.0)
+              cell-fill (cond
+                          (< i (int fill-pixels)) 1.0
+                          (< i (+ (int fill-pixels) 1)) (- fill-pixels (int fill-pixels))
+                          :else 0.0)
+              cell-bg (lerp-color empty-color fill-color cell-fill)]
+          (term/move-cursor (+ (:x r) i) (+ (:y r) y))
+          (apply-fg text-color)
+          (apply-bg cell-bg)
+          (term/write ch))))))
+
+;; --- Box ---
+
+(defn box [r title fg bgg]
+  (let [w (:w r)
+        h (:h r)
+        top (str "+" (apply str (repeat (- w 2) "-")) "+")
+        side (str "|" (apply str (repeat (- w 2) " ")) "|")]
+    (write-line r 0 top fg bgg)
+    (dotimes [y (- h 2)]
+      (write-line r (inc y) side fg bgg))
+    (write-line r (dec h) top fg bgg)
+    (when title
+      (write-at r 2 0 (str " " title " ") fg bgg))
+    ;; return inner rect
+    (rect (+ (:x r) 1) (+ (:y r) 1) (- w 2) (- h 2))))
+
+;; --- Fixed Layout ---
+;; Game area is fixed size, centered in terminal
+
+(def game-width 100)
+(def game-height 36)
+(def sidebar-width 20)
+(def log-height 3)
+(def status-height 1)
+
+(defn layout [term-w term-h]
+  (let [;; center the game rect in terminal
+        gw (min game-width term-w)
+        gh (min game-height term-h)
+        ox (inc (quot (- term-w gw) 2))
+        oy (inc (quot (- term-h gh) 2))
+        full (rect ox oy gw gh)
+        ;; sidebar on left, map on right
+        [sidebar main] (rect-split-h full sidebar-width)
+        ;; main = map + bottom
+        [map-area bottom] (rect-split-v main (- (:h main) log-height status-height))
+        [log-area status] (rect-split-v bottom log-height)]
+    {:map map-area
+     :sidebar sidebar
+     :log log-area
+     :status status}))

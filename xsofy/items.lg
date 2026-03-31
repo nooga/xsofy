@@ -1,0 +1,127 @@
+(ns xsofy.items
+  (:require [xsofy.entities :refer [defitem visual weapon armor ring
+                                     consumable item-name item-desc drops]]))
+
+;; --- Gold ---
+
+(defitem gold
+  (visual "$" [255 220 50])
+  (item-name "gold"))
+
+;; --- Weapons ---
+;; speed: 100 = normal, <100 = fast, >100 = slow
+
+(defitem dagger
+  (visual "/" [200 200 200])
+  (item-name "dagger")
+  (item-desc "Quick and light. Devastating from the shadows.")
+  (weapon {:min-dmg 2 :max-dmg 4 :accuracy 100 :speed 60 :str-req 1
+           :sneak-bonus 5}))
+
+(defitem short-sword
+  (visual "/" [180 180 220])
+  (item-name "short sword")
+  (item-desc "A reliable sidearm. Balanced damage and speed.")
+  (weapon {:min-dmg 3 :max-dmg 6 :accuracy 100 :speed 100 :str-req 2}))
+
+(defitem long-sword
+  (visual "/" [220 220 240])
+  (item-name "long sword")
+  (item-desc "A knight's weapon. Good reach and solid damage.")
+  (weapon {:min-dmg 5 :max-dmg 9 :accuracy 100 :speed 100 :str-req 3}))
+
+(defitem spear
+  (visual "|" [180 160 120])
+  (item-name "spear")
+  (item-desc "Long reach. Hits the enemy behind your target.")
+  (weapon {:min-dmg 3 :max-dmg 5 :accuracy 100 :speed 100 :str-req 2}))
+
+(defitem axe
+  (visual ")" [180 140 100])
+  (item-name "axe")
+  (item-desc "Broad blade. Strikes all adjacent enemies.")
+  (weapon {:min-dmg 4 :max-dmg 8 :accuracy 90 :speed 110 :str-req 3}))
+
+(defitem war-hammer
+  (visual "\\" [160 140 120])
+  (item-name "war hammer")
+  (item-desc "Crushingly slow. Two turns to recover on hit, but devastating.")
+  (weapon {:min-dmg 8 :max-dmg 14 :accuracy 90 :speed 200 :str-req 5}))
+
+(defitem rapier
+  (visual "/" [230 230 250])
+  (item-name "rapier")
+  (item-desc "Lightning fast. Strikes twice in the time of a normal weapon.")
+  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 110 :speed 50 :str-req 2}))
+
+;; --- Armor ---
+;; defense: higher = harder to hit. 10 = leather, 50 = plate
+
+(defitem leather-armor
+  (visual "[" [140 100 60])
+  (item-name "leather armor")
+  (item-desc "Supple and light. Barely slows you down.")
+  (armor {:defense 15 :str-req 1}))
+
+(defitem chain-mail
+  (visual "[" [180 180 200])
+  (item-name "chain mail")
+  (item-desc "Interlocking rings. Good protection, some weight.")
+  (armor {:defense 30 :str-req 3}))
+
+(defitem plate-armor
+  (visual "[" [220 220 230])
+  (item-name "plate armor")
+  (item-desc "Heavy steel plates. Excellent protection, demands strength.")
+  (armor {:defense 50 :str-req 5}))
+
+;; --- Consumables ---
+
+(defitem health-potion
+  (visual "!" [255 60 60])
+  (item-name "health potion")
+  (item-desc "A red bubbling liquid. Restores vitality.")
+  (consumable {:effect :heal :count 1}))
+
+(defitem strength-potion
+  (visual "!" [255 200 60])
+  (item-name "strength potion")
+  (item-desc "Thick golden syrup. Permanently increases strength.")
+  (consumable {:effect :strength :count 1}))
+
+(defitem scroll-identify
+  (visual "?" [240 230 200])
+  (item-name "scroll of identify")
+  (item-desc "Ancient text. Reveals the nature of an item.")
+  (consumable {:effect :identify :count 1}))
+
+(defitem scroll-enchant
+  (visual "?" [200 200 255])
+  (item-name "scroll of enchantment")
+  (item-desc "Glowing runes. Enhances a weapon or armor.")
+  (consumable {:effect :enchant :count 1}))
+
+;; --- Loot Tables ---
+
+(def depth-loot
+  {1 {:weapons [:dagger :short-sword]
+      :armor   [:leather-armor]
+      :potions [:health-potion :health-potion :strength-potion]
+      :scrolls [:scroll-identify]}
+   2 {:weapons [:short-sword :long-sword :spear :rapier]
+      :armor   [:leather-armor :chain-mail]
+      :potions [:health-potion :strength-potion]
+      :scrolls [:scroll-identify :scroll-enchant]}
+   3 {:weapons [:long-sword :axe :war-hammer :rapier]
+      :armor   [:chain-mail :plate-armor]
+      :potions [:health-potion :strength-potion]
+      :scrolls [:scroll-identify :scroll-enchant :scroll-enchant]}})
+
+(defn random-loot [depth]
+  (let [table (get depth-loot (min depth 3) (get depth-loot 3))
+        category (rand-int 4)]
+    (case category
+      0 (let [pool (:weapons table)] (nth pool (rand-int (count pool))))
+      1 (let [pool (:armor table)] (nth pool (rand-int (count pool))))
+      2 (let [pool (:potions table)] (nth pool (rand-int (count pool))))
+      3 (let [pool (:scrolls table)] (nth pool (rand-int (count pool)))))))

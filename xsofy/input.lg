@@ -1,0 +1,26 @@
+(ns xsofy.input)
+
+(defn parse-key [k]
+  (case k
+    "\u001b[A" :up
+    "\u001b[B" :down
+    "\u001b[C" :right
+    "\u001b[D" :left
+    "h"        :left
+    "j"        :down
+    "k"        :up
+    "l"        :right
+    "."        :wait
+    ">"        :descend
+    "<"        :ascend
+    "g"        :pickup
+    ","        :pickup
+    "e"        :equip-menu
+    "u"        :unequip-menu
+    "d"        :drop-menu
+    "a"        :use-menu
+    "i"        :inventory
+    "m"        :messages
+    "q"        :quit
+    "\u001b"   :escape
+    :unknown))

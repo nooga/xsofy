@@ -1,0 +1,52 @@
+(ns xsofy.lighting
+  (:require [xsofy.terrain :as terrain]
+            [math]))
+
+;; --- Light Sources ---
+;; Collected from terrain (torches) and entities (player torch, fire effects).
+
+(defn collect-terrain-lights [terrain w h]
+  (let [sources (atom [])]
+    (dotimes [y h]
+      (dotimes [x w]
+        (let [tile (terrain/tget terrain w x y)
+              light (get terrain/tile-light tile)]
+          (when light
+            (swap! sources conj {:lx x :ly y
+                                 :radius (:radius light)
+                                 :color (:color light)})))))
+    @sources))
+
+;; --- Per-cell Light Computation ---
+;; Returns [r g b] intensity to add to tile colors.
+;; Multiple lights are additive.
+
+(defn light-at [x y sources]
+  (reduce
+    (fn [[lr lg lb] {:keys [lx ly radius color]}]
+      (let [dx (- x lx) dy (- y ly)
+            dist-sq (+ (* dx dx) (* dy dy))
+            r-sq (* radius radius)]
+        (if (> dist-sq r-sq)
+          [lr lg lb]
+          (let [dist (math/sqrt (float dist-sq))
+                falloff (- 1.0 (/ dist (float radius)))
+                falloff (* falloff falloff)
+                [cr cg cb] color]
+            [(+ lr (int (* cr falloff)))
+             (+ lg (int (* cg falloff)))
+             (+ lb (int (* cb falloff)))]))))
+    [0 0 0]
+    sources))
+
+;; --- Apply Light to a Color ---
+;; Brighten and tint a base color by a light value.
+
+(defn apply-light [base-rgb light-rgb]
+  (let [[br bg bb] base-rgb
+        [lr lg lb] light-rgb
+        ;; boost factor: 0 light = keep base, strong light = brighten significantly
+        boost (/ (float (+ lr lg lb)) 300.0)]
+    [(min 255 (+ br (int (* lr 0.4)) (int (* br boost))))
+     (min 255 (+ bg (int (* lg 0.4)) (int (* bg boost))))
+     (min 255 (+ bb (int (* lb 0.4)) (int (* bb boost))))]))
