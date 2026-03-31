@@ -295,11 +295,12 @@
     (let [world (world/make-world 60 30)]
       (game-loop world))
     (catch e
-      (dbg/log "FATAL ERROR:" e)
+           (dbg/log "FATAL ERROR:" e)
       (shutdown-terminal)
       (println "FATAL ERROR:")
       (println e))
     (finally
       (shutdown-terminal))))
 
-(-main)
+(when-not *compiling-aot*
+  (-main))
