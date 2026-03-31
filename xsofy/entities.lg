@@ -190,12 +190,38 @@
 (defn inventory-full? [world owner-id]
   (>= (count (inventory world owner-id)) max-inventory))
 
+(defn find-stack [world owner-id template]
+  "Find an existing inventory item with same template (for stacking consumables)."
+  (let [inv (inventory world owner-id)]
+    (first (filter (fn [id]
+                     (let [e (get-in world [:entities id])]
+                       (and e (= template (:template e)))))
+                   inv))))
+
 (defn pickup-item [world item-id owner-id]
-  (if (inventory-full? world owner-id)
-    nil ;; return nil to signal failure
-    (-> world
-        (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
-        (assoc-in [:entities item-id :pos] nil))))
+  (let [item (get-in world [:entities item-id])
+        slot (get-in item [:item :slot])
+        template (:template item)]
+    ;; stackable consumables
+    (if (and (= slot :consumable) template)
+      (if-let [existing (find-stack world owner-id template)]
+        ;; stack: increment count on existing, remove picked-up entity
+        (let [old-count (or (get-in world [:entities existing :item :count]) 1)]
+          (-> world
+              (assoc-in [:entities existing :item :count] (inc old-count))
+              (update :entities dissoc item-id)))
+        ;; no stack exists, add normally
+        (if (inventory-full? world owner-id)
+          nil
+          (-> world
+              (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
+              (assoc-in [:entities item-id :pos] nil))))
+      ;; non-stackable
+      (if (inventory-full? world owner-id)
+        nil
+        (-> world
+            (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
+            (assoc-in [:entities item-id :pos] nil))))))
 
 (defn drop-item [world item-id owner-id]
   (let [owner-pos (get-in world [:entities owner-id :pos])]

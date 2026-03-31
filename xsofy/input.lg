@@ -10,7 +10,20 @@
     "j"        :down
     "k"        :up
     "l"        :right
+    ;; shift+arrow = run
+    "\u001b[1;2A" :run-up
+    "\u001b[1;2B" :run-down
+    "\u001b[1;2C" :run-right
+    "\u001b[1;2D" :run-left
+    ;; uppercase HJKL = run
+    "H"        :run-left
+    "J"        :run-down
+    "K"        :run-up
+    "L"        :run-right
     "."        :wait
+    "z"        :wait
+    "Z"        :rest
+    "x"        :autoexplore
     ">"        :descend
     "<"        :ascend
     "g"        :pickup

@@ -47,11 +47,15 @@
             ch (get terrain/tile-chars tile "?")
             fg0 (if (= tile 2) (jitter-color (:fg style) x y 20) (:fg style))
             bg0 (if (= tile 2) (jitter-color (:bg style) x y 8) (:bg style))]
-        ;; apply stain, gas, lighting
-        (let [bg1 (if (and stain (map? stain))
-                    (fx/stain-tint bg0 (:type stain) (or (:intensity stain) 1))
+        ;; apply stain (fg stronger tint), gas, lighting
+        (let [stain-int (if (and stain (map? stain)) (or (:intensity stain) 1) 0)
+              fg1 (if (> stain-int 0)
+                    (fx/stain-tint-fg fg0 (:type stain) (* stain-int 2) x y)
+                    fg0)
+              bg1 (if (> stain-int 0)
+                    (fx/stain-tint-bg bg0 (:type stain) stain-int x y)
                     bg0)
-              fg1 (if gas (fx/gas-tint fg0 gas) fg0)
+              fg1 (if gas (fx/gas-tint fg1 gas) fg1)
               bg2 (if gas (fx/gas-tint bg1 gas) bg1)]
           (let [[fr fg fb] (if light-val (light/apply-light fg1 light-val) fg1)
                 [br bgg bb] (if light-val (light/apply-light bg2 light-val) bg2)]
@@ -99,12 +103,20 @@
                  (>= y 0) (< y (:h r)))
         (let [tile (terrain/tget (:terrain world) (:width world) x y)
               tile-bg (:bg (style-tile tile))
+              stains (or (:stains world) {})
+              stain (get stains [x y])
               lv (light/light-at x y lights)
-              bg-lit (if lv (light/apply-light tile-bg lv) tile-bg)
-              [fr fg fb] (get-in entity [:visual :color] [200 60 60])
+              ;; stain tints the bg only (entity sits on top)
+              bg0 (if (and stain (map? stain))
+                    (fx/stain-tint-bg tile-bg (:type stain) (or (:intensity stain) 1) x y)
+                    tile-bg)
+              bg-lit (if lv (light/apply-light bg0 lv) bg0)
+              ;; entity fg gets lighting but not stain
+              base-fg (get-in entity [:visual :color] [200 60 60])
+              fg-lit (if lv (light/apply-light base-fg lv) base-fg)
               glyph (get-in entity [:visual :glyph] "?")]
           (term/move-cursor (+ (:x r) x) (+ (:y r) y))
-          (term/set-fg fr fg fb)
+          (let [[fr fg fb] fg-lit] (term/set-fg fr fg fb))
           (let [[br bgg bb] bg-lit] (term/set-bg br bgg bb))
           (term/write glyph))))))
 
@@ -218,11 +230,13 @@
       (let [iname (or (:item-name item)
                       (name (or (:template item) (:id item))))
             enchant (get-in item [:item :enchant] 0)
+            cnt (or (get-in item [:item :count]) 1)
             prefix (cond
                      (> enchant 0) (str "+" enchant " ")
                      (< enchant 0) (str enchant " ")
-                     :else "")]
-        (str prefix iname))
+                     :else "")
+            suffix (if (> cnt 1) (str " (" cnt ")") "")]
+        (str prefix iname suffix))
       "???")))
 
 (defn item-stat-str [world item-id]

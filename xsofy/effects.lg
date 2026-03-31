@@ -23,8 +23,24 @@
         new-intensity (min 5 (+ old-int intensity))]
     (assoc world :stains (assoc stains [x y] {:type stype :intensity new-intensity}))))
 
+(defn blood-drop [world cx cy]
+  "Single blood drop at or near position."
+  (let [dx (- (rand-int 3) 1)
+        dy (- (rand-int 3) 1)]
+    (add-stain world (+ cx dx) (+ cy dy) :blood 1)))
+
+(defn blood-puddle [world cx cy]
+  "Big puddle — center + random neighbors."
+  (let [w (add-stain world cx cy :blood 4)]
+    (reduce (fn [w [dx dy]]
+              (if (< (rand-int 3) 2)
+                (add-stain w (+ cx dx) (+ cy dy) :blood (+ 1 (rand-int 3)))
+                w))
+            w
+            neighbors)))
+
 (defn splatter [world cx cy stype intensity radius]
-  "Splatter stain at center and randomly to neighbors within radius."
+  "Generic splatter."
   (let [w (add-stain world cx cy stype intensity)]
     (reduce (fn [w [dx dy]]
               (let [nx (+ cx dx) ny (+ cy dy)]
@@ -38,20 +54,40 @@
 ;; --- Stain Colors ---
 
 (def stain-colors
-  {:blood {:fg [120 20 20] :bg [35 10 10]}
+  {:blood {:fg [180 30 20] :bg [60 10 8]}
    :acid  {:fg [60 180 30] :bg [20 50 10]}
    :water {:fg [40 60 120] :bg [12 18 40]}
    :slime {:fg [60 140 40] :bg [18 40 12]}})
 
-(defn stain-tint [base-rgb stype intensity]
-  "Blend base tile color toward stain color based on intensity."
-  (let [colors (get stain-colors stype {:fg [80 80 80] :bg [30 30 30]})
-        t (min 0.8 (* (float (or intensity 1)) 0.15))
-        [br bg bb] base-rgb
-        [sr sg sb] (:bg colors)]
-    [(int (+ (* br (- 1.0 t)) (* sr t)))
-     (int (+ (* bg (- 1.0 t)) (* sg t)))
-     (int (+ (* bb (- 1.0 t)) (* sb t)))]))
+(defn cell-hash [x y]
+  (let [h (+ (* x 374761393) (* y 668265263))]
+    (bit-and (bit-xor h (bit-shift-right h 13)) 255)))
+
+(defn stain-tint-fg
+  ([base-rgb stype intensity] (stain-tint-fg base-rgb stype intensity 0 0))
+  ([base-rgb stype intensity x y]
+   (let [colors (get stain-colors stype {:fg [180 30 20] :bg [60 10 8]})
+         t (min 0.95 (* (float (or intensity 1)) 0.25))
+         jitter (- (rem (cell-hash x y) 30) 15)
+         [br bg bb] base-rgb
+         [sr sg sb] (:fg colors)
+         sr (max 0 (min 255 (+ sr jitter)))]
+     [(int (+ (* br (- 1.0 t)) (* sr t)))
+      (int (+ (* bg (- 1.0 t)) (* sg t)))
+      (int (+ (* bb (- 1.0 t)) (* sb t)))])))
+
+(defn stain-tint-bg
+  ([base-rgb stype intensity] (stain-tint-bg base-rgb stype intensity 0 0))
+  ([base-rgb stype intensity x y]
+   (let [colors (get stain-colors stype {:fg [180 30 20] :bg [60 10 8]})
+         t (min 0.8 (* (float (or intensity 1)) 0.18))
+         jitter (- (rem (cell-hash (+ x 37) (+ y 13)) 24) 12)
+         [br bg bb] base-rgb
+         [sr sg sb] (:bg colors)
+         sr (max 0 (min 255 (+ sr jitter)))]
+     [(int (+ (* br (- 1.0 t)) (* sr t)))
+      (int (+ (* bg (- 1.0 t)) (* sg t)))
+      (int (+ (* bb (- 1.0 t)) (* sb t)))])))
 
 ;; --- Gases ---
 

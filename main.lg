@@ -238,8 +238,47 @@
              (assoc world :running false))
 
          ;; default: game screen
-         (let [key (input/parse-key (term/read-key))
+         (let [;; determine auto-action or wait for input
+               auto-key (cond
+                          (:resting world) :wait
+                          (:running-dir world) (let [[dx dy] (:running-dir world)]
+                                                 (cond (and (= dx 0) (< dy 0)) :up
+                                                       (and (= dx 0) (> dy 0)) :down
+                                                       (and (< dx 0) (= dy 0)) :left
+                                                       (and (> dx 0) (= dy 0)) :right
+                                                       :else nil))
+                          (:autoexploring world) :autoexplore
+                          (:auto-target world) :auto-target-step
+                          :else nil)
+               key (or auto-key (input/parse-key (term/read-key)))
                new-world (world/update-world world key)
+               ;; check if auto-mode should stop
+               new-world (if (or (:resting new-world) (:running-dir new-world) (:autoexploring new-world) (:auto-target new-world))
+                           (let [player (get-in new-world [:entities :player])
+                                 hp (get-in player [:body :hp] 0)
+                                 max-hp (get-in player [:body :max-hp] 1)
+                                 fov (or (:fov new-world) #{})
+                                 enemies (some (fn [e]
+                                                 (and (:ai e)
+                                                      (not= :player (:id e))
+                                                      (:pos e)
+                                                      (contains? fov (:pos e))
+                                                      (= :hunt (get-in e [:ai :state]))))
+                                               (vals (:entities new-world)))
+                                 ;; running stops at walls/doors/items
+                                 run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
+                                                  (= (:turn new-world) (:turn world)))
+                                 dead (nil? player)]
+                             (cond
+                               dead (dissoc new-world :resting :running-dir :autoexploring :auto-target)
+                               enemies (-> new-world
+                                           (dissoc :resting :running-dir :autoexploring :auto-target)
+                                           (world/log-msg "You stop — enemy spotted!"))
+                               (and (:resting new-world) (>= hp max-hp))
+                               (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
+                               run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
+                               :else new-world))
+                           new-world)
                cur-size (term/size)
                resized (not= cur-size prev-size)
                floor-changed (not= (:depth new-world) (:depth world))]
@@ -256,6 +295,7 @@
     (let [world (world/make-world 60 30)]
       (game-loop world))
     (catch e
+      (dbg/log "FATAL ERROR:" e)
       (shutdown-terminal)
       (println "FATAL ERROR:")
       (println e))

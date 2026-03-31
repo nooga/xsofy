@@ -11,6 +11,8 @@
             [xsofy.debug :as dbg]
             [xsofy.bestiary]))
 
+(declare player-move log-msg melee-attack update-fov autoexplore-step bfs-path)
+
 (def view-radius 12)
 
 ;; --- Depth-based creature spawning ---
@@ -193,12 +195,24 @@
       (terrain/tset! terrain width x y 1))
     world))
 
-(defn splatter-blood [world x y amount]
-  "Combat leaves blood stains. Big hits splatter to neighbors."
-  (if (> amount 3)
-    (fx/splatter world x y :blood (min 4 (quot amount 2)) 1)
-    (if (> amount 1)
-      (fx/add-stain world x y :blood 1)
+(defn splatter-blood [world x y dmg hp-before killed]
+  "Blood scales with overkill. Light hits = maybe a drop. Overkill = splat."
+  (if killed
+    (let [overkill (- dmg hp-before)]  ;; how much damage beyond lethal
+      (cond
+        ;; massive overkill (double+ the hp) — big splat
+        (> overkill hp-before)
+        (fx/blood-puddle world x y)
+        ;; moderate overkill — small puddle
+        (> overkill 0)
+        (let [w (fx/add-stain world x y :blood 3)]
+          (if (< (rand-int 3) 2) (fx/blood-drop w x y) w))
+        ;; just barely killed — center blood only
+        :else
+        (fx/add-stain world x y :blood 2)))
+    ;; not killed — small chance of a drop on big hits
+    (if (and (> dmg 3) (< (rand-int 4) 1))
+      (fx/blood-drop world x y)
       world)))
 
 ;; --- Message Log ---
@@ -224,6 +238,74 @@
 (defn entity-name [entity]
   (let [k (or (:template entity) (:id entity))]
     (if k (name k) "something")))
+
+;; --- Pathfinding ---
+
+(defn bfs-path [world goal-fn]
+  (let [{:keys [terrain width height]} world
+        [px py] (get-in world [:entities :player :pos])
+        start [px py]
+        visited (atom #{start})
+        queue (atom [[start nil]])
+        found (atom nil)
+        steps (atom 0)]
+    (loop []
+      (when (and (seq @queue) (nil? @found) (< @steps 3000))
+        (swap! steps inc)
+        (let [[pos first-dir] (first @queue)]
+          (swap! queue #(subvec % 1))
+          (let [[cx cy] pos]
+            (doseq [[dx dy] [[0 -1] [0 1] [-1 0] [1 0]]]
+              (when (nil? @found)
+                (let [nx (+ cx dx) ny (+ cy dy)
+                      npos [nx ny]
+                      tile (terrain/tget terrain width nx ny)]
+                  (when (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                             (not (contains? @visited npos))
+                             (or (terrain/walkable? terrain width height nx ny)
+                                 (= tile 11)))
+                    (swap! visited conj npos)
+                    (let [step-dir (or first-dir [dx dy])]
+                      (if (goal-fn npos tile)
+                        (reset! found step-dir)
+                        (swap! queue conj [npos step-dir]))))))))
+          (recur))))
+    @found))
+
+(defn route-to-tile [world tile-type]
+  (let [memory (or (:memory world) {})
+        target (first (filter (fn [[pos tile]] (= tile tile-type)) memory))]
+    (if target
+      (let [target-pos (first target)
+            dir (bfs-path world (fn [pos _] (= pos target-pos)))]
+        (if dir
+          (let [[dx dy] dir]
+            (-> (player-move world dx dy)
+                (assoc :auto-target target-pos)))
+          (log-msg world "Can't find a path.")))
+      (log-msg world "You haven't seen any stairs yet."))))
+
+(defn autoexplore-step [world]
+  (let [memory (or (:memory world) {})
+        _ (doseq [[k v] (or (:entities world) {})]
+            (when-not (map? v)
+              (dbg/log "BAD ENTITY:" k "=" v)))
+        ents (vec (filter (fn [e] (and (some? e) (map? e))) (vals (or (:entities world) {}))))
+        floor-items (set (reduce (fn [acc e]
+                                   (if (and (:pos e) (= :item (:entity-type e)))
+                                     (conj acc (:pos e))
+                                     acc))
+                                 [] ents))
+        dir (bfs-path world
+              (fn [pos tile]
+                (or (nil? (get memory pos))
+                    (contains? floor-items pos))))]
+    (if dir
+      (let [[dx dy] dir]
+        (player-move world dx dy))
+      (-> world
+          (dissoc :autoexploring)
+          (log-msg "Nothing left to explore.")))))
 
 ;; --- Stairs ---
 
@@ -276,7 +358,7 @@
         tile (terrain/tget terrain width px py)]
     (if (= tile 13)
       (change-floor world (inc depth))
-      (log-msg world "There are no stairs here."))))
+      (route-to-tile world 13))))
 
 (defn ascend [world]
   (let [{:keys [terrain width depth]} world
@@ -286,7 +368,7 @@
       (if (> depth 1)
         (change-floor world (dec depth))
         (log-msg world "You see daylight above. You're not ready to leave yet."))
-      (log-msg world "There are no stairs here."))))
+      (route-to-tile world 14))))
 
 ;; --- Combat ---
 
@@ -305,11 +387,12 @@
             (if (:hit result)
               (let [dmg (:damage result)
                     sneak (:sneak result)
-                    w (let [w2 (ent/damage-entity world target-id dmg)]
-                        (if target-pos
-                          (splatter-blood w2 (first target-pos) (second target-pos) dmg)
-                          w2))
-                    killed (nil? (get-in w [:entities target-id]))
+                    hp-before (get-in target [:body :hp] 0)
+                    w2 (ent/damage-entity world target-id dmg)
+                    killed (nil? (get-in w2 [:entities target-id]))
+                    w (if target-pos
+                        (splatter-blood w2 (first target-pos) (second target-pos) dmg hp-before killed)
+                        w2)
                     sneak-txt (if sneak " (sneak attack!)" "")]
                 (let [target-sounds (:sounds target)
                       death-sound (if target-sounds
@@ -359,6 +442,18 @@
 
 ;; --- Use/Consume ---
 
+(defn consume-item [world item-id]
+  "Decrement stack count. Remove from inventory if count reaches 0."
+  (let [cnt (or (get-in world [:entities item-id :item :count]) 1)]
+    (if (<= cnt 1)
+      ;; last one — remove entirely
+      (-> world
+          (update-in [:entities :player :inventory]
+                     #(vec (remove (fn [id] (= id item-id)) %)))
+          (ent/remove-entity item-id))
+      ;; decrement stack
+      (update-in world [:entities item-id :item :count] dec))))
+
 (defn use-item [world item-id]
   (let [item (get-in world [:entities item-id])
         effect (get-in item [:item :effect])
@@ -373,9 +468,7 @@
             new-hp (min max-hp (+ cur-hp heal-amt))]
         (-> world
             (assoc-in [:entities :player :body :hp] new-hp)
-            (update-in [:entities :player :inventory]
-                       #(vec (remove (fn [id] (= id item-id)) %)))
-            (ent/remove-entity item-id)
+            (consume-item item-id)
             (log-msg (str "You drink the " iname ". Healed for " (- new-hp cur-hp) "."))))
 
       :strength
@@ -383,9 +476,7 @@
           (update-in [:entities :player :body :strength] inc)
           (update-in [:entities :player :body :max-hp] #(+ % 3))
           (update-in [:entities :player :body :hp] #(+ % 3))
-          (update-in [:entities :player :inventory]
-                     #(vec (remove (fn [id] (= id item-id)) %)))
-          (ent/remove-entity item-id)
+          (consume-item item-id)
           (log-msg "You feel stronger!"))
 
       ;; default
@@ -396,7 +487,7 @@
 ;; Player has :ticks too. Actions cost ticks (move=100, attack=weapon speed).
 
 (def move-cost 100)
-(def regen-rate 1000) ;; ticks to fully heal (same as brogue)
+(def regen-rate 100000) ;; ticks to fully heal (~1000 normal actions)
 
 (defn add-ticks [world entity-id cost]
   (if-let [entity (get-in world [:entities entity-id])]
@@ -532,10 +623,32 @@
               :down  (player-move world 0 1)
               :left  (player-move world -1 0)
               :right (player-move world 1 0)
+              :run-up    (-> (player-move world 0 -1) (assoc :running-dir [0 -1]))
+              :run-down  (-> (player-move world 0 1) (assoc :running-dir [0 1]))
+              :run-left  (-> (player-move world -1 0) (assoc :running-dir [-1 0]))
+              :run-right (-> (player-move world 1 0) (assoc :running-dir [1 0]))
+              :autoexplore (let [w (autoexplore-step world)]
+                            ;; only set flag if step succeeded (turn advanced)
+                            (if (> (:turn w) (:turn world))
+                              (assoc w :autoexploring true)
+                              w))
+              :auto-target-step (let [target (:auto-target world)
+                                      dir (when target
+                                            (bfs-path world (fn [pos _] (= pos target))))]
+                                  (if dir
+                                    (let [[dx dy] dir]
+                                      (player-move world dx dy))
+                                    (-> world (dissoc :auto-target)
+                                        (log-msg "Arrived."))))
               :wait  (-> world
                          (add-ticks :player move-cost)
                          (update :turn inc)
                          (log-msg "You wait."))
+              :rest  (-> world
+                         (add-ticks :player move-cost)
+                         (update :turn inc)
+                         (assoc :resting true)
+                         (log-msg "You rest."))
               :quit  (assoc world :running false)
               world)
           acted (> (:turn w) (:turn world))
