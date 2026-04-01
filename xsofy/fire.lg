@@ -1,0 +1,101 @@
+(ns xsofy.fire
+  (:require [xsofy.terrain :as terrain]
+            [xsofy.entities :as ent]
+            [xsofy.status :as status]))
+
+;; --- Fire System ---
+;; Fire is terrain tile 15. TTL tracked in world :fire-ttl {[x y] turns-left}.
+;; Each turn: damage entities in fire, spread to adjacent flammable, tick down TTL.
+;; Burning entities set flammable terrain on fire under them.
+
+(def fire-tile 15)
+(def ash-tile 16)
+(def fire-damage 3)
+(def fire-spread-chance 30)  ;; percent per adjacent flammable per tick
+(def fire-default-ttl 5)
+
+(def neighbors
+  [[-1 -1] [0 -1] [1 -1]
+   [-1  0]         [1  0]
+   [-1  1] [0  1] [1  1]])
+
+(defn ignite [world x y]
+  "Set a tile on fire. Only works on flammable tiles or if forced."
+  (let [{:keys [terrain width]} world
+        tile (terrain/tget terrain width x y)]
+    (if (or (contains? terrain/flammable-tiles tile) (= tile 1))
+      (do (terrain/tset! terrain width x y fire-tile)
+          (assoc-in world [:fire-ttl [x y]] fire-default-ttl))
+      world)))
+
+(defn ignite-forced [world x y ttl]
+  "Force fire at a position regardless of terrain."
+  (let [{:keys [terrain width]} world
+        tile (terrain/tget terrain width x y)]
+    (when (and (not= tile 0) (not= tile 8) (not= tile 7))  ;; not void, wall, lava
+      (terrain/tset! terrain width x y fire-tile))
+    (assoc-in world [:fire-ttl [x y]] ttl)))
+
+(defn step-fire [world]
+  "One tick of fire simulation. Spread, damage, burn out."
+  (let [{:keys [terrain width height]} world
+        fire-ttl (or (:fire-ttl world) {})
+        new-fires (atom [])
+        new-ttl (atom {})]
+    ;; process each fire cell
+    (doseq [[[x y] ttl] fire-ttl]
+      (let [tile (terrain/tget terrain width x y)]
+        (when (= tile fire-tile)
+          (if (<= ttl 1)
+            ;; burn out → ash
+            (terrain/tset! terrain width x y ash-tile)
+            (do
+              ;; keep burning
+              (swap! new-ttl assoc [x y] (dec ttl))
+              ;; spread to adjacent flammable
+              (doseq [[dx dy] neighbors]
+                (let [nx (+ x dx) ny (+ y dy)]
+                  (when (and (>= nx 0) (< nx width) (>= ny 0) (< ny height))
+                    (let [ntile (terrain/tget terrain width nx ny)]
+                      (when (and (contains? terrain/flammable-tiles ntile)
+                                 (< (rand-int 100) fire-spread-chance))
+                        (swap! new-fires conj [nx ny])))))))))))
+    ;; ignite new fires
+    (let [w (reduce (fn [w [x y]]
+                      (let [t (terrain/tget (:terrain w) (:width w) x y)]
+                        (if (not= t fire-tile)
+                          (do (terrain/tset! (:terrain w) (:width w) x y fire-tile)
+                              (swap! new-ttl assoc [x y] fire-default-ttl)
+                              w)
+                          w)))
+                    world @new-fires)]
+      ;; damage entities standing in fire
+      (let [w (reduce (fn [w [[x y] _]]
+                        (let [targets (vec (filter
+                                            (fn [e] (and (some? e) (map? e) (:id e)
+                                                         (= [x y] (:pos e))
+                                                         (get-in e [:body :hp])))
+                                            (vals (:entities w))))]
+                          (reduce (fn [w e]
+                                    (-> w
+                                        (ent/damage-entity (:id e) fire-damage)
+                                        (status/apply-status (:id e) :burning 2)))
+                                  w targets)))
+                      w @new-ttl)]
+        ;; update fire ttl, recompute lights since fire changed
+        (assoc w :fire-ttl @new-ttl :lights nil)))))
+
+(defn burning-entities-ignite [world]
+  "Burning entities set flammable terrain under them on fire."
+  (let [burning (vec (filter (fn [e] (and (some? e) (map? e) (:id e) (:pos e)
+                                          (get-in e [:statuses :burning])))
+                             (vals (or (:entities world) {}))))]
+    (reduce (fn [w e]
+              (if-let [pos (:pos e)]
+                (let [[x y] pos
+                      tile (terrain/tget (:terrain w) (:width w) x y)]
+                  (if (contains? terrain/flammable-tiles tile)
+                    (ignite w x y)
+                    w))
+                w))
+            world burning)))

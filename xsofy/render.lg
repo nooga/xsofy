@@ -51,8 +51,15 @@
       visible
       (let [style (style-tile tile)
             ch (get terrain/tile-chars tile "?")
-            fg0 (if (= tile 2) (jitter-color (:fg style) x y 20) (:fg style))
-            bg0 (if (= tile 2) (jitter-color (:bg style) x y 8) (:bg style))]
+            ;; fire: random flickering colors each frame
+            fg0 (cond
+                  (= tile 15) [(+ 200 (rand-int 55)) (+ 80 (rand-int 100)) (rand-int 40)]
+                  (= tile 2) (jitter-color (:fg style) x y 20)
+                  :else (:fg style))
+            bg0 (cond
+                  (= tile 15) [(+ 80 (rand-int 60)) (+ 20 (rand-int 30)) (rand-int 15)]
+                  (= tile 2) (jitter-color (:bg style) x y 8)
+                  :else (:bg style))]
         ;; apply stain (fg stronger tint), gas, lighting
         (let [stain-int (if (and stain (map? stain)) (or (:intensity stain) 1) 0)
               fg1 (if (> stain-int 0)

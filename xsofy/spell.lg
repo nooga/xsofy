@@ -2,6 +2,7 @@
   (:require [xsofy.entities :as ent]
             [xsofy.effects :as fx]
             [xsofy.status :as status]
+            [xsofy.fire :as fire]
             [math]))
 
 ;; --- Spell Context ---
@@ -143,14 +144,15 @@
   (let [w (reduce
             (fn [world pos]
               (let [[x y] pos
-                    world (fx/add-stain world x y :fire 3)
-                    ;; apply burning to entities at cursor
+                    ;; ignite terrain
+                    world (fire/ignite-forced world x y 4)
+                    ;; set entities on fire
                     targets (vec (filter
                                   (fn [e] (and (some? e) (map? e) (:id e)
                                                (= pos (:pos e))
                                                (get-in e [:body :hp])))
                                   (vals (:entities world))))]
-                (reduce (fn [w e] (status/apply-status w (:id e) :burning 3))
+                (reduce (fn [w e] (status/apply-status w (:id e) :burning 4))
                         world targets)))
             (:world ctx)
             (:cursors ctx))]

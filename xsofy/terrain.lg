@@ -17,7 +17,9 @@
    11 "+"   ; door-closed
    12 "'"   ; door-open
    13 ">"   ; stairs-down
-   14 "<"}) ; stairs-up
+   14 "<"   ; stairs-up
+   15 "^"   ; fire
+   16 "."}) ; ash
 
 (def tile-styles
   {0  {:fg [30 30 30]    :bg [10 10 10]}
@@ -34,15 +36,20 @@
    11 {:fg [140 110 60]  :bg [40 35 25]}       ; door-closed
    12 {:fg [100 80 45]   :bg [22 20 18]}       ; door-open
    13 {:fg [255 255 200] :bg [22 20 18]}       ; stairs-down
-   14 {:fg [200 200 150] :bg [22 20 18]}})     ; stairs-up
+   14 {:fg [200 200 150] :bg [22 20 18]}       ; stairs-up
+   15 {:fg [255 160 30]  :bg [120 40 10]}      ; fire: orange (base, jittered per frame)
+   16 {:fg [50 48 45]    :bg [18 17 16]}})     ; ash: gray
 
 ;; light radius emitted by certain tiles
 (def tile-light
-  {7 {:radius 3 :color [200 80 20]}            ; lava: red-orange glow
-   9 {:radius 4 :color [200 150 60]}})         ; torch: warm orange glow
+  {7  {:radius 3 :color [200 80 20]}           ; lava: red-orange glow
+   9  {:radius 4 :color [200 150 60]}          ; torch: warm orange glow
+   15 {:radius 3 :color [220 120 30]}})        ; fire: warm orange
 
-(def walkable-tiles #{1 2 3 5 10 12 13 14})       ; ledge walkable too
-(def transparent-tiles #{0 1 2 3 4 5 6 7 10 12 13 14}) ; ledge transparent
+(def flammable-tiles #{2})                        ; grass burns
+
+(def walkable-tiles #{1 2 3 5 10 12 13 14 15 16}) ; fire + ash walkable
+(def transparent-tiles #{0 1 2 3 4 5 6 7 10 12 13 14 15 16}) ; + fire, ash
 
 ;; --- Terrain Access ---
 

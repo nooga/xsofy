@@ -7,6 +7,7 @@
             [xsofy.sound :as snd]
             [xsofy.lighting :as light]
             [xsofy.effects :as fx]
+            [xsofy.fire :as fire]
             [xsofy.spell :as spell]
             [xsofy.status :as status]
             [xsofy.items :as items]
@@ -689,10 +690,12 @@
               world)
           acted (> (:turn w) (:turn world))
           w (if acted
-              (let [w2 (run-until-player-turn w)]
-                (if (get-in w2 [:entities :player])
-                  (update-fov w2)
-                  w2))
+              (let [w2 (run-until-player-turn w)
+                    ;; fire simulation + burning entities ignite terrain
+                    w3 (-> w2 fire/step-fire fire/burning-entities-ignite)]
+                (if (get-in w3 [:entities :player])
+                  (update-fov w3)
+                  w3))
               w)]
       ;; check for player death
       (if (nil? (get-in w [:entities :player]))
