@@ -27,7 +27,7 @@ lg main.lg
 Get `lg` from [let-go](https://github.com/nooga/let-go). Or install it with Homebrew:
 
 ```bash
-brew tap nooga/let-go
+brew tap nooga/let-go https://github.com/nooga/let-go
 brew install let-go
 ```
 
