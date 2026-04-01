@@ -24,7 +24,12 @@ The rune identification system (the core mystery mechanic), gas simulation, time
 lg main.lg
 ```
 
-Get `lg` from [let-go](https://github.com/nooga/let-go).
+Get `lg` from [let-go](https://github.com/nooga/let-go). Or install it with Homebrew:
+
+```bash
+brew tap nooga/let-go
+brew install let-go
+```
 
 ## Design
 
