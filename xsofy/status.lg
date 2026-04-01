@@ -1,0 +1,94 @@
+(ns xsofy.status
+  (:require [xsofy.entities :as ent]))
+
+;; --- Status Effect Definitions ---
+;; Each status has:
+;;   :ttl       — turns remaining
+;;   :dmg       — damage per tick (optional)
+;;   :skip-turn — entity can't act (optional)
+;;   :color     — tint for rendering
+
+(def status-defs
+  {:frozen   {:color [100 160 255] :bg [20 30 60] :skip-turn true :name "frozen"}
+   :burning  {:color [255 120 30]  :bg [60 20 5]  :dmg 2          :name "burning"}
+   :poison   {:color [60 200 60]   :bg [15 40 15] :dmg 1          :name "poisoned"}
+   :confused {:color [200 100 255] :bg [40 20 50] :name "confused"}
+   :slowed   {:color [140 140 180] :bg [30 30 40] :name "slowed"}
+   :haste    {:color [255 255 100] :bg [40 40 15] :name "haste"}})
+
+;; --- Apply / Remove ---
+
+(defn apply-status [world entity-id stype ttl]
+  (let [current (get-in world [:entities entity-id :statuses stype])
+        ;; refresh: take the longer duration
+        new-ttl (if current (max ttl (or (:ttl current) 0)) ttl)]
+    (assoc-in world [:entities entity-id :statuses stype] {:ttl new-ttl})))
+
+(defn remove-status [world entity-id stype]
+  (update-in world [:entities entity-id :statuses] dissoc stype))
+
+(defn has-status? [world entity-id stype]
+  (some? (get-in world [:entities entity-id :statuses stype])))
+
+;; --- Tick Statuses ---
+;; Called each time an entity spends ticks.
+;; Decrements TTL, applies damage, removes expired.
+
+(defn tick-entity-statuses [world entity-id]
+  (let [entity (get-in world [:entities entity-id])
+        statuses (or (:statuses entity) {})]
+    (if (empty? statuses)
+      world
+      (reduce
+        (fn [w [stype sdata]]
+          (let [def_ (get status-defs stype)
+                ttl (dec (or (:ttl sdata) 1))
+                dmg (or (:dmg def_) 0)]
+            (if (<= ttl 0)
+              ;; expired — remove
+              (remove-status w entity-id stype)
+              ;; tick — apply damage if any, update ttl
+              (let [w (if (and (> dmg 0) (get-in w [:entities entity-id]))
+                        (ent/damage-entity w entity-id dmg)
+                        w)]
+                (if (get-in w [:entities entity-id])
+                  (assoc-in w [:entities entity-id :statuses stype :ttl] ttl)
+                  w)))))
+        world
+        statuses))))
+
+;; --- Query ---
+
+(defn can-act? [world entity-id]
+  "Returns false if entity is frozen or otherwise unable to act."
+  (let [statuses (or (get-in world [:entities entity-id :statuses]) {})]
+    (not (some (fn [[stype _]]
+                 (:skip-turn (get status-defs stype)))
+               statuses))))
+
+;; --- Render Helpers ---
+
+(defn entity-status-tint [entity]
+  "Returns [fg-tint bg-tint] based on active statuses, or nil."
+  (let [statuses (or (:statuses entity) {})]
+    (when (seq statuses)
+      ;; pick the most visually dominant status
+      (let [active (first (sort-by (fn [[s _]] (or (:ttl (get statuses s)) 0))
+                                   statuses))
+            stype (first active)
+            def_ (get status-defs stype)]
+        (when def_
+          [(:color def_) (:bg def_)])))))
+
+(defn entity-active-statuses [entity]
+  "Returns list of {:name :ttl :color} for sidebar display."
+  (let [statuses (or (:statuses entity) {})]
+    (->> statuses
+         (map (fn [[stype sdata]]
+                (let [def_ (get status-defs stype)]
+                  (when def_
+                    {:name (or (:name def_) (name stype))
+                     :ttl (or (:ttl sdata) 0)
+                     :color (or (:color def_) [200 200 200])}))))
+         (filter some?)
+         (vec))))

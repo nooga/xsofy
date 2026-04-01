@@ -6,7 +6,7 @@
 
 (defcreature player
   (visual "@" [255 220 80])
-  (body {:hp 50 :max-hp 50 :strength 3})
+  (body {:hp 50 :max-hp 50 :strength 5})
   (melee 5))
 
 ;; --- Traits ---

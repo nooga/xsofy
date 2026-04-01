@@ -7,6 +7,8 @@
             [xsofy.sound :as snd]
             [xsofy.lighting :as light]
             [xsofy.effects :as fx]
+            [xsofy.spell :as spell]
+            [xsofy.status :as status]
             [xsofy.items :as items]
             [xsofy.debug :as dbg]
             [xsofy.bestiary]))
@@ -110,9 +112,25 @@
                :status {})
         (assoc-in [:body :max-hp] (get-in template [:body :hp])))))
 
+(defn give-item [world item-type owner-id]
+  "Spawn an item and put it in owner's inventory (with stacking)."
+  (let [id (ent/next-id item-type)
+        template (get @ent/templates item-type)
+        item (assoc template :id id :template item-type :pos [0 0])
+        w (assoc-in world [:entities id] item)]
+    (or (ent/pickup-item w id owner-id) w)))
+
+(defn give-starting-items [world]
+  (reduce (fn [w item-type] (give-item w item-type :player))
+          world
+          [:flaming-dagger :frost-sword :thunder-hammer :vampiric-blade
+           :health-potion :health-potion :health-potion]))
+
 (defn make-world [w h]
   (let [world (generate-floor w h 1 (make-player))]
-    (assoc world :floors {} :gold 0)))
+    (-> world
+        give-starting-items
+        (assoc :floors {} :gold 0))))
 
 ;; --- Floor Transition ---
 ;; Saves current floor, extracts player + inventory items,
@@ -393,6 +411,13 @@
                     w (if target-pos
                         (splatter-blood w2 (first target-pos) (second target-pos) dmg hp-before killed)
                         w2)
+                    ;; trigger weapon runes on hit
+                    wep (ent/get-weapon world attacker-id)
+                    w (if (and wep (:runes wep) target-pos)
+                        (let [result (spell/eval-spell w attacker-id target-pos (:runes wep))]
+                          (-> (:world result)
+                              (update :vfx #(into (or % []) (:vfx result)))))
+                        w)
                     sneak-txt (if sneak " (sneak attack!)" "")]
                 (let [target-sounds (:sounds target)
                       death-sound (if target-sounds
@@ -500,10 +525,14 @@
           healed (if (> threshold 0) (quot new-regen threshold) 0)
           remainder (if (> threshold 0) (rem new-regen threshold) 0)
           new-hp (min max-hp (+ hp healed))]
-      (-> world
-          (update-in [:entities entity-id :ticks] #(+ (or % 0) cost))
-          (assoc-in [:entities entity-id :body :hp] new-hp)
-          (assoc-in [:entities entity-id :regen-ticks] remainder)))
+      (let [w (-> world
+                  (update-in [:entities entity-id :ticks] #(+ (or % 0) cost))
+                  (assoc-in [:entities entity-id :body :hp] new-hp)
+                  (assoc-in [:entities entity-id :regen-ticks] remainder))]
+        ;; tick player statuses when player spends ticks
+        (if (= entity-id :player)
+          (status/tick-entity-statuses w :player)
+          w)))
     world))
 
 (defn next-actor [world]
@@ -520,17 +549,24 @@
 (defn creature-turn [world creature-id]
   (let [entity (get-in world [:entities creature-id])]
     (if (nil? entity) world
-      (let [w (ai/update-ai-state world creature-id)
-            ai-state (get-in w [:entities creature-id :ai :state])
-            w (if (or (= ai-state :sleep) (= ai-state nil))
-                (let [e (get-in w [:entities creature-id])
-                      ename (let [k (or (:template e) (:id e))]
-                              (if k (name k) "???"))
-                      s (when e (snd/creature-idle (:pos e) ename (:sounds e)))]
-                  (if s (snd/deliver-sound w s) w))
-                w)
-            w (ai/ai-act w creature-id melee-attack)]
-        (add-ticks w creature-id move-cost)))))
+      (let [;; tick status effects (burning damage, poison, etc.)
+            w (status/tick-entity-statuses world creature-id)]
+        (if (nil? (get-in w [:entities creature-id]))
+          w  ;; died from status damage
+          (if (not (status/can-act? w creature-id))
+            ;; frozen/stunned — skip turn but still spend ticks
+            (add-ticks w creature-id move-cost)
+            (let [w (ai/update-ai-state w creature-id)
+                  ai-state (get-in w [:entities creature-id :ai :state])
+                  w (if (or (= ai-state :sleep) (= ai-state nil))
+                      (let [e (get-in w [:entities creature-id])
+                            ename (let [k (or (:template e) (:id e))]
+                                    (if k (name k) "???"))
+                            s (when e (snd/creature-idle (:pos e) ename (:sounds e)))]
+                        (if s (snd/deliver-sound w s) w))
+                      w)
+                  w (ai/ai-act w creature-id melee-attack)]
+              (add-ticks w creature-id move-cost))))))))
 
 (defn run-until-player-turn [world]
   "Process creature turns until it's the player's turn (or player dies)."

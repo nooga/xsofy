@@ -6,6 +6,7 @@
             [xsofy.entities :as ent]
             [xsofy.input :as input]
             [xsofy.render :as render]
+            [xsofy.ui :as ui]
             [xsofy.debug :as dbg]))
 
 (defn init-terminal []
@@ -287,7 +288,12 @@
                    (render/render-full new-world))
                  (recur new-world new-world cur-size))
              (do (render/render-dirty new-world world)
-                 (recur new-world world cur-size)))))))))
+                 ;; animate vfx between turns
+                 (when (seq (:vfx new-world))
+                   (let [[tw th] cur-size
+                         panels (ui/layout tw th)]
+                     (render/animate-vfx! new-world (:map panels))))
+                 (recur (dissoc new-world :vfx) world cur-size)))))))))
 
 (defn -main []
   (init-terminal)

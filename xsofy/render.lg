@@ -1,10 +1,16 @@
 (ns xsofy.render
   (:require [term]
+            [math]
+            [async]
             [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
             [xsofy.lighting :as light]
             [xsofy.effects :as fx]
+            [xsofy.status :as status]
             [xsofy.ui :as ui]))
+
+(defn pause! [ms]
+  (async/<!! (async/timeout ms)))
 
 ;; --- Color Helpers ---
 
@@ -111,13 +117,26 @@
                     (fx/stain-tint-bg tile-bg (:type stain) (or (:intensity stain) 1) x y)
                     tile-bg)
               bg-lit (if lv (light/apply-light bg0 lv) bg0)
-              ;; entity fg gets lighting but not stain
+              ;; entity fg — apply status tint if any
               base-fg (get-in entity [:visual :color] [200 60 60])
-              fg-lit (if lv (light/apply-light base-fg lv) base-fg)
+              stint (status/entity-status-tint entity)
+              fg0 (if stint
+                    (let [[sc _] stint
+                          [br bg bb] base-fg
+                          [sr sg sb] sc]
+                      [(quot (+ br sr) 2) (quot (+ bg sg) 2) (quot (+ bb sb) 2)])
+                    base-fg)
+              bg1 (if stint
+                    (let [[_ sbg] stint
+                          [br bg bb] bg-lit
+                          [sr sg sb] sbg]
+                      [(quot (+ br sr) 2) (quot (+ bg sg) 2) (quot (+ bb sb) 2)])
+                    bg-lit)
+              fg-lit (if lv (light/apply-light fg0 lv) fg0)
               glyph (get-in entity [:visual :glyph] "?")]
           (term/move-cursor (+ (:x r) x) (+ (:y r) y))
           (let [[fr fg fb] fg-lit] (term/set-fg fr fg fb))
-          (let [[br bgg bb] bg-lit] (term/set-bg br bgg bb))
+          (let [[br bgg bb] bg1] (term/set-bg br bgg bb))
           (term/write glyph))))))
 
 (defn render-map-entities [world r]
@@ -172,12 +191,20 @@
       (ui/write-line r 4 (str " " arm-name) [140 130 110] ui/bg)
       (ui/write-line r 5 (str " Depth " (:depth world))
                      [100 100 100] ui/bg)
-      (let [gold (or (:gold world) 0)]
-        (when (> gold 0)
-          (ui/write-line r 6 (str " Gold " gold)
-                         [255 220 50] ui/bg)))
-      (ui/write-line r 7 (apply str (repeat (:w r) "-"))
-                     [40 40 40] ui/bg))
+      ;; player status effects
+      (let [pstatuses (status/entity-active-statuses player)
+            row (atom 5)]
+        (doseq [s pstatuses]
+          (ui/write-line r @row (str " " (:name s) " (" (:ttl s) ")")
+                         (:color s) ui/bg)
+          (swap! row inc))
+        (let [gold (or (:gold world) 0)]
+          (when (> gold 0)
+            (ui/write-line r @row (str " Gold " gold)
+                           [255 220 50] ui/bg)
+            (swap! row inc)))
+        (ui/write-line r (inc @row) (apply str (repeat (:w r) "-"))
+                       [40 40 40] ui/bg)))
     ;; visible creatures
     (let [fov (or (:fov world) #{})
           ents (vec (vals (:entities world)))
@@ -221,6 +248,113 @@
                         (max 60 (- brightness 20))
                         (max 40 (- brightness 80))]
                        ui/bg)))))
+
+;; --- VFX Rendering ---
+
+(defn line-cells [x0 y0 x1 y1]
+  (let [dx (math/abs (- x1 x0))
+        dy (math/abs (- y1 y0))
+        sx (if (< x0 x1) 1 -1)
+        sy (if (< y0 y1) 1 -1)]
+    (loop [x x0 y y0 err (- dx dy) cells []]
+      (let [cells (conj cells [x y])]
+        (if (and (= x x1) (= y y1))
+          cells
+          (let [e2 (* 2 err)
+                adj-x (>= e2 (- dy))
+                adj-y (<= e2 dx)]
+            (recur (if adj-x (+ x sx) x)
+                   (if adj-y (+ y sy) y)
+                   (+ err (if adj-x (- dy) 0) (if adj-y dx 0))
+                   cells)))))))
+
+(defn boost-color [base-rgb tint-rgb intensity]
+  "Brighten base toward tint. intensity 1.0 = full tint, 0.0 = no change."
+  (let [[br bg bb] base-rgb
+        [tr tg tb] tint-rgb]
+    [(min 255 (int (+ br (* (- tr br) intensity))))
+     (min 255 (int (+ bg (* (- tg bg) intensity))))
+     (min 255 (int (+ bb (* (- tb bb) intensity))))]))
+
+(defn render-vfx-frame [world r]
+  "Render vfx as color overlays on existing tiles. Does not overwrite glyphs."
+  (let [vfx (or (:vfx world) [])
+        lights (or (:lights world) [])
+        stains (or (:stains world) {})]
+    (when (seq vfx)
+      (doseq [event vfx]
+        (let [decay (or (:decay event) 1)
+              max-decay (or (:max-decay event) decay)
+              intensity (/ (float decay) (float max-decay))]
+          (case (:type event)
+            :bolt
+            (let [[x0 y0] (:from event)
+                  [x1 y1] (:to event)
+                  cells (line-cells x0 y0 x1 y1)
+                  tint (or (:color event) [140 160 255])
+                  ;; first frame nearly white, then fade through tint
+                  white [255 255 255]
+                  i2 (* intensity intensity)]  ;; square for sharper falloff
+              (doseq [[x y] cells]
+                (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+                  (let [tile (terrain/tget (:terrain world) (:width world) x y)
+                        style (style-tile tile)
+                        ;; overdrive: blend base -> tint -> white as intensity increases
+                        fg (boost-color (boost-color (:fg style) tint intensity)
+                                        white i2)
+                        bg (boost-color (boost-color (:bg style) tint (* intensity 0.7))
+                                        white (* i2 0.5))
+                        ch (get terrain/tile-chars tile ".")]
+                    (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+                    (let [[fr fg_ fb] fg] (term/set-fg fr fg_ fb))
+                    (let [[br bg_ bb] bg] (term/set-bg br bg_ bb))
+                    (term/write ch)))))
+
+            :flash
+            (let [[x y] (:pos event)
+                  i2 (* intensity intensity)]
+              (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+                (let [tile (terrain/tget (:terrain world) (:width world) x y)
+                      style (style-tile tile)
+                      white [255 255 255]
+                      fg (boost-color (:fg style) white i2)
+                      bg (boost-color (:bg style) white (* i2 0.8))
+                      ch (get terrain/tile-chars tile ".")]
+                  (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+                  (let [[fr fg_ fb] fg] (term/set-fg fr fg_ fb))
+                  (let [[br bg_ bb] bg] (term/set-bg br bg_ bb))
+                  (term/write ch))))
+
+            nil)))
+      (term/flush))))
+
+(defn tick-vfx [vfx]
+  "Decay vfx list, remove expired. Returns new vfx vec."
+  (vec (filter some?
+        (map (fn [event]
+               (let [d (dec (or (:decay event) 1))]
+                 (when (> d 0)
+                   (assoc event :decay d
+                          :max-decay (or (:max-decay event)
+                                         (or (:decay event) 1))))))
+             vfx))))
+
+(defn animate-vfx! [world r]
+  "Run vfx animation loop with pauses between frames."
+  (loop [vfx (or (:vfx world) [])]
+    (when (seq vfx)
+      (render-vfx-frame (assoc world :vfx vfx) r)
+      (pause! 50)
+      (let [next-vfx (tick-vfx vfx)]
+        (render-map world r)
+        (render-map-entities world r)
+        (term/flush)
+        (when (seq next-vfx)
+          (recur next-vfx)))))
+  ;; final cleanup
+  (render-map world r)
+  (render-map-entities world r)
+  (term/flush))
 
 ;; --- Item Display Helpers ---
 

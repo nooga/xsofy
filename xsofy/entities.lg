@@ -86,6 +86,9 @@
 (defn item-desc [d]
   {:item-desc d})
 
+(defn runes [& steps]
+  {:runes (vec steps)})
+
 ;; --- Trait Registry ---
 
 (def trait-defs (atom {}))

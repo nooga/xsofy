@@ -1,0 +1,256 @@
+(ns xsofy.spell
+  (:require [xsofy.entities :as ent]
+            [xsofy.effects :as fx]
+            [xsofy.status :as status]
+            [math]))
+
+;; --- Spell Context ---
+;; Each rune primitive is a fn: ctx -> ctx
+;; Context flows through the pipeline via ->
+
+(defn make-context [world caster-id target-pos]
+  (let [caster (get-in world [:entities caster-id])
+        origin (or (:pos caster) [0 0])]
+    {:world world
+     :caster caster-id
+     :origin origin
+     :cursors (if target-pos #{target-pos} #{origin})
+     :result nil
+     :hits #{}
+     :vfx []}))
+
+;; --- Visual Events ---
+;; Spells emit visual events. The game loop renders them.
+;; Events are stored on ctx :vfx and transferred to world :vfx
+
+(defn emit-vfx [ctx event]
+  (update ctx :vfx #(conj (or % []) event)))
+
+;; --- Helpers ---
+
+(defn entities-at-cursors [ctx]
+  (let [w (:world ctx)]
+    (->> (:cursors ctx)
+         (mapcat (fn [pos]
+                   (->> (vals (:entities w))
+                        (filter (fn [e] (and (some? e) (map? e)
+                                             (= pos (:pos e))
+                                             (not= (:caster ctx) (:id e))
+                                             (not (contains? (:hits ctx) (:id e)))))))))
+         (vec))))
+
+(defn distance [p1 p2]
+  (let [[x1 y1] p1 [x2 y2] p2
+        dx (- x2 x1) dy (- y2 y1)]
+    (math/sqrt (+ (* dx dx) (* dy dy)))))
+
+;; --- Selector Primitives (set cursors) ---
+
+(defn r-self [ctx]
+  (assoc ctx :cursors #{(:origin ctx)}))
+
+(defn r-target [ctx pos]
+  (assoc ctx :cursors #{pos}))
+
+(defn find-nearest
+  ([ctx] (find-nearest ctx 999))
+  ([ctx max-range]
+   (let [w (:world ctx)
+         cur-pos (or (first (:cursors ctx)) (:origin ctx))
+         hits (:hits ctx)
+         candidates (vec (filter
+                           (fn [e] (and (some? e) (map? e) (:pos e) (:id e)
+                                        (get-in e [:body :hp])
+                                        (not= (:caster ctx) (:id e))
+                                        (not (contains? hits (:id e)))
+                                        (<= (distance cur-pos (:pos e)) max-range)))
+                           (vals (:entities w))))]
+     (when (seq candidates)
+       (first (sort-by (fn [e] (or (distance cur-pos (:pos e)) 999)) candidates))))))
+
+(defn r-nearest [ctx]
+  (let [nearest (find-nearest ctx)]
+    (if nearest
+      (assoc ctx :cursors #{(:pos nearest)})
+      ctx)))
+
+(defn r-area [ctx radius]
+  (let [new-cursors (atom #{})]
+    (doseq [pos (:cursors ctx)]
+      (let [[cx cy] pos]
+        (doseq [dy (range (- radius) (inc radius))]
+          (doseq [dx (range (- radius) (inc radius))]
+            (when (<= (+ (* dx dx) (* dy dy)) (* radius radius))
+              (swap! new-cursors conj [(+ cx dx) (+ cy dy)]))))))
+    (assoc ctx :cursors @new-cursors)))
+
+(defn r-spread [ctx n]
+  (let [w (:world ctx)
+        hits (:hits ctx)
+        current-positions (:cursors ctx)
+        candidates (->> (vals (:entities w))
+                        (filter (fn [e] (and (some? e) (map? e) (:pos e)
+                                              (not= (:caster ctx) (:id e))
+                                              (not (contains? hits (:id e)))
+                                              (not (contains? current-positions (:pos e))))))
+                        (sort-by (fn [e]
+                                   (apply min (map (fn [p] (distance p (:pos e)))
+                                                   current-positions))))
+                        (take n))]
+    (assoc ctx :cursors (set (map :pos candidates)))))
+
+;; --- Effect Primitives (do things at cursors) ---
+
+(defn r-damage [ctx amount]
+  (let [total (atom 0)
+        new-hits (atom (:hits ctx))
+        w (reduce
+            (fn [world pos]
+              (let [targets (vec (filter
+                                  (fn [e] (and (some? e) (map? e) (:id e)
+                                               (= pos (:pos e))
+                                               (get-in e [:body :hp])
+                                               (not= (:caster ctx) (:id e))))
+                                  (vals (:entities world))))]
+                (reduce (fn [w e]
+                          (let [armor (get-in e [:body :armor] 0)
+                                actual (max 1 (- amount armor))]
+                            (swap! total + actual)
+                            (swap! new-hits conj (:id e))
+                            (ent/damage-entity w (:id e) actual)))
+                        world targets)))
+            (:world ctx)
+            (:cursors ctx))]
+    (assoc ctx :world w :result @total :hits @new-hits)))
+
+(defn r-heal [ctx amount]
+  (let [w (reduce
+            (fn [world pos]
+              (let [targets (->> (vals (:entities world))
+                                 (filter (fn [e] (and (some? e) (map? e)
+                                                       (= pos (:pos e))))))]
+                (reduce (fn [w e]
+                          (let [hp (get-in e [:body :hp] 0)
+                                max-hp (get-in e [:body :max-hp] hp)
+                                new-hp (min max-hp (+ hp amount))]
+                            (assoc-in w [:entities (:id e) :body :hp] new-hp)))
+                        world targets)))
+            (:world ctx)
+            (:cursors ctx))]
+    (assoc ctx :world w :result amount)))
+
+(defn r-fire [ctx]
+  (let [w (reduce
+            (fn [world pos]
+              (let [[x y] pos
+                    world (fx/add-stain world x y :fire 3)
+                    ;; apply burning to entities at cursor
+                    targets (vec (filter
+                                  (fn [e] (and (some? e) (map? e) (:id e)
+                                               (= pos (:pos e))
+                                               (get-in e [:body :hp])))
+                                  (vals (:entities world))))]
+                (reduce (fn [w e] (status/apply-status w (:id e) :burning 3))
+                        world targets)))
+            (:world ctx)
+            (:cursors ctx))]
+    (assoc ctx :world w)))
+
+(defn r-ice [ctx]
+  (let [w (reduce
+            (fn [world pos]
+              (let [[x y] pos
+                    world (fx/add-stain world x y :water 2)
+                    targets (vec (filter
+                                  (fn [e] (and (some? e) (map? e) (:id e)
+                                               (= pos (:pos e))
+                                               (get-in e [:body :hp])))
+                                  (vals (:entities world))))]
+                (reduce (fn [w e] (status/apply-status w (:id e) :frozen 3))
+                        world targets)))
+            (:world ctx)
+            (:cursors ctx))]
+    (assoc ctx :world w)))
+
+(defn r-push [ctx]
+  (let [origin (:origin ctx)]
+    (let [w (reduce
+              (fn [world pos]
+                (let [targets (->> (vals (:entities world))
+                                   (filter (fn [e] (and (some? e) (map? e)
+                                                         (= pos (:pos e))
+                                                         (not= (:caster ctx) (:id e))))))]
+                  (reduce (fn [w e]
+                            (let [[ex ey] (:pos e)
+                                  [ox oy] origin
+                                  dx (- ex ox) dy (- ey oy)
+                                  len (max 1 (math/sqrt (+ (* dx dx) (* dy dy))))
+                                  ndx (int (/ dx len)) ndy (int (/ dy len))
+                                  nx (+ ex ndx) ny (+ ey ndy)]
+                              (assoc-in w [:entities (:id e) :pos] [nx ny])))
+                          world targets)))
+              (:world ctx)
+              (:cursors ctx))]
+      (assoc ctx :world w))))
+
+(def arc-range 6)
+
+(defn r-arc [ctx]
+  "Lightning damage at cursor, emit bolt vfx, jump to nearest unhit within range."
+  (let [from (or (first (:cursors ctx)) (:origin ctx))
+        ;; damage at current cursor
+        ctx (r-damage ctx 3)
+        ;; emit hit flash at current position
+        ctx (emit-vfx ctx {:type :flash :pos from :color [255 255 255] :decay 4})
+        ;; find next target within arc range
+        nearest (find-nearest ctx arc-range)
+        to (when nearest (:pos nearest))
+        ctx (if to (assoc ctx :cursors #{to}) ctx)
+        ;; emit bolt to next target
+        ctx (if (and to (not= from to))
+              (emit-vfx ctx {:type :bolt :from from :to to
+                             :color [140 160 255] :decay 4})
+              ctx)]
+    ctx))
+
+;; --- Rune Registry ---
+
+(def rune-primitives
+  {:self     {:arity 0 :fn r-self}
+   :target   {:arity 1 :fn r-target}    ;; needs a pos argument (provided by context)
+   :nearest  {:arity 0 :fn r-nearest}
+   :area     {:arity 1 :fn r-area}      ;; radius
+   :spread   {:arity 1 :fn r-spread}    ;; count
+   :damage   {:arity 1 :fn r-damage}    ;; amount
+   :heal     {:arity 1 :fn r-heal}      ;; amount
+   :fire     {:arity 0 :fn r-fire}
+   :ice      {:arity 0 :fn r-ice}
+   :push     {:arity 0 :fn r-push}
+   :arc      {:arity 0 :fn r-arc}})
+
+;; --- Spell Evaluation ---
+;; A spell is a vector of steps: [:fire], [:damage 3], [:area 2 :fire], etc.
+;; Each step is [rune-keyword & args].
+;; Steps are threaded through ctx via ->.
+
+(defn eval-step [ctx step]
+  (if (keyword? step)
+    ;; simple rune, no args
+    (let [rune (get rune-primitives step)]
+      (if rune
+        ((:fn rune) ctx)
+        ctx))
+    ;; [rune arg1 arg2 ...]
+    (let [rune-key (first step)
+          args (rest step)
+          rune (get rune-primitives rune-key)]
+      (if rune
+        (apply (:fn rune) ctx args)
+        ctx))))
+
+(defn eval-spell [world caster-id target-pos steps]
+  "Evaluate a spell. Returns {:world w :vfx [events]}."
+  (let [ctx (make-context world caster-id target-pos)
+        result (reduce eval-step ctx steps)]
+    {:world (:world result)
+     :vfx (or (:vfx result) [])}))

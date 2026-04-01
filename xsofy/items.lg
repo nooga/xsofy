@@ -1,6 +1,6 @@
 (ns xsofy.items
   (:require [xsofy.entities :refer [defitem visual weapon armor ring
-                                     consumable item-name item-desc drops]]))
+                                     consumable item-name item-desc drops runes]]))
 
 ;; --- Gold ---
 
@@ -54,6 +54,36 @@
   (item-desc "Lightning fast. Strikes twice in the time of a normal weapon.")
   (weapon {:min-dmg 2 :max-dmg 5 :accuracy 110 :speed 50 :str-req 2}))
 
+;; --- Runic Weapons ---
+
+(defitem flaming-dagger
+  (visual "/" [255 140 40])
+  (item-name "flaming dagger")
+  (item-desc "A dagger wreathed in fire. Burns what it cuts.")
+  (weapon {:min-dmg 2 :max-dmg 4 :accuracy 100 :speed 60 :str-req 1 :sneak-bonus 5})
+  (runes :fire))
+
+(defitem frost-sword
+  (visual "/" [140 180 255])
+  (item-name "frost sword")
+  (item-desc "Coated in rime. Chills the area around the target.")
+  (weapon {:min-dmg 4 :max-dmg 7 :accuracy 100 :speed 100 :str-req 3})
+  (runes [:area 1] :ice))
+
+(defitem thunder-hammer
+  (visual "\\" [200 200 255])
+  (item-name "thunder hammer")
+  (item-desc "Crackles with lightning. Strikes arc to nearby foes.")
+  (weapon {:min-dmg 8 :max-dmg 14 :accuracy 90 :speed 200 :str-req 5})
+  (runes :arc :arc))
+
+(defitem vampiric-blade
+  (visual "/" [180 30 60])
+  (item-name "vampiric blade")
+  (item-desc "Drinks the life of those it cuts. Heals the wielder.")
+  (weapon {:min-dmg 3 :max-dmg 6 :accuracy 100 :speed 100 :str-req 2})
+  (runes [:damage 2] :self [:heal 2]))
+
 ;; --- Armor ---
 ;; defense: higher = harder to hit. 10 = leather, 50 = plate
 
@@ -104,15 +134,15 @@
 ;; --- Loot Tables ---
 
 (def depth-loot
-  {1 {:weapons [:dagger :short-sword]
+  {1 {:weapons [:dagger :short-sword :flaming-dagger]
       :armor   [:leather-armor]
       :potions [:health-potion :health-potion :strength-potion]
       :scrolls [:scroll-identify]}
-   2 {:weapons [:short-sword :long-sword :spear :rapier]
+   2 {:weapons [:short-sword :long-sword :spear :rapier :flaming-dagger :frost-sword]
       :armor   [:leather-armor :chain-mail]
       :potions [:health-potion :strength-potion]
       :scrolls [:scroll-identify :scroll-enchant]}
-   3 {:weapons [:long-sword :axe :war-hammer :rapier]
+   3 {:weapons [:long-sword :axe :war-hammer :rapier :thunder-hammer :vampiric-blade :frost-sword]
       :armor   [:chain-mail :plate-armor]
       :potions [:health-potion :strength-potion]
       :scrolls [:scroll-identify :scroll-enchant :scroll-enchant]}})
