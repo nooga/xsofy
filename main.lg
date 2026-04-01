@@ -7,6 +7,7 @@
             [xsofy.input :as input]
             [xsofy.render :as render]
             [xsofy.ui :as ui]
+            [xsofy.title :as title]
             [xsofy.debug :as dbg]))
 
 (defn init-terminal []
@@ -298,7 +299,12 @@
 (defn -main []
   (init-terminal)
   (try
-    (let [world (world/make-world 60 30)]
+    (let [game-title (title/show-title-screen)
+          quest (title/generate-quest)
+          world (-> (world/make-world 60 30)
+                    (assoc :title game-title
+                           :quest-item (:item quest))
+                    (#(reduce world/log-msg % (:messages quest))))]
       (game-loop world))
     (catch e
            (dbg/log "FATAL ERROR:" e)

@@ -1,0 +1,180 @@
+(ns xsofy.title
+  (:require [term]
+            [async]))
+
+;; --- Procedural Title Generation ---
+
+(def xs ["Catacombs" "Crypts" "Depths" "Vaults" "Hollows" "Abysses"
+         "Dungeons" "Barrows" "Sanctums" "Citadels" "Spires" "Tombs"
+         "Labyrinths" "Oubliettes" "Sepulchres" "Chasms" "Warrens"
+         "Dominions" "Reaches" "Passages" "Chambers" "Shrines"
+         "Tunnels" "Caves" "Cloisters" "Casemates" "Halls" "Chambers"
+         "Shrines" "Temples" "Cisterns" "Containers" "Hells" "Coils"
+         "Labirynths" "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"])
+
+(def ys ["Recursion" "Nil" "Off-By-One" "Eval" "Nesting"
+         "Garbage Collection" "Structural Sharing" "Eventual Consistency"
+         "Persistence" "Premature Optimization" "Scope Creep"
+         "Stack Overflow" "Undefined Behavior" "Mutable State"
+         "Diminishing Returns" "Plausible Deniability" "Mild Peril"
+         "Hindsight" "Hubris" "Regret" "Ennui" "Inevitability" "Pedantry"
+         "Shrubbery" "Pickles" "Time" "Damnation" "Forgetting"
+         "Dumplings" "Squelching" "Muttering" "Fumbling"
+         "Consternation" "Lament" "Mounting Dread" "Subtlety"
+         "Subterfuge" "Jeopardy" "Trouble" "Melanholy"
+         "Bewilderment" "Perplexity" "Iron" "Steel" "Felt" "Infinity"
+         "Moderate Discomfort" "Lingering Suspicion" "Lazy Evaluation"
+         "Early Return" "Technical Debt" "Dependency Hell" "Loose Coupling"
+         "Side Effect" "Deadlock" "Decay" "Lukewarm Tea" "Loud Chewing"
+         "Tuesday" "Trepidation" "Darkness" "Drab" "Beige" "Questionable Beauty"
+         "Mildew" "Moisture" "Understandable Nature" "Varying Utility" "Grotesque"
+         "Terror" "Labirynthian Design" "Boredom" "Bondage" "Procrastination"
+         "Polite Enquiry" "Measured Response"])
+
+(defn generate-title []
+  (str (nth xs (rand-int (count xs)))
+       " of "
+       (nth ys (rand-int (count ys)))))
+
+;; --- Quest Objective ---
+
+(def quest-ps
+  ["Amulet" "Gauntlet" "Chalice" "Scepter" "Orb" "Crown"
+   "Tiara" "Helm" "Boots" "Cloak" "Rod" "Tome"
+   "Blade" "Sceptre"
+   "Grimoire" "Codex"  "Book" "Journal"
+   "Pendant" "Brazier"  "Codpiece" "Paren" "Chalice" "Crystal"
+   "Ladle" "Bucket" "Spatula" "Sock" "Pamphlet" "Invoice"])
+
+(def quest-qs
+  ["Yendor" "Splendor" "Closing" "Concern" "Radiance"
+   "Adequate Wine" "Moderate Significance" "Your Cousin"
+   "Selective Hearing" "Early Returns" "Marginal Value"
+   "Questionable Fame" "Pickles" "Good Looks" "Dumb Luck"
+   "Plausible Authority" "Borrowed Confidence" "Forgotten Knowledge"
+   "Vague Importance" "Terms and Conditions" "Pointed Remarks"
+   "Strongly Worded Letters" "Unsorted Collections" "Limited Shelf Life"
+   "Infinite Loops" "Unmatched Delimiters" "Lost Semicolons"])
+
+(def gate-messages
+  ["The gate slams shut behind you. No going back."
+   "The entrance collapses in a cloud of dust."
+   "You hear the portcullis crash down behind you."
+   "The door seals itself with a grinding of stone."
+   "The way back vanishes into solid rock."
+   "You don't feel like going back yet."])
+
+(defn generate-quest []
+  (let [gate (nth gate-messages (rand-int (count gate-messages)))
+        item (str (nth quest-ps (rand-int (count quest-ps)))
+                  " of "
+                  (nth quest-qs (rand-int (count quest-qs))))]
+    {:item item
+     :messages [gate (str "You must retrieve the " item ".")]}))
+
+;; --- Rune Glyphs ---
+
+(def rune-glyphs
+  ["ᚠ" "ᚢ" "ᚦ" "ᚨ" "ᚱ" "ᚲ" "ᚷ" "ᚹ" "ᚺ" "ᚾ" "ᛁ" "ᛃ"
+   "ᛇ" "ᛈ" "ᛉ" "ᛊ" "ᛋ" "ᛏ" "ᛒ" "ᛖ" "ᛗ" "ᛚ" "ᛜ" "ᛞ" "ᛟ"])
+
+;; each run picks one color scheme
+(def color-schemes
+  [[80 120 220]    ;; cold blue
+   [220 80 100]    ;; crimson
+   [100 220 120]   ;; emerald
+   [220 180 50]    ;; gold
+   [170 70 220]    ;; violet
+   [70 200 200]    ;; teal
+   [220 120 50]])  ;; amber
+
+(defn pause! [ms]
+  (async/<!! (async/timeout ms)))
+
+;; --- Title Screen ---
+
+(defn scatter-runes [w h n base-color]
+  (let [[br bg bb] base-color]
+    (vec (filter some?
+                 (mapv (fn [_]
+                         ;; gaussian-ish: average of two randoms biases toward center
+                         (let [x (quot (+ (rand-int w) (rand-int w)) 2)
+                               y (quot (+ (rand-int h) (rand-int h)) 2)
+                               ;; color variation: +-30 per channel
+                               v (- (rand-int 60) 30)]
+                           {:x (max 1 (min (dec w) x))
+                            :y (max 1 (min (dec h) y))
+                            :glyph (nth rune-glyphs (rand-int (count rune-glyphs)))
+                            :color [(max 30 (min 255 (+ br v)))
+                                    (max 30 (min 255 (+ bg v)))
+                                    (max 30 (min 255 (+ bb v)))]
+                            :phase (rand-int 60)}))
+                       (range n))))))
+
+(defn rune-brightness [phase frame]
+  (let [t (rem (+ phase frame) 60)
+        v (if (< t 30) t (- 60 t))]
+    (/ (float v) 30.0)))
+
+(defn clear-screen [tw th]
+  (term/set-bg 10 10 10)
+  (term/set-fg 10 10 10)
+  (dotimes [y th]
+    (term/move-cursor 1 (inc y))
+    (term/write (apply str (repeat tw " "))))
+  (term/flush))
+
+(defn draw-frame [runes title subtitle tw th frame]
+  (let [cx (quot tw 2)
+        cy (quot th 2)
+        tx (max 1 (- cx (quot (count title) 2)))
+        sx (max 1 (- cx (quot (count subtitle) 2)))
+        title-fade (min 1.0 (/ (float frame) 20.0))]
+    ;; draw pulsing runes — each rune redraws only its own cell
+    (doseq [r runes]
+      (let [b (rune-brightness (:phase r) frame)
+            [cr cg cb] (:color r)
+            fr (int (* cr b))
+            fg (int (* cg b))
+            fb (int (* cb b))]
+        (term/move-cursor (:x r) (:y r))
+        (if (< b 0.05)
+          ;; dim enough to hide — draw blank
+          (do (term/set-fg 10 10 10)
+              (term/set-bg 10 10 10)
+              (term/write " "))
+          (do (term/set-fg fr fg fb)
+              (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
+              (term/write (:glyph r))))))
+    ;; title
+    (term/move-cursor tx cy)
+    (term/set-fg (int (* 255 title-fade)) (int (* 220 title-fade)) (int (* 120 title-fade)))
+    (term/set-bg 10 10 10)
+    (term/write title)
+    ;; subtitle
+    (when (> frame 30)
+      (let [sf (min 1.0 (/ (float (- frame 30)) 20.0))
+            pulse (rune-brightness 0 frame)
+            bright (int (+ 50 (* 70 sf pulse)))]
+        (term/move-cursor sx (+ cy 2))
+        (term/set-fg bright bright bright)
+        (term/set-bg 10 10 10)
+        (term/write subtitle)))
+    (term/flush)))
+
+(defn show-title-screen []
+  (let [[tw th] (term/size)
+        title (generate-title)
+        subtitle "Press any key"
+        scheme (nth color-schemes (rand-int (count color-schemes)))
+        runes (scatter-runes tw th 40 scheme)]
+    ;; clear once
+    (clear-screen tw th)
+    ;; animate
+    (dotimes [frame 50]
+      (draw-frame runes title subtitle tw th frame)
+      (pause! 80))
+    ;; hold final frame, wait for key
+    (draw-frame runes title subtitle tw th 50)
+    (term/read-key)
+    title))

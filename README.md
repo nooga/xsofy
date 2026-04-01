@@ -2,7 +2,7 @@
 
 A roguelike where the magic system is lisp. Work in progress.
 
-![screenshot](screencast.gif)
+![screenshot](xsofy.gif)
 
 Runes are secretly s-expressions, randomized each run. The player has root access to the game's physics engine but the documentation is in a dead language that changes every boot.
 
