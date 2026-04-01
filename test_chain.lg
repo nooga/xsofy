@@ -1,6 +1,0 @@
-(ns test.chain
-  (:require [xsofy.render :as render]
-            [xsofy.world :as world]))
-
-(println "render:" (some? render/render-full))
-(println "world:" (some? world/make-world))
