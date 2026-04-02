@@ -13,9 +13,10 @@
             [xsofy.status :as status]
             [xsofy.items :as items]
             [xsofy.debug :as dbg]
-            [xsofy.bestiary]))
+            [xsofy.bestiary]
+            [math]))
 
-(declare player-move log-msg melee-attack update-fov autoexplore-step bfs-path)
+(declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path)
 
 (def view-radius 12)
 
@@ -126,6 +127,7 @@
   (reduce (fn [w item-type] (give-item w item-type :player))
           world
           [:flaming-dagger :frost-sword :thunder-hammer :vampiric-blade
+           :short-bow :arrow :arrow :arrow
            :health-potion :health-potion :health-potion]))
 
 (defn make-world [w h]
@@ -452,6 +454,162 @@
                   (log-msg world (str "The " atk-name " misses you."))
                   world)))))))))
 
+;; --- Bresenham Line ---
+
+(defn line-cells [x0 y0 x1 y1]
+  (let [dx (math/abs (- x1 x0))
+        dy (math/abs (- y1 y0))
+        sx (if (< x0 x1) 1 -1)
+        sy (if (< y0 y1) 1 -1)]
+    (loop [x x0 y y0 err (- dx dy) cells []]
+      (let [cells (conj cells [x y])]
+        (if (and (= x x1) (= y y1))
+          cells
+          (let [e2 (* 2 err)
+                adj-x (>= e2 (- dy))
+                adj-y (<= e2 dx)]
+            (recur (if adj-x (+ x sx) x)
+                   (if adj-y (+ y sy) y)
+                   (+ err (if adj-x (- dy) 0) (if adj-y dx 0))
+                   cells)))))))
+
+;; --- Line of Sight (Bresenham) ---
+
+(defn has-clear-line? [world x1 y1 x2 y2]
+  "Check if there's a clear line of sight between two points.
+   Transparent tiles allow passage. Start and end tiles are excluded from checks."
+  (let [{:keys [terrain width height]} world
+        dx (math/abs (- x2 x1))
+        dy (- (math/abs (- y2 y1)))
+        sx (if (< x1 x2) 1 -1)
+        sy (if (< y1 y2) 1 -1)
+        err (atom (+ dx dy))
+        cx (atom x1)
+        cy (atom y1)
+        clear (atom true)]
+    (while (and @clear (not (and (= @cx x2) (= @cy y2))))
+      (let [e2 (* 2 @err)]
+        (when (>= e2 dy)
+          (swap! err + dy)
+          (swap! cx + sx))
+        (when (<= e2 dx)
+          (swap! err + dx)
+          (swap! cy + sy)))
+      ;; check intermediate tiles (not start or end)
+      (when (and @clear (not (and (= @cx x2) (= @cy y2))))
+        (when-not (terrain/transparent? terrain width height @cx @cy)
+          (reset! clear false))))
+    @clear))
+
+;; --- Ranged Attack ---
+
+(defn projectile-glyph [x1 y1 x2 y2]
+  "Pick arrow glyph based on travel direction."
+  (let [dx (- x2 x1) dy (- y2 y1)
+        adx (math/abs dx) ady (math/abs dy)]
+    (cond
+      (> adx ady) "─"           ;; horizontal: box drawing light horizontal
+      (> ady adx) "│"           ;; vertical: box drawing light vertical
+      (or (and (> dx 0) (> dy 0))
+          (and (< dx 0) (< dy 0))) "╲"  ;; falling diagonal
+      :else "╱")))
+
+;; --- Projectile System ---
+;; Generic projectile launcher. Fires a glyph from origin toward a target point,
+;; hitting the first entity with HP in its path.
+;;
+;; Options:
+;;   :glyph       — override glyph (default: direction-based)
+;;   :color       — projectile color [r g b] (default: [200 180 120])
+;;   :flash-color — impact flash [r g b] (default: [255 220 150])
+;;   :damage      — HP damage on hit (default: 0)
+;;
+;; Returns {:world w :hit entity-or-nil :hit-pos [x y] :landed-pos [x y]}
+
+(defn first-entity-on-path [world path exclude-id]
+  "Scan path for the first entity with HP (excluding exclude-id)."
+  (loop [i 0]
+    (when (< i (count path))
+      (let [pos (nth path i)
+            hit (first (filter (fn [e]
+                                 (and (some? e) (map? e) (:pos e)
+                                      (= pos (:pos e))
+                                      (not= exclude-id (:id e))
+                                      (get-in e [:body :hp])))
+                               (vals (:entities world))))]
+        (if hit
+          [hit (vec (take (inc i) path))]
+          (recur (inc i)))))))
+
+(defn launch-projectile [world origin target-pos launcher-id opts]
+  "Fire a projectile from origin toward target-pos.
+   Hits first entity in path. Returns result map."
+  (let [ax (first origin) ay (second origin)
+        tx (first target-pos) ty (second target-pos)
+        full-path (line-cells ax ay tx ty)
+        flight-path (vec (rest full-path))
+        glyph (or (:glyph opts) (projectile-glyph ax ay tx ty))
+        color (or (:color opts) [200 180 120])
+        flash-color (or (:flash-color opts) [255 220 150])
+        dmg (or (:damage opts) 0)]
+    (let [hit-result (first-entity-on-path world flight-path launcher-id)
+          hit-entity (when hit-result (first hit-result))
+          actual-path (if hit-result (second hit-result) flight-path)
+          landed-pos (last actual-path)
+          hit-pos (if hit-entity (:pos hit-entity) landed-pos)]
+      (let [vfx {:type :projectile :path actual-path
+                 :step 0 :glyph glyph :color color}
+            flash {:type :flash :pos hit-pos
+                   :color flash-color :decay 2}
+            w (update world :vfx #(into (or % []) [vfx flash]))]
+        (let [w (if (and hit-entity (> dmg 0))
+                  (let [hp-before (get-in hit-entity [:body :hp] 0)
+                        w2 (ent/damage-entity w (:id hit-entity) dmg)
+                        killed (nil? (get-in w2 [:entities (:id hit-entity)]))]
+                    (if hit-pos
+                      (splatter-blood w2 (first hit-pos) (second hit-pos)
+                                      dmg hp-before killed)
+                      w2))
+                  w)]
+          {:world w
+           :hit hit-entity
+           :hit-pos hit-pos
+           :landed-pos landed-pos})))))
+
+;; --- Ranged Attack (uses projectile system) ---
+
+(defn ranged-attack [world attacker-id target-id]
+  "Creature fires a ranged attack at target."
+  (let [attacker (get-in world [:entities attacker-id])
+        target (get-in world [:entities target-id])]
+    (if (or (nil? attacker) (nil? target))
+      world
+      (let [spell-data (get-in attacker [:spells :ranged])
+            dmg (or (:damage spell-data) 2)
+            atk-name (entity-name attacker)]
+        (let [result (launch-projectile world (:pos attacker) (:pos target)
+                                        attacker-id {:damage dmg})
+              w (:world result)
+              hit (:hit result)]
+          (if (nil? hit)
+            (log-msg w (str "The " atk-name "'s shot misses."))
+            (let [hit-name (entity-name hit)
+                  hit-id (:id hit)
+                  killed (nil? (get-in w [:entities hit-id]))]
+              (cond
+                (= hit-id :player)
+                (if killed
+                  (log-msg w (str "The " atk-name " shoots and kills you!"))
+                  (log-msg w (str "The " atk-name " shoots you for " dmg ".")))
+                (= attacker-id :player)
+                (if killed
+                  (log-msg w (str "You shoot the " hit-name "!"))
+                  (log-msg w (str "You hit the " hit-name " for " dmg ".")))
+                :else
+                (if (not= hit-id target-id)
+                  (log-msg w (str "The " atk-name "'s shot hits the " hit-name "!"))
+                  w)))))))))
+
 ;; --- Pickup ---
 
 (defn pickup [world]
@@ -599,7 +757,7 @@
                             s (when e (snd/creature-idle (:pos e) ename (:sounds e)))]
                         (if s (snd/deliver-sound w s) w))
                       w)
-                  w (ai/ai-act w creature-id melee-attack)]
+                  w (ai/ai-act w creature-id melee-attack ranged-attack)]
               (add-ticks w creature-id move-cost))))))))
 
 (defn run-until-player-turn [world]
@@ -633,8 +791,104 @@
             (if result
               (recur (log-msg result (str "You pick up the " iname "."))
                      (rest items))
-              (recur (log-msg w "Your inventory is full.")
-                     []))))))))
+              (-> w
+                  (log-msg "Your inventory is full.")
+                  (assoc :inventory-full true)))))))))
+
+;; --- Ranged Player Action ---
+
+(defn find-arrows [world]
+  "Find arrow stack in player inventory. Returns item-id or nil."
+  (let [inv (or (get-in world [:entities :player :inventory]) [])]
+    (first (filter (fn [id]
+                     (let [item (get-in world [:entities id])]
+                       (and item (= :arrow (:template item)))))
+                   inv))))
+
+(defn find-nearest-enemy [world max-range]
+  "Find nearest visible enemy within range. Returns entity or nil."
+  (let [player-pos (get-in world [:entities :player :pos])
+        fov (or (:fov world) #{})
+        [px py] player-pos
+        candidates (->> (vals (:entities world))
+                        (filter (fn [e]
+                                  (and (:ai e) (:pos e)
+                                       (not= :player (:id e))
+                                       (get-in e [:body :hp])
+                                       (contains? fov (:pos e)))))
+                        (vec))]
+    (when (seq candidates)
+      (let [best (first (sort-by (fn [e]
+                                   (let [[ex ey] (:pos e)
+                                         dx (- ex px) dy (- ey py)]
+                                     (+ (* dx dx) (* dy dy))))
+                                 candidates))
+            [bx by] (:pos best)
+            dx (- bx px) dy (- by py)
+            dist (math/sqrt (+ (* dx dx) (* dy dy)))]
+        (when (<= dist max-range)
+          best)))))
+
+(defn fire-bow [world]
+  "Player fires equipped bow at nearest visible enemy."
+  (let [wep (ent/get-weapon world :player)]
+    (if (or (nil? wep) (not (get-in wep [:item :ranged])))
+      (log-msg world "You don't have a ranged weapon equipped.")
+      (let [arrow-id (find-arrows world)]
+        (if (nil? arrow-id)
+          (log-msg world "You have no arrows.")
+          (let [max-range (or (get-in wep [:item :range]) 8)
+                target (find-nearest-enemy world max-range)]
+            (if (nil? target)
+              (log-msg world "No target in range.")
+              (let [player-pos (get-in world [:entities :player :pos])
+                    tgt-pos (:pos target)
+                    [px py] player-pos
+                    [tx ty] tgt-pos]
+                ;; check LOS
+                (if-not (has-clear-line? world px py tx ty)
+                  (log-msg world "No clear line of fire.")
+                  ;; resolve damage using combat system
+                  (let [result (combat/resolve-attack world :player (:id target))
+                        dmg (if (and result (:hit result)) (:damage result) 0)
+                        speed (or (get-in wep [:item :speed]) 100)]
+                    (if (and result (not (:hit result)))
+                      ;; miss — still show projectile and consume arrow
+                      (let [proj (launch-projectile world player-pos tgt-pos
+                                                    :player {:damage 0})
+                            w (:world proj)
+                            w (consume-item w arrow-id)
+                            tname (entity-name target)]
+                        (-> w
+                            (add-ticks :player speed)
+                            (update :turn inc)
+                            update-fov
+                            (log-msg (str "Your arrow misses the " tname "."))))
+                      ;; hit
+                      (let [proj (launch-projectile world player-pos tgt-pos
+                                                    :player {:damage dmg})
+                            w (:world proj)
+                            hit (:hit proj)
+                            hit-id (when hit (:id hit))
+                            hit-name (when hit (entity-name hit))
+                            killed (and hit-id (nil? (get-in w [:entities hit-id])))
+                            ;; trigger weapon runes at impact
+                            w (if (and hit (:runes wep) (:hit-pos proj))
+                                (let [sr (spell/eval-spell w :player (:hit-pos proj)
+                                                           (:runes wep))]
+                                  (-> (:world sr)
+                                      (update :vfx #(into (or % []) (:vfx sr)))))
+                                w)
+                            w (consume-item w arrow-id)]
+                        (-> w
+                            (add-ticks :player speed)
+                            (update :turn inc)
+                            update-fov
+                            (log-msg (if killed
+                                       (str "Your arrow kills the " (or hit-name "target") "!")
+                                       (str "Your arrow hits the "
+                                            (or hit-name "target")
+                                            " for " dmg "."))))))))))))))))
 
 (defn player-move [world dx dy]
   (let [{:keys [terrain width height]} world
@@ -690,6 +944,7 @@
     :drop-menu (assoc world :screen :quick-menu :menu-action :drop)
     :use-menu (assoc world :screen :quick-menu :menu-action :use)
     (let [w (case action
+              :fire (fire-bow world)
               :up    (player-move world 0 -1)
               :down  (player-move world 0 1)
               :left  (player-move world -1 0)

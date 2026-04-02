@@ -309,6 +309,9 @@
                                (and (:resting new-world) (>= hp max-hp))
                                (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
                                run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
+                               (:inventory-full new-world)
+                               (-> new-world
+                                   (dissoc :autoexploring :auto-target :inventory-full))
                                :else new-world))
                            new-world)
                cur-size (term/size)

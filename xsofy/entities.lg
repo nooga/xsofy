@@ -55,14 +55,15 @@
 ;; --- Item Components ---
 
 (defn weapon [m]
-  {:item {:slot :weapon
-          :min-dmg (or (:min-dmg m) 1)
-          :max-dmg (or (:max-dmg m) 2)
-          :accuracy (or (:accuracy m) 100)
-          :speed (or (:speed m) 100)
-          :str-req (or (:str-req m) 1)
-          :enchant (or (:enchant m) 0)
-          :sneak-bonus (or (:sneak-bonus m) 3)}})
+  {:item (merge {:slot :weapon
+                 :min-dmg (or (:min-dmg m) 1)
+                 :max-dmg (or (:max-dmg m) 2)
+                 :accuracy (or (:accuracy m) 100)
+                 :speed (or (:speed m) 100)
+                 :str-req (or (:str-req m) 1)
+                 :enchant (or (:enchant m) 0)
+                 :sneak-bonus (or (:sneak-bonus m) 3)}
+                (when (:ranged m) {:ranged true :range (or (:range m) 8)}))})
 
 (defn armor [m]
   {:item {:slot :armor
@@ -208,10 +209,11 @@
     ;; stackable consumables
     (if (and (= slot :consumable) template)
       (if-let [existing (find-stack world owner-id template)]
-        ;; stack: increment count on existing, remove picked-up entity
-        (let [old-count (or (get-in world [:entities existing :item :count]) 1)]
+        ;; stack: add incoming count to existing, remove picked-up entity
+        (let [old-count (or (get-in world [:entities existing :item :count]) 1)
+              add-count (or (get-in item [:item :count]) 1)]
           (-> world
-              (assoc-in [:entities existing :item :count] (inc old-count))
+              (assoc-in [:entities existing :item :count] (+ old-count add-count))
               (update :entities dissoc item-id)))
         ;; no stack exists, add normally
         (if (inventory-full? world owner-id)

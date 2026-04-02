@@ -356,6 +356,23 @@
                     (let [[br bg_ bb] bg] (term/set-bg br bg_ bb))
                     (term/write ch)))))
 
+            :projectile
+            (let [path (or (:path event) [])
+                  step (or (:step event) 0)
+                  glyph (or (:glyph event) "-")
+                  color (or (:color event) [200 180 120])]
+              (when (< step (count path))
+                (let [[x y] (nth path step)]
+                  (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+                    (let [tile (terrain/tget (:terrain world) (:width world) x y)
+                          style (style-tile tile)
+                          bg-lit (let [lv (light/light-at x y (or (:lights world) []))]
+                                   (if lv (light/apply-light (:bg style) lv) (:bg style)))]
+                      (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+                      (let [[fr fg_ fb] color] (term/set-fg fr fg_ fb))
+                      (let [[br bg_ bb] bg-lit] (term/set-bg br bg_ bb))
+                      (term/write glyph))))))
+
             :flash
             (let [[x y] (:pos event)
                   i2 (* intensity intensity)]
@@ -375,22 +392,32 @@
       (term/flush))))
 
 (defn tick-vfx [vfx]
-  "Decay vfx list, remove expired. Returns new vfx vec."
+  "Advance vfx list — decay bolts/flashes, step projectiles. Remove expired."
   (vec (filter some?
-        (map (fn [event]
-               (let [d (dec (or (:decay event) 1))]
-                 (when (> d 0)
-                   (assoc event :decay d
-                          :max-decay (or (:max-decay event)
-                                         (or (:decay event) 1))))))
+        (mapv (fn [event]
+               (if (= (:type event) :projectile)
+                 ;; projectile: advance step, expire at end of path
+                 (let [next-step (inc (or (:step event) 0))]
+                   (when (< next-step (count (or (:path event) [])))
+                     (assoc event :step next-step)))
+                 ;; bolt/flash: decay
+                 (let [d (dec (or (:decay event) 1))]
+                   (when (> d 0)
+                     (assoc event :decay d
+                            :max-decay (or (:max-decay event)
+                                           (or (:decay event) 1)))))))
              vfx))))
+
+(defn vfx-frame-delay [vfx]
+  "Projectile-only frames are faster, bolt/flash frames are slower."
+  (if (every? #(= :projectile (:type %)) vfx) 25 50))
 
 (defn animate-vfx! [world r]
   "Run vfx animation loop with pauses between frames."
   (loop [vfx (or (:vfx world) [])]
     (when (seq vfx)
       (render-vfx-frame (assoc world :vfx vfx) r)
-      (pause! 50)
+      (pause! (vfx-frame-delay vfx))
       (let [next-vfx (tick-vfx vfx)]
         (render-map world r)
         (render-map-entities world r)

@@ -84,6 +84,27 @@
 
         :else world))))
 
+;; --- Line of Sight ---
+
+(defn has-clear-line? [world x1 y1 x2 y2]
+  "Bresenham line check — are all intermediate tiles transparent?"
+  (let [{:keys [terrain width height]} world
+        dx (math/abs (- x2 x1))
+        dy (- (math/abs (- y2 y1)))
+        sx (if (< x1 x2) 1 -1)
+        sy (if (< y1 y2) 1 -1)
+        err (atom (+ dx dy))
+        cx (atom x1) cy (atom y1)
+        clear (atom true)]
+    (while (and @clear (not (and (= @cx x2) (= @cy y2))))
+      (let [e2 (* 2 @err)]
+        (when (>= e2 dy) (swap! err + dy) (swap! cx + sx))
+        (when (<= e2 dx) (swap! err + dx) (swap! cy + sy)))
+      (when (and @clear (not (and (= @cx x2) (= @cy y2))))
+        (when-not (terrain/transparent? terrain width height @cx @cy)
+          (reset! clear false))))
+    @clear))
+
 ;; --- Random Walk ---
 
 (def cardinal-dirs [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
@@ -134,10 +155,17 @@
             sees-player (can-see-player? world entity)
             hp (get-in entity [:body :hp] 1)
             max-hp (get-in entity [:body :max-hp] 1)
-            low-hp (< (/ (float hp) max-hp) flee-hp-pct)]
+            behavior (or (:behavior ai) :hunter)
+            low-hp (< (/ (float hp) max-hp) flee-hp-pct)
+            ;; ranged creatures also flee when player gets too close
+            ranged-too-close (and (= behavior :ranged)
+                                  sees-player
+                                  (< dist 3)
+                                  (= state :hunt))]
         (cond
           ;; --- From any state: flee if low HP and can see player ---
-          (and low-hp sees-player (< dist chase-radius) (not= state :flee))
+          (or (and low-hp sees-player (< dist chase-radius) (not= state :flee))
+              ranged-too-close)
           (-> world
               (assoc-in [:entities entity-id :ai :state] :flee))
 
@@ -207,19 +235,72 @@
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
                 (assoc-in [:entities entity-id :ai :target] player-pos))
+            ;; ranged: got to safe distance → back to hunt (kiting)
+            (and (= behavior :ranged) (>= dist (or (:preferred-range ai) 5)))
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :hunt)
+                (assoc-in [:entities entity-id :ai :target] player-pos))
             :else world)
 
           :else world)))))
 
 ;; --- AI Actions ---
 
-(defn ai-act [world entity-id attack-fn]
+(defn hunt-melee
+  "Standard melee hunt: approach and attack when adjacent."
+  [world entity-id pos player-pos attack-fn]
+  (if (adjacent? pos player-pos)
+    (attack-fn world entity-id :player)
+    (let [[dx dy] (step-toward pos player-pos)]
+      (try-move world entity-id dx dy))))
+
+(defn hunt-ranged
+  "Ranged hunt: maintain preferred distance. Shoot when in range + LOS.
+   Flee if too close, approach if too far, sidestep if no LOS."
+  [world entity-id pos player-pos attack-fn ranged-attack-fn]
+  (let [entity (get-in world [:entities entity-id])
+        ai (:ai entity)
+        pref-range (or (:preferred-range ai) 5)
+        spell-data (get-in entity [:spells :ranged])
+        max-range (or (:range spell-data) 6)
+        dist (distance pos player-pos)
+        [px py] player-pos
+        [ex ey] pos
+        los (has-clear-line? world ex ey px py)]
+    (cond
+      ;; too close — back away
+      (< dist (- pref-range 1))
+      (let [w (let [[dx dy] (step-away pos player-pos)]
+                (try-move world entity-id dx dy))]
+        ;; if couldn't move (cornered), melee
+        (if (= (get-in w [:entities entity-id :pos]) pos)
+          (if (adjacent? pos player-pos)
+            (attack-fn world entity-id :player)
+            w)
+          w))
+
+      ;; in range and has LOS — shoot
+      (and (<= dist max-range) los)
+      (ranged-attack-fn world entity-id :player)
+
+      ;; in range but no LOS — approach to get angle
+      (<= dist max-range)
+      (let [[dx dy] (step-toward pos player-pos)]
+        (try-move world entity-id dx dy))
+
+      ;; too far — approach
+      :else
+      (let [[dx dy] (step-toward pos player-pos)]
+        (try-move world entity-id dx dy)))))
+
+(defn ai-act [world entity-id attack-fn ranged-attack-fn]
   (let [entity (get-in world [:entities entity-id])
         player (get-in world [:entities :player])]
     (if (or (nil? entity) (nil? player))
       world
       (let [ai (:ai entity)
             state (get ai :state :sleep)
+            behavior (or (:behavior ai) :hunter)
             pos (:pos entity)
             player-pos (:pos player)
             target (get ai :target)]
@@ -232,33 +313,44 @@
             (random-step world entity-id)
 
             :hunt
-            (if (adjacent? pos player-pos)
-              (attack-fn world entity-id :player)
-              (let [[dx dy] (step-toward pos player-pos)]
-                (try-move world entity-id dx dy)))
+            (case behavior
+              :ranged (hunt-ranged world entity-id pos player-pos attack-fn ranged-attack-fn)
+              ;; :hunter, :pack, :aggressive — all melee for now
+              (hunt-melee world entity-id pos player-pos attack-fn))
 
             :investigate
             (if (and target (not= pos target))
-              ;; move toward last known position
               (let [[dx dy] (step-toward pos target)]
                 (try-move world entity-id dx dy))
-              ;; at target or no target — search randomly
               (random-step world entity-id))
 
             :flee
-            (if (adjacent? pos player-pos)
-              ;; cornered — fight back
-              (attack-fn world entity-id :player)
-              ;; run away
-              (let [[dx dy] (step-away pos player-pos)]
-                (try-move world entity-id dx dy)))
+            (let [dist (distance pos player-pos)
+                  [ex ey] pos [px py] player-pos]
+              (cond
+                ;; ranged creatures try to shoot while fleeing
+                (and (= behavior :ranged)
+                     (let [spell-data (get-in entity [:spells :ranged])
+                           max-range (or (:range spell-data) 6)]
+                       (and (<= dist max-range)
+                            (has-clear-line? world ex ey px py))))
+                (ranged-attack-fn world entity-id :player)
+
+                ;; cornered — fight back
+                (adjacent? pos player-pos)
+                (attack-fn world entity-id :player)
+
+                ;; run away
+                :else
+                (let [[dx dy] (step-away pos player-pos)]
+                  (try-move world entity-id dx dy))))
 
             ;; default
             world))))))
 
 ;; --- Process All Creatures ---
 
-(defn process-creatures [world attack-fn]
+(defn process-creatures [world attack-fn ranged-attack-fn]
   (let [creature-ids (->> (:entities world)
                           (vals)
                           (filter :ai)
@@ -270,7 +362,7 @@
               (if (get-in w [:entities cid])
                 (-> w
                     (update-ai-state cid)
-                    (ai-act cid attack-fn))
+                    (ai-act cid attack-fn ranged-attack-fn))
                 w))
             world
             creature-ids)))

@@ -84,6 +84,50 @@
   (weapon {:min-dmg 3 :max-dmg 6 :accuracy 100 :speed 100 :str-req 2})
   (runes :apply :damage 2 :self :apply :heal 2))
 
+;; --- Ranged Weapons ---
+;; Bows use arrows from inventory. :ranged true marks them as ranged.
+;; Melee stats are weak fallback for when out of arrows.
+
+(defitem short-bow
+  (visual ")" [140 110 60])
+  (item-name "short bow")
+  (item-desc "A simple hunting bow. Requires arrows.")
+  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 1
+           :ranged true :range 8}))
+
+(defitem long-bow
+  (visual ")" [120 90 40])
+  (item-name "long bow")
+  (item-desc "A tall yew bow. Greater range and power.")
+  (weapon {:min-dmg 3 :max-dmg 7 :accuracy 100 :speed 120 :str-req 3
+           :ranged true :range 12}))
+
+;; --- Runic Bows ---
+
+(defitem flaming-bow
+  (visual ")" [255 140 40])
+  (item-name "flaming bow")
+  (item-desc "Arrows ignite on release. Sets targets ablaze.")
+  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 1
+           :ranged true :range 8})
+  (runes :fire))
+
+(defitem frost-bow
+  (visual ")" [140 180 255])
+  (item-name "frost bow")
+  (item-desc "Arrows trail frost. Freezes on impact.")
+  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 2
+           :ranged true :range 8})
+  (runes :ice))
+
+;; --- Arrows ---
+
+(defitem arrow
+  (visual "/" [180 160 120])
+  (item-name "arrow")
+  (item-desc "A wooden arrow with a stone tip. Stack of ammunition.")
+  (consumable {:effect :ammo :count 5}))
+
 ;; --- Armor ---
 ;; defense: higher = harder to hit. 10 = leather, 50 = plate
 
@@ -134,24 +178,29 @@
 ;; --- Loot Tables ---
 
 (def depth-loot
-  {1 {:weapons [:dagger :short-sword :flaming-dagger]
+  {1 {:weapons [:dagger :short-sword :short-bow :flaming-dagger]
       :armor   [:leather-armor]
       :potions [:health-potion :health-potion :strength-potion]
-      :scrolls [:scroll-identify]}
-   2 {:weapons [:short-sword :long-sword :spear :rapier :flaming-dagger :frost-sword]
+      :scrolls [:scroll-identify]
+      :ammo    [:arrow]}
+   2 {:weapons [:short-sword :long-sword :spear :rapier :short-bow :long-bow :flaming-dagger :frost-sword]
       :armor   [:leather-armor :chain-mail]
       :potions [:health-potion :strength-potion]
-      :scrolls [:scroll-identify :scroll-enchant]}
-   3 {:weapons [:long-sword :axe :war-hammer :rapier :thunder-hammer :vampiric-blade :frost-sword]
+      :scrolls [:scroll-identify :scroll-enchant]
+      :ammo    [:arrow]}
+   3 {:weapons [:long-sword :axe :war-hammer :rapier :long-bow :thunder-hammer :vampiric-blade :frost-sword :flaming-bow :frost-bow]
       :armor   [:chain-mail :plate-armor]
       :potions [:health-potion :strength-potion]
-      :scrolls [:scroll-identify :scroll-enchant :scroll-enchant]}})
+      :scrolls [:scroll-identify :scroll-enchant :scroll-enchant]
+      :ammo    [:arrow]}})
+
 
 (defn random-loot [depth]
   (let [table (get depth-loot (min depth 3) (get depth-loot 3))
-        category (rand-int 4)]
+        category (rand-int 5)]
     (case category
       0 (let [pool (:weapons table)] (nth pool (rand-int (count pool))))
       1 (let [pool (:armor table)] (nth pool (rand-int (count pool))))
       2 (let [pool (:potions table)] (nth pool (rand-int (count pool))))
-      3 (let [pool (:scrolls table)] (nth pool (rand-int (count pool)))))))
+      3 (let [pool (:scrolls table)] (nth pool (rand-int (count pool))))
+      4 (let [pool (:ammo table)] (nth pool (rand-int (count pool)))))))
