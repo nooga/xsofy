@@ -9,6 +9,7 @@
             [xsofy.effects :as fx]
             [xsofy.fire :as fire]
             [xsofy.spell :as spell]
+            [xsofy.runes :as runes]
             [xsofy.status :as status]
             [xsofy.items :as items]
             [xsofy.debug :as dbg]
@@ -131,7 +132,7 @@
   (let [world (generate-floor w h 1 (make-player))]
     (-> world
         give-starting-items
-        (assoc :floors {} :gold 0))))
+        (assoc :floors {} :gold 0 :rune-table (runes/generate-rune-table)))))
 
 ;; --- Floor Transition ---
 ;; Saves current floor, extracts player + inventory items,
@@ -197,6 +198,7 @@
          :log (:log world)
          :turn (:turn world)
          :gold (or (:gold world) 0)
+         :rune-table (:rune-table world)
          :depth depth
          :floors (:floors world)
          :running true}
@@ -367,6 +369,7 @@
               (assoc :log (:log saved)
                      :turn (:turn saved)
                      :gold (or (:gold saved) 0)
+                     :rune-table (:rune-table saved)
                      :floors (:floors saved))
               (inject-player player items spawn-pos)
               (log-msg (str "You descend to depth " new-depth "."))))))))
@@ -508,6 +511,19 @@
       :enchant
       (-> world
           (assoc :screen :quick-menu :menu-action :enchant :enchant-scroll-id item-id))
+
+      :identify
+      (let [[new-table rune-key] (runes/identify-random-rune (or (:rune-table world) {}))]
+        (if rune-key
+          (-> world
+              (assoc :rune-table new-table)
+              (consume-item item-id)
+              (log-msg (str "The scroll reveals: "
+                            (runes/rune-glyph new-table rune-key)
+                            " means \"" (name rune-key) "\"!")))
+          (-> world
+              (consume-item item-id)
+              (log-msg "The scroll crumbles. All runes are already known."))))
 
       ;; default
       (log-msg world (str "You can't use the " iname ".")))))
@@ -670,6 +686,7 @@
     :messages (assoc world :screen :messages)
     :pickup (pickup world)
     :inventory (assoc world :screen :inventory)
+    :rune-codex (assoc world :screen :rune-codex)
     :equip-menu (assoc world :screen :quick-menu :menu-action :equip)
     :unequip-menu (assoc world :screen :quick-menu :menu-action :unequip)
     :drop-menu (assoc world :screen :quick-menu :menu-action :drop)

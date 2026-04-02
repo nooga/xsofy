@@ -10,7 +10,8 @@
          "Dominions" "Reaches" "Passages" "Chambers" "Shrines"
          "Tunnels" "Caves" "Cloisters" "Casemates" "Halls" "Chambers"
          "Shrines" "Temples" "Cisterns" "Containers" "Hells" "Coils"
-         "Labirynths" "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"])
+         "Labirynths" "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"
+         "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos"])
 
 (def ys ["Recursion" "Nil" "Off-By-One" "Eval" "Nesting"
          "Garbage Collection" "Structural Sharing" "Eventual Consistency"
@@ -29,7 +30,7 @@
          "Tuesday" "Trepidation" "Darkness" "Drab" "Beige" "Questionable Beauty"
          "Mildew" "Moisture" "Understandable Nature" "Varying Utility" "Grotesque"
          "Terror" "Labirynthian Design" "Boredom" "Bondage" "Procrastination"
-         "Polite Enquiry" "Measured Response"])
+         "Polite Enquiry" "Measured Response" "Madness" "Inconvenience"])
 
 (defn generate-title []
   (str (nth xs (rand-int (count xs)))
@@ -41,7 +42,7 @@
 (def quest-ps
   ["Amulet" "Gauntlet" "Chalice" "Scepter" "Orb" "Crown"
    "Tiara" "Helm" "Boots" "Cloak" "Rod" "Tome"
-   "Blade" "Sceptre"
+   "Blade" "Sceptre" "Trinket" "Trophy" "Artifact" "Relic" "Treasure"
    "Grimoire" "Codex"  "Book" "Journal"
    "Pendant" "Brazier"  "Codpiece" "Paren" "Chalice" "Crystal"
    "Ladle" "Bucket" "Spatula" "Sock" "Pamphlet" "Invoice"])
@@ -54,7 +55,7 @@
    "Plausible Authority" "Borrowed Confidence" "Forgotten Knowledge"
    "Vague Importance" "Terms and Conditions" "Pointed Remarks"
    "Strongly Worded Letters" "Unsorted Collections" "Limited Shelf Life"
-   "Infinite Loops" "Unmatched Delimiters" "Lost Semicolons"])
+   "Infinite Loops" "Unmatched Delimiters" "Lost Semicolons" "Futility"])
 
 (def gate-messages
   ["The gate slams shut behind you. No going back."
@@ -62,7 +63,10 @@
    "You hear the portcullis crash down behind you."
    "The door seals itself with a grinding of stone."
    "The way back vanishes into solid rock."
-   "You don't feel like going back yet."])
+   "Your guide disappears into the mist. You hear \"Solong, sucker!\" in the distance."
+   "Old man shuts the gate behind you. You hear him mutter \"every time, I swear...\""
+   "You wake up hangover on a stone slab. No way out."
+   "You just got here. You don't feel like going back yet."])
 
 (defn generate-quest []
   (let [gate (nth gate-messages (rand-int (count gate-messages)))

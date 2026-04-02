@@ -3,6 +3,7 @@
             [xsofy.effects :as fx]
             [xsofy.status :as status]
             [xsofy.fire :as fire]
+            [xsofy.runes :as runes]
             [math]))
 
 ;; --- Spell Context ---
@@ -216,43 +217,52 @@
     ctx))
 
 ;; --- Rune Registry ---
+;; Maps rune keyword to implementation fn.
+;; Fns with args: (fn ctx arg1 ...) — called when applied.
+;; Fns without args: (fn ctx) — called when bare.
 
 (def rune-primitives
-  {:self     {:arity 0 :fn r-self}
-   :target   {:arity 1 :fn r-target}    ;; needs a pos argument (provided by context)
-   :nearest  {:arity 0 :fn r-nearest}
-   :area     {:arity 1 :fn r-area}      ;; radius
-   :spread   {:arity 1 :fn r-spread}    ;; count
-   :damage   {:arity 1 :fn r-damage}    ;; amount
-   :heal     {:arity 1 :fn r-heal}      ;; amount
-   :fire     {:arity 0 :fn r-fire}
-   :ice      {:arity 0 :fn r-ice}
-   :push     {:arity 0 :fn r-push}
-   :arc      {:arity 0 :fn r-arc}})
+  {:self     r-self
+   :nearest  r-nearest
+   :area     r-area       ;; (area) = default 1, (area N) = radius N
+   :spread   r-spread     ;; (spread) = default 2, (spread N) = N
+   :damage   r-damage     ;; (damage) = 1, (damage N)
+   :heal     r-heal       ;; (heal) = 1, (heal N)
+   :fire     r-fire
+   :ice      r-ice
+   :push     r-push
+   :arc      r-arc})
+
+;; default args when called bare (no apply)
+(def rune-defaults
+  {:area 1 :spread 2 :damage 1 :heal 1})
 
 ;; --- Spell Evaluation ---
-;; A spell is a vector of steps: [:fire], [:damage 3], [:area 2 :fire], etc.
-;; Each step is [rune-keyword & args].
-;; Steps are threaded through ctx via ->.
 
 (defn eval-step [ctx step]
-  (if (keyword? step)
-    ;; simple rune, no args
-    (let [rune (get rune-primitives step)]
-      (if rune
-        ((:fn rune) ctx)
+  (cond
+    ;; bare keyword: call with default or no args
+    (keyword? step)
+    (let [f (get rune-primitives step)]
+      (if f
+        (let [default (get rune-defaults step)]
+          (if default (f ctx default) (f ctx)))
         ctx))
-    ;; [rune arg1 arg2 ...]
+    ;; applied: [rune arg1 arg2 ...]
+    (vector? step)
     (let [rune-key (first step)
           args (rest step)
-          rune (get rune-primitives rune-key)]
-      (if rune
-        (apply (:fn rune) ctx args)
-        ctx))))
+          f (get rune-primitives rune-key)]
+      (if f
+        (apply f ctx args)
+        ctx))
+    ;; ignore numbers or other literals as bare steps
+    :else ctx))
 
-(defn eval-spell [world caster-id target-pos steps]
-  "Evaluate a spell. Returns {:world w :vfx [events]}."
-  (let [ctx (make-context world caster-id target-pos)
+(defn eval-spell [world caster-id target-pos raw-tokens]
+  "Parse flat rune tokens and evaluate. Returns {:world w :vfx [events]}."
+  (let [steps (xsofy.runes/parse-runes raw-tokens)
+        ctx (make-context world caster-id target-pos)
         result (reduce eval-step ctx steps)]
     {:world (:world result)
      :vfx (or (:vfx result) [])}))

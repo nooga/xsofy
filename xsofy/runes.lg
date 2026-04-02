@@ -1,0 +1,168 @@
+(ns xsofy.runes)
+
+;; --- Rune System v2 ---
+;; All primitives are arity-0 by default.
+;; :apply is the sole combinator: (apply F 3) → (fire 3)
+;; Math runes (mul, add) always consume two tokens.
+;; Items store flat keyword sequences: [:apply :fire 3 :ice]
+;; Parser compiles to pipeline steps: [[:fire 3] [:ice]]
+
+;; --- Glyphs & Names ---
+
+(def rune-glyphs
+  ["ᚠ" "ᚢ" "ᚦ" "ᚨ" "ᚱ" "ᚲ" "ᚷ" "ᚹ" "ᚺ" "ᚾ"
+   "ᛁ" "ᛃ" "ᛇ" "ᛈ" "ᛉ" "ᛊ" "ᛋ" "ᛏ" "ᛒ" "ᛖ"
+   "ᛗ" "ᛚ" "ᛜ" "ᛞ" "ᛟ" "◈" "◊" "△" "▽" "☉"
+   "⊕" "⊗" "⊘" "⊛" "⊜" "♁" "♃" "♄" "♅" "♆"])
+
+(def garbled-names
+  ["vorth" "kael" "thryn" "zeph" "moldri" "ashk" "quelp" "ixen"
+   "bren" "dask" "fael" "grim" "hael" "jorn" "lusk" "mord"
+   "neth" "olk" "pael" "rask" "seld" "tarn" "uld" "wend"
+   "ysk" "zael" "dren" "felk" "gash" "hord" "kryl" "thex"
+   "vren" "solk" "blim" "quor" "jael" "nisk" "doth" "murk"])
+
+;; all rune primitives that get randomized
+(def all-runes
+  [;; selectors
+   :self :target :nearest
+   ;; cursor modifiers
+   :area :spread
+   ;; effects
+   :fire :ice :damage :heal :poison :arc :push :conjure
+   ;; modifiers
+   :friend :repeat :wait
+   ;; transfer
+   :take :give
+   ;; properties
+   :mind :body :essence :life :form
+   ;; combinator
+   :apply
+   ;; math
+   :mul :add])
+
+;; numerals are NOT randomized — they're always the same glyphs
+(def numeral-glyphs {1 "①" 2 "②" 3 "③" 4 "④" 5 "⑤"})
+
+;; --- Rune Table ---
+
+(defn generate-rune-table []
+  (let [shuffled-glyphs (shuffle rune-glyphs)
+        shuffled-names (shuffle garbled-names)]
+    (reduce (fn [table i]
+              (let [rune (nth all-runes i)]
+                (assoc table rune {:glyph (nth shuffled-glyphs i)
+                                   :garbled (nth shuffled-names i)
+                                   :identified false})))
+            {} (range (count all-runes)))))
+
+;; --- Query ---
+
+(defn rune-glyph [rune-table rune-key]
+  (if (number? rune-key)
+    (get numeral-glyphs rune-key (str rune-key))
+    (let [entry (get rune-table rune-key)]
+      (if entry (:glyph entry) (str rune-key)))))
+
+(defn rune-display [rune-table rune-key]
+  (if (number? rune-key)
+    (str rune-key)
+    (let [entry (get rune-table rune-key)]
+      (if (nil? entry)
+        (name rune-key)
+        (if (:identified entry)
+          (name rune-key)
+          (:garbled entry))))))
+
+(defn rune-identified? [rune-table rune-key]
+  (or (number? rune-key)
+      (let [entry (get rune-table rune-key)]
+        (and entry (:identified entry)))))
+
+;; --- Identification ---
+
+(defn identify-rune [rune-table rune-key]
+  (if (get rune-table rune-key)
+    (assoc-in rune-table [rune-key :identified] true)
+    rune-table))
+
+(defn identify-random-rune [rune-table]
+  (let [unidentified (vec (filter (fn [[k v]] (not (:identified v))) rune-table))]
+    (if (empty? unidentified)
+      [rune-table nil]
+      (let [[rune-key _] (nth unidentified (rand-int (count unidentified)))]
+        [(identify-rune rune-table rune-key) rune-key]))))
+
+;; --- Parser ---
+;; Compiles flat rune sequence to pipeline steps.
+;; [:apply :fire 3 :ice] → [[:fire 3] :ice]
+
+(defn parse-runes [tokens]
+  "Parse flat rune token sequence into pipeline steps."
+  (let [tokens (vec tokens)
+        pos (atom 0)
+        steps (atom [])]
+    (letfn [(peek-tok [] (when (< @pos (count tokens)) (nth tokens @pos)))
+            (next-tok [] (let [t (peek-tok)] (swap! pos inc) t))
+            (parse-one []
+              (let [tok (next-tok)]
+                (cond
+                  (nil? tok) nil
+                  (= tok :apply)
+                  (let [fn-tok (parse-one)
+                        arg-tok (parse-one)]
+                    (if (vector? fn-tok)
+                      (conj fn-tok arg-tok)
+                      [fn-tok arg-tok]))
+                  (= tok :mul)
+                  (let [a (parse-one) b (parse-one)]
+                    (* (or a 0) (or b 0)))
+                  (= tok :add)
+                  (let [a (parse-one) b (parse-one)]
+                    (+ (or a 0) (or b 0)))
+                  :else tok)))]
+      (loop []
+        (when (< @pos (count tokens))
+          (let [step (parse-one)]
+            (when (some? step)
+              (swap! steps conj step)))
+          (recur))))
+    @steps))
+
+;; --- Display ---
+
+(defn format-glyphs [rune-table tokens]
+  "Format raw rune tokens as glyphs (player-facing, obfuscated)."
+  (apply str (interpose "" (mapv #(rune-glyph rune-table %) tokens))))
+
+(defn format-sexp-step [rune-table step]
+  "Format one parsed step as s-expression with identification."
+  (cond
+    (number? step) (str step)
+    (keyword? step) (rune-display rune-table step)
+    (vector? step)
+    (str "(" (apply str (interpose " " (mapv #(format-sexp-step rune-table %) step))) ")")
+    :else (str step)))
+
+(defn format-sexp [rune-table tokens]
+  "Parse tokens and display as s-expression pipeline."
+  (let [steps (parse-runes tokens)]
+    (if (= 1 (count steps))
+      (format-sexp-step rune-table (first steps))
+      (str "(magic-> " (apply str (interpose " " (mapv #(format-sexp-step rune-table %) steps))) ")"))))
+
+;; --- Discovery Table ---
+
+(defn discovered-runes [rune-table]
+  (vec (filter some?
+    (mapv (fn [[k v]]
+            (when (:identified v)
+              {:rune k :glyph (:glyph v) :name (name k)}))
+          rune-table))))
+
+(defn undiscovered-runes [rune-table]
+  (vec (filter some?
+    (mapv (fn [[k v]]
+            (when (not (:identified v))
+              {:rune k :glyph (:glyph v) :garbled (:garbled v)}))
+          rune-table))))

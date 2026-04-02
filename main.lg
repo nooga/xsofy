@@ -137,47 +137,53 @@
 
 (defn execute-menu-action [world action inv-idx]
   (let [inv (or (get-in world [:entities :player :inventory]) [])
-        item-id (nth inv inv-idx nil)]
+        item-id (nth inv inv-idx nil)
+        old-screen (:screen world)]
     (if (nil? item-id)
       world
       (let [iname (get-item-name world item-id)
             equipment (or (get-in world [:entities :player :equipment]) {})
             item (get-in world [:entities item-id])
-            slot (get-in item [:item :slot])]
-        (case action
-          :equip
-          (if (and slot (not= slot :consumable))
-            (-> (ent/equip-item world item-id :player)
-                (world/log-msg (str "You equip the " iname ".")))
-            world)
+            slot (get-in item [:item :slot])
+            result (case action
+                     :equip
+                     (if (and slot (not= slot :consumable))
+                       (-> (ent/equip-item world item-id :player)
+                           (world/log-msg (str "You equip the " iname ".")))
+                       world)
 
-          :unequip
-          (if slot
-            (-> (ent/unequip-item world :player slot)
-                (world/log-msg (str "You remove the " iname ".")))
-            world)
+                     :unequip
+                     (if slot
+                       (-> (ent/unequip-item world :player slot)
+                           (world/log-msg (str "You remove the " iname ".")))
+                       world)
 
-          :drop
-          (let [equipped-id (when slot (get equipment slot))
-                w (if (= equipped-id item-id)
-                    (ent/unequip-item world :player slot)
-                    world)]
-            (-> (ent/drop-item w item-id :player)
-                (world/log-msg (str "You drop the " iname "."))))
+                     :drop
+                     (let [equipped-id (when slot (get equipment slot))
+                           w (if (= equipped-id item-id)
+                               (ent/unequip-item world :player slot)
+                               world)]
+                       (-> (ent/drop-item w item-id :player)
+                           (world/log-msg (str "You drop the " iname "."))))
 
-          :use
-          (if (= slot :consumable)
-            (world/use-item world item-id)
-            world)
+                     :use
+                     (if (= slot :consumable)
+                       (world/use-item world item-id)
+                       world)
 
-          :enchant
-          (let [scroll-id (:enchant-scroll-id world)]
-            (if scroll-id
-              (-> (world/enchant-item world item-id scroll-id)
-                  (dissoc :enchant-scroll-id :screen :menu-action :menu-sel))
-              world))
+                     :enchant
+                     (let [scroll-id (:enchant-scroll-id world)]
+                       (if scroll-id
+                         (-> (world/enchant-item world item-id scroll-id)
+                             (dissoc :enchant-scroll-id))
+                         world))
 
-          world)))))
+                     world)]
+        ;; if the action set a NEW screen, keep it (e.g. enchant menu)
+        ;; otherwise strip all menu state to return to game
+        (if (and (:screen result) (not= (:screen result) old-screen))
+          (dissoc result :menu-sel)
+          (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id))))))
 
 (defn quick-menu-input [world k]
   (let [action (or (:menu-action world) :equip)
@@ -228,6 +234,13 @@
        (case screen
          :messages
          (do (render/render-messages-screen world)
+             (term/read-key)
+             (let [w (dissoc world :screen)]
+               (render/render-full w)
+               (recur w w (term/size))))
+
+         :rune-codex
+         (do (render/render-rune-codex world)
              (term/read-key)
              (let [w (dissoc world :screen)]
                (render/render-full w)

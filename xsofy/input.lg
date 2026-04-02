@@ -33,6 +33,7 @@
     "d"        :drop-menu
     "a"        :use-menu
     "i"        :inventory
+    "r"        :rune-codex
     "m"        :messages
     "q"        :quit
     "\u001b"   :escape

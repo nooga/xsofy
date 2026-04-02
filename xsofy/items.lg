@@ -68,7 +68,7 @@
   (item-name "frost sword")
   (item-desc "Coated in rime. Chills the area around the target.")
   (weapon {:min-dmg 4 :max-dmg 7 :accuracy 100 :speed 100 :str-req 3})
-  (runes [:area 1] :ice))
+  (runes :apply :area 1 :ice))
 
 (defitem thunder-hammer
   (visual "\\" [200 200 255])
@@ -82,7 +82,7 @@
   (item-name "vampiric blade")
   (item-desc "Drinks the life of those it cuts. Heals the wielder.")
   (weapon {:min-dmg 3 :max-dmg 6 :accuracy 100 :speed 100 :str-req 2})
-  (runes [:damage 2] :self [:heal 2]))
+  (runes :apply :damage 2 :self :apply :heal 2))
 
 ;; --- Armor ---
 ;; defense: higher = harder to hit. 10 = leather, 50 = plate

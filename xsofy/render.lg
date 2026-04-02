@@ -7,6 +7,7 @@
             [xsofy.lighting :as light]
             [xsofy.effects :as fx]
             [xsofy.status :as status]
+            [xsofy.runes :as runes]
             [xsofy.ui :as ui]))
 
 (defn pause! [ms]
@@ -539,13 +540,28 @@
                 new-def (or (get-in item [:item :defense]) 0)]
             (ui/write-line r (+ y 2) (str " Current: " cur-def " -> " new-def " def")
                            [100 100 120] ui/bg)))
-        ;; available commands
-        (let [cmds (cond
-                     (= slot :consumable) " [a] use  [d] drop"
-                     equipped             " [u] unequip  [d] drop"
-                     (and slot (not= slot :consumable)) " [e] equip  [d] drop"
-                     :else                " [d] drop")]
-          (ui/write-line r (+ y 4) cmds [120 120 100] ui/bg))))))
+        ;; rune inscriptions
+        (let [item-runes (:runes item)
+              rune-table (or (:rune-table world) {})
+              rune-row (atom (+ y 3))]
+          (when (and item-runes (seq item-runes))
+            ;; glyph representation
+            (ui/write-line r @rune-row
+                           (str " Glyphs: " (runes/format-glyphs rune-table item-runes))
+                           [120 100 200] ui/bg)
+            (swap! rune-row inc)
+            ;; s-expression with identified names
+            (ui/write-line r @rune-row
+                           (str " Spell:  " (runes/format-sexp rune-table item-runes))
+                           [160 140 200] ui/bg)
+            (swap! rune-row inc))
+          ;; available commands
+          (let [cmds (cond
+                       (= slot :consumable) " [a] use  [d] drop"
+                       equipped             " [u] unequip  [d] drop"
+                       (and slot (not= slot :consumable)) " [e] equip  [d] drop"
+                       :else                " [d] drop")]
+            (ui/write-line r (inc @rune-row) cmds [120 120 100] ui/bg)))))))
 
 (defn render-inventory-screen [world]
   (let [[tw th] (term/size)
@@ -658,6 +674,38 @@
         (ui/write-at r (- cx 12) (- th 3)
                      "[press any key to exit]"
                      [80 80 80] ui/bg)))
+    (term/flush)))
+
+;; --- Rune Codex Screen ---
+
+(defn render-rune-codex [world]
+  (let [[tw th] (term/size)
+        r (ui/rect 1 1 tw th)
+        inner (ui/box r "Rune Codex" [170 140 220] ui/bg)
+        rune-table (or (:rune-table world) {})
+        discovered (runes/discovered-runes rune-table)
+        undiscovered (runes/undiscovered-runes rune-table)]
+    (ui/clear-rect inner)
+    (ui/write-line inner 0 " Known Runes:" [200 180 240] ui/bg)
+    (if (empty? discovered)
+      (ui/write-line inner 1 "  (none yet)" [80 80 80] ui/bg)
+      (dotimes [i (min (count discovered) (- (quot (:h inner) 2) 2))]
+        (let [d (nth discovered i)]
+          (ui/write-line inner (inc i)
+                         (str "  " (:glyph d) "  " (:name d))
+                         [160 140 220] ui/bg))))
+    (let [sep-y (+ 2 (max 1 (count discovered)))]
+      (ui/write-line inner sep-y " Unknown Runes:" [200 180 240] ui/bg)
+      (if (empty? undiscovered)
+        (ui/write-line inner (inc sep-y) "  (all runes known!)" [120 200 120] ui/bg)
+        (dotimes [i (min (count undiscovered) (- (:h inner) sep-y 3))]
+          (let [u (nth undiscovered i)]
+            (ui/write-line inner (+ sep-y 1 i)
+                           (str "  " (:glyph u) "  " (:garbled u))
+                           [100 80 140] ui/bg)))))
+    (ui/write-line inner (dec (:h inner))
+                   " [press any key to close]"
+                   [80 80 80] ui/bg)
     (term/flush)))
 
 ;; --- Public API ---

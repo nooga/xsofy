@@ -99,12 +99,13 @@
 (defn box [r title fg bgg]
   (let [w (:w r)
         h (:h r)
-        top (str "+" (apply str (repeat (- w 2) "-")) "+")
-        side (str "|" (apply str (repeat (- w 2) " ")) "|")]
+        top (str "╭" (apply str (repeat (- w 2) "─")) "╮")
+        bot (str "╰" (apply str (repeat (- w 2) "─")) "╯")
+        side (str "│" (apply str (repeat (- w 2) " ")) "│")]
     (write-line r 0 top fg bgg)
     (dotimes [y (- h 2)]
       (write-line r (inc y) side fg bgg))
-    (write-line r (dec h) top fg bgg)
+    (write-line r (dec h) bot fg bgg)
     (when title
       (write-at r 2 0 (str " " title " ") fg bgg))
     ;; return inner rect

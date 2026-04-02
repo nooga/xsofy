@@ -1,36 +1,114 @@
-# Spell DSL Specification
+# Spell DSL Specification v2
 
 ## Overview
 
-Spells are pipelines expressed as Clojure threading macros. A spell is a sequence of rune words that, when evaluated, produces a function `context -> [world-states]` — a lazy sequence of world snapshots for animation.
+Spells are flat sequences of rune tokens that compile to a pipeline of operations on a context. The player sees rune glyphs; the engine evaluates s-expressions.
 
-```clojure
-(-> ctx target fire)              ;; set target on fire
-(-> ctx nearest (take :mind))     ;; become the nearest entity
-(-> ctx arc arc arc arc)          ;; chain lightning
-(-> ctx (damage 3) self (heal 2)) ;; hit then self-heal
+```
+Player sees:    ᚠ ᛊ 3 ᛁ
+Engine evals:   (-> ctx fire (area 3) ice)
+English:        fire, then freeze area of radius 3
 ```
 
-Every game action is a spell — melee attacks, ranged attacks, item effects, NPC abilities. The spell system IS the physics engine.
+There are no parentheses in rune notation. Structure comes from one combinator: **apply**.
+
+## The Two Layers
+
+### Runic Notation (player-facing)
+
+A flat sequence of rune glyphs. Read left-to-right. Each glyph maps to a primitive.
+
+```
+F             fire (default)
+FI            fire, then ice
+aF3I          fire(3), then ice
+aF3aI2        fire(3), then ice(2)
+CDs           conjure(dragon), self
+aCDf          conjure(dragon), friend
+```
+
+### S-expression (engine)
+
+The pipeline that gets evaluated:
+
+```clojure
+(-> ctx fire)
+(-> ctx fire ice)
+(-> ctx (fire 3) ice)
+(-> ctx (fire 3) (ice 2))
+(-> ctx (conjure :dragon) self)
+(-> ctx (conjure :dragon) friend)
+```
+
+The `ctx` and `->` are implicit — never shown to the player.
+
+## Grammar
+
+### Tokens
+
+Every rune is one of:
+
+| Category    | Examples              | Notes                        |
+|-------------|-----------------------|------------------------------|
+| Primitive   | fire, ice, arc, push  | Effect or selector rune      |
+| Numeral     | 1, 2, 3, 4, 5        | Literal number               |
+| Apply       | a                     | The sole structural combinator |
+| Math        | mul, add              | Arithmetic, always binary    |
+| Property    | mind, body, essence   | Arguments to take/give       |
+| Entity type | dragon, rat, door     | Arguments to conjure         |
+
+### Parsing Rules
+
+1. **Default**: each token produces one pipeline step with no arguments.
+   - `F I` → `(fire) (ice)` → two separate steps
+
+2. **Apply (`a`)**: consumes the next two tokens, produces `(fn arg)`.
+   - `a F 3` → `(fire 3)` → one step, fire with power 3
+   - `a C D` → `(conjure :dragon)` → one step
+   - Nested: `a a F M 2 3 I` → `(fire (mul 2 3)) (ice)` → `(fire 6) (ice)`
+
+3. **Math (`M`, `A`)**: always consumes next two tokens. Exception to the arity-0 rule.
+   - `M 2 3` → 6 (product)
+   - `A 3 2` → 5 (sum)
+   - Nest with apply: `a F M 2 3` → `(fire (mul 2 3))` → `(fire 6)`
+
+### Parser Algorithm
+
+```
+parse(tokens) → steps:
+  while tokens not empty:
+    token = pop(tokens)
+    if token is 'apply':
+      fn = parse_one(tokens)
+      arg = parse_one(tokens)
+      emit (fn arg)
+    elif token is 'mul':
+      a = parse_one(tokens)
+      b = parse_one(tokens)
+      emit (* a b)
+    elif token is 'add':
+      a = parse_one(tokens)
+      b = parse_one(tokens)
+      emit (+ a b)
+    else:
+      emit (token)  ;; bare primitive, no args
+```
+
+This is a trivial recursive descent parser. No ambiguity. No lookahead beyond one token.
 
 ## Context
-
-Every spell executes within a context that flows through the pipeline. Each rune-word is a function `ctx -> ctx` that transforms the context and may emit animation frames.
 
 ```clojure
 {:world    world          ;; current world state
  :caster   entity-id      ;; who cast this
  :origin   [x y]          ;; caster position
- :cursors  #{[x y]}       ;; where the spell is currently acting (set of positions)
- :carrying nil             ;; property being transferred by take/give
- :result   nil             ;; numeric result of last effect (damage dealt, etc.)
- :hits     #{}             ;; entities already affected (for arc/spread dedup)
- :frames   []}             ;; accumulated animation frames (world snapshots)
+ :cursors  #{[x y]}       ;; where the spell is currently acting
+ :result   nil             ;; numeric result of last effect
+ :hits     #{}             ;; entities already affected (for arc dedup)
+ :vfx      []}             ;; visual events for animation
 ```
 
-### Default Context
-
-The context is pre-populated based on the spell's medium:
+### Default Context by Medium
 
 | Medium          | Default cursors              |
 |-----------------|------------------------------|
@@ -40,135 +118,79 @@ The context is pre-populated based on the spell's medium:
 | Wand/staff      | aimed cell (ranged)          |
 | Trap            | entity that triggered it     |
 | Potion          | caster (self)                |
-| Innate (NPC)    | depends on AI intent         |
 
-This means the same rune inscribed on different items behaves differently. A single fire rune on a dagger = flaming melee strike. Same rune on a scroll = set yourself on fire.
-
-## Rune Parsing
-
-Runes are parsed left-to-right with **greedy fixed-arity** consumption. Each rune word has a known arity. The parser reads one word, then consumes the next N words as its arguments (recursively, since arguments may themselves have arity > 0).
-
-A flat rune sequence becomes a nested s-expression which is then threaded through `->`.
-
-### Example Parse
-
-```
-;; rune sequence (english names):
-damage 3 spread 3 damage 1
-
-;; arity table: damage=1, spread=1, numerals=0
-;; greedy parse, left to right:
-;; step 1: damage(1) needs 1 arg → consumes 3 → (damage 3)
-;; step 2: spread(1) needs 1 arg → consumes 3 → (spread 3)
-;; step 3: damage(1) needs 1 arg → consumes 1 → (damage 1)
-;; result: three pipeline steps
-
-;; threaded:
-(-> ctx (damage 3) (spread 3) (damage 1))
-```
-
-### Pipeline Separation
-
-Top-level expressions with arity 0 or fully-saturated expressions at the top level become separate pipeline steps. The parser collects them into a list and the evaluator threads context through sequentially.
-
-## Rune Dictionary
-
-Each run generates a randomized mapping from rune glyphs/names to these primitives. Until identified, runes show a garbled name and symbol from a per-run procedural dictionary.
-
-### Display
-
-| State        | Shown as                         | Example            |
-|--------------|----------------------------------|--------------------|
-| Unidentified | garbled name + random glyph      | "vorth" ᚦ          |
-| Identified   | english name + consistent glyph  | "fire" ᚦ           |
-
-The glyph stays the same — only the name changes when identified. This way the player can start recognizing glyphs visually before full identification.
-
-### Garbled Name Generation
-
-Each run seeds a name generator that produces ~30 garbled names from phoneme tables. Names should feel like fragments of a dead language — pronounceable but alien. Examples: "vorth", "kael", "thryn", "zeph", "moldri", "ashk", "quelp", "ixen".
-
-### Glyph Pool
-
-A pool of unicode glyphs assigned randomly per run. Drawn from runic, alchemical, and miscellaneous symbol blocks:
-
-```
-Runic:     ᚠ ᚢ ᚦ ᚨ ᚱ ᚲ ᚷ ᚹ ᚺ ᚾ ᛁ ᛃ ᛇ ᛈ ᛉ ᛊ ᛋ ᛏ ᛒ ᛖ ᛗ ᛚ ᛜ ᛞ ᛟ
-Alchemical: 🜁 🜂 🜃 🜄 🜅 🜆 🜇 🜈 🜉 🜊 🜋 🜌 🜍 🜎 🜏 🜐 🜑
-Misc:       ◈ ◊ ○ ● △ ▽ ☉ ☽ ♁ ♃ ♄ ♅ ♆ ⊕ ⊗ ⊘ ⊛ ⊜
-```
-
----
+Same rune, different item, different effect. `fire` on a dagger = flaming strike. `fire` on a scroll = self-immolation.
 
 ## Primitives
 
-### Selectors (arity 0) — set cursors
+### Selectors — set cursors (arity 0)
 
-| Name         | Effect                                              |
-|--------------|-----------------------------------------------------|
-| `self`       | cursors = caster position                           |
-| `target`     | cursors = aimed cell (from player input or AI)      |
-| `nearest`    | cursors = nearest visible entity to caster          |
-| `all-visible`| cursors = all entities in caster's FOV              |
+| Rune       | Effect                                     |
+|------------|--------------------------------------------|
+| `self`     | cursors = caster position                  |
+| `target`   | cursors = aimed cell                       |
+| `nearest`  | cursors = nearest visible entity to cursor |
 
-### Cursor Modifiers (arity 1) — transform cursors
+### Cursor Modifiers — transform cursors
 
-| Name         | Arity | Effect                                            |
-|--------------|-------|---------------------------------------------------|
-| `spread`     | 1     | cursors = N nearest entities to current cursors, deduped vs :hits |
-| `area`       | 1     | cursors = all cells within N radius of current cursors |
+| Rune       | With apply        | Without apply         |
+|------------|-------------------|-----------------------|
+| `area`     | `(area N)` radius | `(area 1)` default    |
+| `spread`   | `(spread N)` count| `(spread 2)` default  |
 
-### Effects (arity 0 or 1) — do things at cursors, emit frames
+### Effects — do things at cursors
 
-| Name         | Arity | Effect                                            |
-|--------------|-------|---------------------------------------------------|
-| `fire`       | 0     | add fire effect at cursors                        |
-| `ice`        | 0     | add ice effect at cursors, extinguish fire        |
-| `arc`        | 0     | lightning damage at cursor, move cursor to nearest unhit, emit bolt frame |
-| `push`       | 0     | push entities at cursors away from origin         |
-| `pull`       | 0     | pull entities at cursors toward origin            |
-| `destroy`    | 0     | destroy entity/tile at cursors                    |
-| `projectile` | 0     | animate projectile from origin to cursor, visual + hit confirm |
-| `damage`     | 1     | deal N damage at cursors, result = total dealt    |
-| `heal`       | 1     | heal N at cursors, result = total healed          |
-| `poison`     | 1     | apply poison for N turns at cursors               |
-| `create`     | 1     | create entity of type at cursors                  |
-| `transmute`  | 1     | change entity/tile at cursors into type           |
+| Rune       | With apply        | Without apply           |
+|------------|-------------------|-------------------------|
+| `fire`     | `(fire N)` power  | `(fire)` default power  |
+| `ice`      | `(ice N)` power   | `(ice)` default freeze  |
+| `damage`   | `(damage N)`      | `(damage 1)` poke       |
+| `heal`     | `(heal N)`        | `(heal 1)` tiny heal    |
+| `poison`   | `(poison N)` turns| `(poison 2)` default    |
+| `arc`      | —                 | lightning damage + jump  |
+| `push`     | `(push N)` force  | `(push 1)` nudge        |
+| `conjure`  | `(conjure type)`  | `(conjure)` random      |
 
-### Transfer (arity 1) — move properties between entities
+### Modifiers
 
-| Name         | Arity | Effect                                            |
-|--------------|-------|---------------------------------------------------|
-| `take`       | 1     | remove property from entity at cursor, store in :carrying, copy to caster |
-| `give`       | 1     | take property from caster, store in :carrying, copy to entity at cursor |
+| Rune       | With apply        | Without apply           |
+|------------|-------------------|-------------------------|
+| `friend`   | —                 | make last conjured ally |
+| `repeat`   | `(repeat N)`      | `(repeat 2)` do twice   |
+| `wait`     | `(wait N)` turns  | `(wait 1)` next turn    |
 
-### Properties (arity 0) — arguments to take/give
+### Transfer
 
-| Name         | Meaning                                             |
-|--------------|-----------------------------------------------------|
-| `:mind`      | consciousness, memories, identity, known runes      |
-| `:body`      | physical form, stats, HP, equipment                 |
-| `:essence`   | everything — full entity swap                       |
-| `:life`      | HP/vitality only                                    |
-| `:form`      | appearance, tile glyph, name                        |
+| Rune       | Takes             | Effect                  |
+|------------|-------------------|-------------------------|
+| `take`     | property rune     | take from entity at cursor |
+| `give`     | property rune     | give to entity at cursor   |
 
-### Flow Control
+Always used with apply: `a take mind` → `(take :mind)`
 
-| Name         | Arity | Effect                                            |
-|--------------|-------|---------------------------------------------------|
-| `wait`       | 1     | split spell across turns — remaining steps execute N turns later |
-| `repeat`     | 1     | execute remaining steps N additional times         |
+### Properties (arity 0, used as arguments)
 
-### Time (arity 1) — affect the game loop
+| Rune       | Meaning                              |
+|------------|--------------------------------------|
+| `mind`     | consciousness, memories, rune knowledge |
+| `body`     | physical form, stats                 |
+| `essence`  | everything — full entity swap        |
+| `life`     | HP/vitality only                     |
+| `form`     | appearance, glyph                    |
 
-| Name         | Arity | Effect                                            |
-|--------------|-------|---------------------------------------------------|
-| `future`     | 1     | begin precognition for N turns (Caves of Qud style) |
-| `past`       | 1     | rewind world N turns, discard future               |
+### Entity Types (arity 0, used as arguments)
+
+| Rune       | Meaning       |
+|------------|---------------|
+| `rat`      | summon rat    |
+| `goblin`   | summon goblin |
+| `dragon`   | summon dragon |
+| `door`     | summon door   |
+| `wall`     | create wall   |
 
 ### Numerals (arity 0)
 
-| Name | Value |
+| Rune | Value |
 |------|-------|
 | `1`  | 1     |
 | `2`  | 2     |
@@ -176,226 +198,168 @@ Misc:       ◈ ◊ ○ ● △ ▽ ☉ ☽ ♁ ♃ ♄ ♅ ♆ ⊕ ⊗ ⊘ ⊛ 
 | `4`  | 4     |
 | `5`  | 5     |
 
-### Special
+### Math (always binary, consumes next two tokens)
 
-| Name   | Arity | Effect                                             |
-|--------|-------|----------------------------------------------------|
-| `blank` | 0    | resolves to the default argument for whatever consumes it |
-| `result`| 0    | resolves to the numeric :result from the last effect |
-
----
-
-## Arity Table (for parser)
-
-```clojure
-{self 0, target 0, nearest 0, all-visible 0,
- spread 1, area 1,
- fire 0, ice 0, arc 0, push 0, pull 0, destroy 0, projectile 0,
- damage 1, heal 1, poison 1, create 1, transmute 1,
- take 1, give 1,
- wait 1, repeat 1, future 1, past 1,
- 1 0, 2 0, 3 0, 4 0, 5 0,
- blank 0, result 0,
- :mind 0, :body 0, :essence 0, :life 0, :form 0}
-```
-
-Total: ~33 primitives = ~33 runes per run.
-
----
-
-## Example Spells
-
-### Combat Basics
-
-```clojure
-;; dagger attack (default ctx = melee target)
-[damage 2]
-(-> ctx (damage 2))
-
-;; bow shot (default ctx = projectile to aimed cell)
-[damage 3]
-(-> ctx (damage 3))
-
-;; same rune, different weapon = different spell
-
-;; fireball — fire at target area
-[target (area 2) fire (damage 3)]
-(-> ctx target (area 2) fire (damage 3))
-
-;; ice lance — projectile, freeze on hit
-[target projectile ice (damage 4)]
-(-> ctx target projectile ice (damage 4))
-```
-
-### Chain Effects
-
-```clojure
-;; chain lightning — arc 4 times
-[arc arc arc arc]
-(-> ctx arc arc arc arc)
-
-;; chain heal — heal nearest, spread to 3, heal those too
-[nearest (heal 3) (spread 3) (heal 2)]
-(-> ctx nearest (heal 3) (spread 3) (heal 2))
-
-;; lifesteal — damage target, heal self for result
-[target (damage 4) self (heal result)]
-(-> ctx target (damage 4) self (heal result))
-```
-
-### Transfer
-
-```clojure
-;; mind swap with nearest
-[nearest (take :mind)]
-(-> ctx nearest (take :mind))
-
-;; body swap with target
-[target (take :body)]
-(-> ctx target (take :body))
-
-;; become a door (take essence of nearest door... if you can target one)
-[target (take :essence)]
-(-> ctx target (take :essence))
-
-;; give your form to an enemy (you become invisible? they become you?)
-[nearest (give :form)]
-(-> ctx nearest (give :form))
-```
+| Rune  | Operation | Example       |
+|-------|-----------|---------------|
+| `mul` | multiply  | `M 3 4` → 12 |
+| `add` | add       | `A 3 2` → 5  |
 
 ### Time
 
-```clojure
-;; precognition — play 5 turns, snap back with knowledge
-[(future 5)]
-(-> ctx (future 5))
+| Rune       | With apply  | Without apply      |
+|------------|-------------|--------------------|
+| `future`   | `(future N)`| `(future 3)` peek 3 turns |
+| `past`     | `(past N)`  | `(past 3)` rewind 3 turns |
 
-;; rewind 3 turns
-[(past 3)]
-(-> ctx (past 3))
+### Special
 
-;; delayed fireball — goes off in 3 turns at original target
-[target (wait 3) (area 2) fire (damage 5)]
-(-> ctx target (wait 3) (area 2) fire (damage 5))
+| Rune       | Effect                                        |
+|------------|-----------------------------------------------|
+| `blank`    | resolves to default value for any consumer    |
+| `result`   | resolves to numeric result of last effect     |
 
-;; poison — damage over time
-[target (damage 1) (wait 1) (damage 1) (wait 1) (damage 1)]
-(-> ctx target (damage 1) (wait 1) (damage 1) (wait 1) (damage 1))
-;; or just: [target (poison 3)]
+## Example Spells
+
+### Simple (no apply needed)
+
+```
+F           → (fire)              — default fire at cursor
+I           → (ice)               — default freeze at cursor
+FI          → (fire) (ice)        — fire then freeze
+P           → (push)              — push entities away
+AAA         → (arc) (arc) (arc)   — chain lightning x3
+sH          → (self) (heal)       — heal self (tiny)
 ```
 
-### Emergent Chaos
+### With Apply
 
-```clojure
-;; duplicate self (clone the player??)
-[self (create :essence)]
-(-> ctx self (create :essence))
+```
+aF3         → (fire 3)            — fire with power 3
+aH5         → (heal 5)            — heal 5 HP
+aD4         → (damage 4)          — deal 4 damage
+aR2aH3      → (area 2) (heal 3)  — heal 3 in radius 2
+aD2saH2     → (damage 2) (self) (heal 2)  — hit then lifesteal
+aCDs        → (conjure :dragon) (self) — conjure dragon at self?
+aCDf        → (conjure :dragon) (friend) — summon friendly dragon
+```
 
-;; turn all visible enemies into walls
-[all-visible (transmute :wall)]
-(-> ctx all-visible (transmute :wall))
+### With Math
 
-;; chain mind-swap — steal nearest mind, spread, steal again
-;; become a hive mind?
-[nearest (take :mind) (spread 3) (take :mind)]
+```
+aDM34       → (damage (mul 3 4))  → (damage 12) — massive damage
+aFM25       → (fire (mul 2 5))    → (fire 10)   — inferno
+aHA23       → (heal (add 2 3))    → (heal 5)    — heal 5
+```
 
-;; fire + push = fire explosion that knocks enemies back
-[target (area 3) fire push (damage 2)]
+### Advanced
 
-;; pull everything to you then freeze
-[all-visible pull ice]
+```
+;; Vampiric strike: damage 3, then heal self for 3
+aD3saH3     → (damage 3) (self) (heal 3)
 
-;; give your life force to heal someone
-[target (give :life)]
+;; Area freeze: expand to radius 2, then ice
+aR2I        → (area 2) (ice)
+
+;; Chain lightning x4: arc four times
+AAAA        → (arc) (arc) (arc) (arc)
+
+;; Repeat fire 3 times: powerful DOT
+aW3F        → (repeat 3) (fire)   — fire 3 times? or wait 3 then fire?
+;; Actually: wait takes remaining pipeline
+;; aW3F = defer fire for 3 turns. Time bomb!
+
+;; Summon 3 rats
+aE3C        → (repeat 3) (conjure) — 3 random creatures
+
+;; Mind swap with nearest
+na take mind → (nearest) (take :mind) — become nearest entity
+
+;; Become a door
+aCdoora take essence → (conjure :door) (take :essence) — you're a door now
 ```
 
 ### Dangerous Misfires
 
-```clojure
-;; player casts unknown rune on self (scroll default)
-;; turns out to be: [destroy]
-(-> ctx destroy)  ;; ctx default is self. you destroyed yourself.
+```
+;; Scroll of fire (default context = self)
+F           → (fire)  — player is at cursor. You set YOURSELF on fire.
 
-;; player thinks this is heal, it's actually take-mind on self
-;; nothing happens? or you lose your memories?
+;; Thought it was heal, it's actually damage
+aD5         → (damage 5) — at self on a scroll. Ouch.
 
-;; (past 5) when you meant (future 5)
-;; you've erased 5 turns of progress instead of scouting
+;; Past when you meant future
+aP3         → (past 3)  — you just erased 3 turns of progress
+
+;; Conjure with no friend modifier
+aC          → (conjure) — random hostile creature right next to you
 ```
 
----
+## Rune Identification
 
-## Animation Model
+Each run randomizes the mapping: keyword → glyph + garbled name.
 
-Each primitive may emit animation frames as part of its execution. A frame is a world snapshot representing one visual tick (~30-50ms).
-
-Evaluation is lazy — the game loop consumes frames one at a time:
-
-```clojure
-(defn animate! [world-seq]
-  (doseq [w world-seq]
-    (render! w)
-    (when-not (skip-pressed?)
-      (sleep! 30))))
-```
-
-- Walking around: 0-1 frames, instant
-- Melee hit: 2-3 frames (swing, impact)
-- Projectile: 1 frame per cell traveled
-- Fire spread: 1 frame per expansion ring
-- Chain lightning: 1-2 frames per arc
-- Explosion: 1 frame per ring
-- Time travel: visual rewind effect (play history backwards rapidly)
-
-Chain reactions extend the sequence. Fire hitting gas appends explosion frames. The world sim step after spell resolution may produce its own frames (cellular automata spreading fire/gas/water).
-
-## Turn Structure
-
-```
-1. Player input (wait for keypress)
-2. Parse action as spell
-3. Evaluate spell → lazy [world-states]
-4. Animate spell frames
-5. For each NPC:
-   a. AI selects spell
-   b. Evaluate → lazy [world-states]
-   c. Animate
-6. Environment step (fire/gas/water CA) → lazy [world-states]
-7. Animate environment
-8. Snapshot final world state → append to history
-9. Check pending spells (wait/delay), evaluate any that trigger
-10. Goto 1
-```
-
-## Identification System
-
-### Per-Run Rune Table
-
-At world generation, a seeded RNG creates:
-
-1. A mapping from each of ~33 primitives to a unique glyph
-2. A mapping from each of ~33 primitives to a garbled name
-3. A boolean per rune: identified or not (all start false)
-
-```clojure
-{:rune-table
- {fire      {:glyph "ᚠ" :garbled "vorth" :identified false}
-  ice       {:glyph "ᚢ" :garbled "kael"  :identified false}
-  damage    {:glyph "ᚦ" :garbled "thryn" :identified false}
-  ...}}
-```
+- **Unidentified**: player sees glyph `ᚠ` and garbled name "vorth"
+- **Identified**: player sees glyph `ᚠ` and true name "fire"
+- **Glyph is permanent**: same glyph for the whole run, only the name reveals
 
 ### Identification Methods
 
-- **Scroll of Identification** — reveals one random unidentified rune
-- **Experimentation** — cast it and observe the effect (risky)
-- **Rune stones** — found in the dungeon, inscribed with one rune + a hint
-- **NPC spellcasters** — watch what they cast, infer from effects
-- **Combining known + unknown** — if you know `target` and `damage` and cast `[target ??? damage 3]`, and something freezes, the unknown is `ice`
-- **Scrolls/books of lore** — reveal rune names in the "dead language" which are the garbled names — meaning the garbled name IS a clue once you know the language
+1. **Scroll of Identify** — reveals one random rune mapping
+2. **Experimentation** — cast it and observe (risky)
+3. **Observation** — watch NPC use a runic weapon, infer from effect
+4. **Deduction** — if you know `fire` and see `aᚠ3` cause a big fire, you know `a` is apply and `3` is three
 
-### Knowledge Persists Through Mind
+### Knowledge Mechanics
 
-The player entity's `:mind` property includes `:known-runes`. Mind-swap transfers this knowledge. Precognition (`future`) preserves it on snap-back. Rewind (`past`) does NOT preserve it — you lose what you learned.
+- Knowledge stored on player entity as `:known-runes`
+- `take :mind` transfers knowledge
+- `future` (precognition) preserves knowledge on snap-back
+- `past` (rewind) does NOT preserve knowledge — you lose what you learned
 
-This creates a tension: `past` is powerful (actual undo) but costs knowledge. `future` is safe but temporary.
+## Variables (future)
+
+Reserve a rune for "store" and "recall" — push/pop a value register:
+
+```
+store X ... recall X
+```
+
+This enables computed spells: store a damage amount, use it later for healing. Store the result of one effect, apply it to another. Turing complete? Maybe. That's fine.
+
+## Implementation Notes
+
+### Total Rune Count
+
+```
+Selectors:     3  (self, target, nearest)
+Modifiers:     2  (area, spread)
+Effects:       8  (fire, ice, damage, heal, poison, arc, push, conjure)
+Modifiers:     3  (friend, repeat, wait)
+Transfer:      2  (take, give)
+Properties:    5  (mind, body, essence, life, form)
+Entity types:  5  (rat, goblin, dragon, door, wall)
+Numerals:      5  (1-5)
+Math:          2  (mul, add)
+Time:          2  (future, past)
+Special:       3  (blank, result, apply)
+─────────────────
+Total:        ~40 runes
+```
+
+Each randomized per run into ~40 glyphs and garbled names. The player identifies them one at a time.
+
+### Items Store Raw Rune Sequences
+
+```clojure
+;; flaming dagger
+{:runes [:fire]}
+
+;; vampiric blade
+{:runes [:apply :damage 2 :self :apply :heal 2]}
+
+;; thunder hammer
+{:runes [:arc :arc]}
+```
+
+The rune sequence is stored as keywords. The display layer looks up glyphs from the rune table. The eval layer compiles to the pipeline.
