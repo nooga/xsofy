@@ -40,13 +40,20 @@
     sources))
 
 ;; --- Apply Light to a Color ---
-;; Brighten and tint a base color by a light value.
+;; Multiplicative lighting like Brogue: light acts as a color multiplier.
+;; A light value of [100 100 100] keeps the base color unchanged.
+;; Higher values brighten and tint, lower values dim.
+;; Ambient is ~60% — unlighted tiles are dimmer, torches boost to full.
+
+(def ambient 60)
 
 (defn apply-light [base-rgb light-rgb]
   (let [[br bg bb] base-rgb
         [lr lg lb] light-rgb
-        ;; boost factor: 0 light = keep base, strong light = brighten significantly
-        boost (/ (float (+ lr lg lb)) 300.0)]
-    [(min 255 (+ br (int (* lr 0.4)) (int (* br boost))))
-     (min 255 (+ bg (int (* lg 0.4)) (int (* bg boost))))
-     (min 255 (+ bb (int (* lb 0.4)) (int (* bb boost))))]))
+        ;; multiplier = ambient + light contribution scaled to 0-100 range
+        mr (min 200 (+ ambient (quot lr 2)))
+        mg (min 200 (+ ambient (quot lg 2)))
+        mb (min 200 (+ ambient (quot lb 2)))]
+    [(min 255 (quot (* br mr) 100))
+     (min 255 (quot (* bg mg) 100))
+     (min 255 (quot (* bb mb) 100))]))

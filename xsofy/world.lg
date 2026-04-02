@@ -76,7 +76,7 @@
 
 (defn generate-floor [w h depth player]
   (dbg/log "generate-floor" w h "depth:" depth)
-  (let [{:keys [grid rooms]} (terrain/generate-level w h)
+  (let [{:keys [grid rooms]} (terrain/generate-level w h depth)
         [px py] (first rooms)]
     (dbg/log "  rooms:" (count rooms) "player-pos:" [px py])
     (let [lights (light/collect-terrain-lights grid w h)
@@ -209,11 +209,9 @@
 ;; --- Environment Effects ---
 
 (defn trample-grass [world x y]
-  "Walking on grass turns it to floor."
-  (let [{:keys [terrain width]} world
-        tile (terrain/tget terrain width x y)]
-    (when (= tile 2)
-      (terrain/tset! terrain width x y 1))
+  "Walking on grass turns it to trampled grass."
+  (let [{:keys [terrain width]} world]
+    (terrain/trample! terrain width x y)
     world))
 
 (defn splatter-blood [world x y dmg hp-before killed]
@@ -594,7 +592,7 @@
             (add-ticks w creature-id move-cost)
             (let [w (ai/update-ai-state w creature-id)
                   ai-state (get-in w [:entities creature-id :ai :state])
-                  w (if (or (= ai-state :sleep) (= ai-state nil))
+                  w (if (or (= ai-state :sleep) (= ai-state :wander) (= ai-state nil))
                       (let [e (get-in w [:entities creature-id])
                             ename (let [k (or (:template e) (:id e))]
                                     (if k (name k) "???"))

@@ -295,7 +295,7 @@
                                                       (not= :player (:id e))
                                                       (:pos e)
                                                       (contains? fov (:pos e))
-                                                      (= :hunt (get-in e [:ai :state]))))
+                                                      (contains? #{:hunt :investigate :flee} (get-in e [:ai :state]))))
                                                (vals (:entities new-world)))
                                  ;; running stops at walls/doors/items
                                  run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
@@ -331,7 +331,7 @@
   (try
     (let [game-title (title/show-title-screen)
           quest (title/generate-quest)
-          world (-> (world/make-world 60 30)
+          world (-> (world/make-world 79 30)
                     (assoc :title game-title
                            :quest-item (:item quest))
                     (#(reduce world/log-msg % (:messages quest))))]

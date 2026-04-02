@@ -24,7 +24,14 @@
 (defn style-tile [tile]
   (get terrain/tile-styles tile {:fg [80 80 80] :bg [10 10 10]}))
 
-(def memory-dim 0.25)
+;; --- Memory ---
+;; Remembered tiles are dimmed with a cool blue-gray tint
+
+(defn memory-color [rgb]
+  (let [[r g b] rgb]
+    [(int (* r 0.3))
+     (int (* g 0.3))
+     (min 255 (int (* b 0.4)))]))
 
 ;; --- Map Panel ---
 
@@ -45,6 +52,9 @@
        (max 0 (min 255 (+ g (quot offset 2))))
        (max 0 (min 255 (+ b (quot offset 3))))])))
 
+;; dancing tiles: water and lava get randomized color each frame
+(def dancing-tiles #{3 4 7})
+
 (defn render-map-tile [r x y tile visible remembered light-val stain gas]
   (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
     (term/move-cursor (+ (:x r) x) (+ (:y r) y))
@@ -52,15 +62,43 @@
       visible
       (let [style (style-tile tile)
             ch (get terrain/tile-chars tile "?")
-            ;; fire: random flickering colors each frame
+            ;; per-tile color variation
             fg0 (cond
+                  ;; fire: random flickering
                   (= tile 15) [(+ 200 (rand-int 55)) (+ 80 (rand-int 100)) (rand-int 40)]
+                  ;; grass: moderate jitter
                   (= tile 2) (jitter-color (:fg style) x y 20)
-                  :else (:fg style))
+                  ;; water/lava: dancing colors (randomized each frame, big variation)
+                  (= tile 3) (let [[r g b] (:fg style)]
+                               [(max 0 (+ r (- (rand-int 30) 15)))
+                                (max 0 (+ g (- (rand-int 30) 15)))
+                                (max 0 (+ b (- (rand-int 40) 20)))])
+                  (= tile 4) (let [[r g b] (:fg style)]
+                               [(max 0 (+ r (- (rand-int 20) 10)))
+                                (max 0 (+ g (- (rand-int 20) 10)))
+                                (max 0 (+ b (- (rand-int 30) 15)))])
+                  (= tile 7) (let [[r g b] (:fg style)]
+                               [(max 0 (+ r (- (rand-int 50) 25)))
+                                (max 0 (+ g (- (rand-int 40) 20)))
+                                (max 0 (+ b (rand-int 15)))])
+                  ;; all other tiles: subtle deterministic jitter
+                  :else (jitter-color (:fg style) x y 6))
             bg0 (cond
                   (= tile 15) [(+ 80 (rand-int 60)) (+ 20 (rand-int 30)) (rand-int 15)]
                   (= tile 2) (jitter-color (:bg style) x y 8)
-                  :else (:bg style))]
+                  (= tile 3) (let [[r g b] (:bg style)]
+                               [(max 0 (+ r (- (rand-int 15) 7)))
+                                (max 0 (+ g (- (rand-int 15) 7)))
+                                (max 0 (+ b (- (rand-int 25) 12)))])
+                  (= tile 4) (let [[r g b] (:bg style)]
+                               [(max 0 (+ r (- (rand-int 10) 5)))
+                                (max 0 (+ g (- (rand-int 10) 5)))
+                                (max 0 (+ b (- (rand-int 20) 10)))])
+                  (= tile 7) (let [[r g b] (:bg style)]
+                               [(max 0 (+ r (- (rand-int 40) 20)))
+                                (max 0 (+ g (- (rand-int 20) 10)))
+                                (max 0 (+ b (rand-int 8)))])
+                  :else (jitter-color (:bg style) x y 3))]
         ;; apply stain (fg stronger tint), gas, lighting
         (let [stain-int (if (and stain (map? stain)) (or (:intensity stain) 1) 0)
               fg1 (if (> stain-int 0)
@@ -80,8 +118,8 @@
       remembered
       (let [style (style-tile remembered)
             ch (get terrain/tile-chars remembered "?")
-            [fr fg fb] (dim-color (:fg style) memory-dim)
-            [br bgg bb] (dim-color (:bg style) memory-dim)]
+            [fr fg fb] (memory-color (:fg style))
+            [br bgg bb] (memory-color (:bg style))]
         (term/set-fg fr fg fb)
         (term/set-bg br bgg bb)
         (term/write ch))

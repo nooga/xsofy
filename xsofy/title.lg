@@ -45,7 +45,9 @@
    "Blade" "Sceptre" "Trinket" "Trophy" "Artifact" "Relic" "Treasure"
    "Grimoire" "Codex"  "Book" "Journal"
    "Pendant" "Brazier"  "Codpiece" "Paren" "Chalice" "Crystal"
-   "Ladle" "Bucket" "Spatula" "Sock" "Pamphlet" "Invoice"])
+   "Ladle" "Bucket" "Spatula" "Sock" "Pamphlet" "Invoice"
+   "Cummerbund" "Umbrella" "Gazebo" "Chain" "Seq" "Map" "Key"
+   "Toothpick" "Comb" "Can"])
 
 (def quest-qs
   ["Yendor" "Splendor" "Closing" "Concern" "Radiance"
@@ -55,7 +57,8 @@
    "Plausible Authority" "Borrowed Confidence" "Forgotten Knowledge"
    "Vague Importance" "Terms and Conditions" "Pointed Remarks"
    "Strongly Worded Letters" "Unsorted Collections" "Limited Shelf Life"
-   "Infinite Loops" "Unmatched Delimiters" "Lost Semicolons" "Futility"])
+   "Infinite Loops" "Unmatched Delimiters" "Lost Semicolons" "Futility"
+   "Parens"])
 
 (def gate-messages
   ["The gate slams shut behind you. No going back."

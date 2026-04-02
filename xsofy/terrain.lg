@@ -19,7 +19,9 @@
    13 ">"   ; stairs-down
    14 "<"   ; stairs-up
    15 "^"   ; fire
-   16 "."}) ; ash
+   16 "."   ; ash
+   17 "="   ; walkway (wooden bridge)
+   18 "."}) ; trampled grass
 
 (def tile-styles
   {0  {:fg [30 30 30]    :bg [10 10 10]}
@@ -38,18 +40,20 @@
    13 {:fg [255 255 200] :bg [22 20 18]}       ; stairs-down
    14 {:fg [200 200 150] :bg [22 20 18]}       ; stairs-up
    15 {:fg [255 160 30]  :bg [120 40 10]}      ; fire: orange (base, jittered per frame)
-   16 {:fg [50 48 45]    :bg [18 17 16]}})     ; ash: gray
+   16 {:fg [50 48 45]    :bg [18 17 16]}       ; ash: gray
+   17 {:fg [120 85 40]   :bg [55 35 15]}       ; walkway: warm wood
+   18 {:fg [30 55 22]    :bg [20 24 16]}})     ; trampled grass: darker, flattened
 
 ;; light radius emitted by certain tiles
 (def tile-light
-  {7  {:radius 3 :color [200 80 20]}           ; lava: red-orange glow
-   9  {:radius 4 :color [200 150 60]}          ; torch: warm orange glow
+  {7  {:radius 4 :color [200 80 20]}           ; lava: red-orange glow
+   9  {:radius 6 :color [200 150 60]}          ; torch: warm orange glow, bigger radius
    15 {:radius 3 :color [220 120 30]}})        ; fire: warm orange
 
-(def flammable-tiles #{2})                        ; grass burns
+(def flammable-tiles #{2 17 18})                   ; grass + walkways + trampled grass burn
 
-(def walkable-tiles #{1 2 3 5 10 12 13 14 15 16}) ; fire + ash walkable
-(def transparent-tiles #{0 1 2 3 4 5 6 7 10 12 13 14 15 16}) ; + fire, ash
+(def walkable-tiles #{1 2 3 5 10 12 13 14 15 16 17 18}) ; + walkway + trampled
+(def transparent-tiles #{0 1 2 3 4 5 6 7 10 12 13 14 15 16 17 18}) ; + walkway + trampled
 
 ;; --- Terrain Access ---
 
@@ -63,6 +67,9 @@
 (defn tset! [grid w x y v]
   (aset grid (+ x (* y w)) v))
 
+(defn in-bounds? [w h x y]
+  (and (>= x 1) (< x (dec w)) (>= y 1) (< y (dec h))))
+
 (defn walkable? [grid w h x y]
   (when (and (>= x 0) (< x w) (>= y 0) (< y h))
     (contains? walkable-tiles (tget grid w x y))))
@@ -72,6 +79,13 @@
     (contains? transparent-tiles (tget grid w x y))
     false))
 
+;; --- Trampling ---
+
+(defn trample! [grid w x y]
+  "If (x,y) is grass, trample it."
+  (when (= 2 (tget grid w x y))
+    (tset! grid w x y 18)))
+
 ;; --- Terrain Helpers ---
 
 (defn make-terrain [w h]
@@ -79,6 +93,89 @@
     (dotimes [i (* w h)]
       (aset grid i 8))
     grid))
+
+;; --- Cellular Automata Blob ---
+;; Generates organic shapes for caves, lakes, grass patches.
+;; birth/survive are sets of neighbor counts.
+
+(defn ca-step [cells bw bh birth survive]
+  (let [out (int-array (* bw bh))]
+    (dotimes [y bh]
+      (dotimes [x bw]
+        (let [neighbors (atom 0)]
+          (doseq [dy (range -1 2)]
+            (doseq [dx (range -1 2)]
+              (when-not (and (= dx 0) (= dy 0))
+                (let [nx (+ x dx) ny (+ y dy)]
+                  (when (and (>= nx 0) (< nx bw) (>= ny 0) (< ny bh)
+                             (> (aget cells (+ nx (* ny bw))) 0))
+                    (swap! neighbors inc))))))
+          (let [alive (> (aget cells (+ x (* y bw))) 0)
+                n @neighbors
+                new-alive (if alive
+                            (contains? survive n)
+                            (contains? birth n))]
+            (aset out (+ x (* y bw)) (if new-alive 1 0))))))
+    out))
+
+(defn generate-blob
+  "Generate an organic blob via cellular automata.
+   Returns {:cells int-array :x :y :w :h} of bounding box, or nil if too small."
+  [bw bh seed-pct rounds birth survive min-w min-h]
+  (let [cells (atom (int-array (* bw bh)))]
+    ;; seed with random noise
+    (dotimes [i (* bw bh)]
+      (aset @cells i (if (< (rand-int 100) seed-pct) 1 0)))
+    ;; run CA rounds
+    (dotimes [_ rounds]
+      (reset! cells (ca-step @cells bw bh birth survive)))
+    ;; find largest connected blob via flood fill
+    (let [labels (int-array (* bw bh))
+          label-id (atom 1)
+          sizes (atom {})]
+      (dotimes [y bh]
+        (dotimes [x bw]
+          (when (and (> (aget @cells (+ x (* y bw))) 0)
+                     (= (aget labels (+ x (* y bw))) 0))
+            ;; flood fill with current label
+            (let [lid @label-id
+                  queue (atom [[x y]])
+                  size (atom 0)]
+              (while (seq @queue)
+                (let [[cx cy] (first @queue)]
+                  (swap! queue rest)
+                  (let [idx (+ cx (* cy bw))]
+                    (when (and (>= cx 0) (< cx bw) (>= cy 0) (< cy bh)
+                               (> (aget @cells idx) 0)
+                               (= (aget labels idx) 0))
+                      (aset labels idx lid)
+                      (swap! size inc)
+                      (swap! queue conj [(inc cx) cy])
+                      (swap! queue conj [(dec cx) cy])
+                      (swap! queue conj [cx (inc cy)])
+                      (swap! queue conj [cx (dec cy)])))))
+              (swap! sizes assoc lid @size)
+              (swap! label-id inc)))))
+      ;; pick largest blob
+      (when (seq @sizes)
+        (let [best-label (first (apply max-key second @sizes))
+              ;; collect cells and find bounds
+              min-x (atom bw) max-x (atom 0)
+              min-y (atom bh) max-y (atom 0)
+              result (int-array (* bw bh))]
+          (dotimes [y bh]
+            (dotimes [x bw]
+              (when (= (aget labels (+ x (* y bw))) best-label)
+                (aset result (+ x (* y bw)) 1)
+                (when (< x @min-x) (reset! min-x x))
+                (when (> x @max-x) (reset! max-x x))
+                (when (< y @min-y) (reset! min-y y))
+                (when (> y @max-y) (reset! max-y y)))))
+          (let [rw (inc (- @max-x @min-x))
+                rh (inc (- @max-y @min-y))]
+            (when (and (>= rw min-w) (>= rh min-h))
+              {:cells result :bw bw :bh bh
+               :x @min-x :y @min-y :w rw :h rh})))))))
 
 ;; --- Carving ---
 
@@ -99,104 +196,471 @@
     (doseq [y (range lo (inc hi))]
       (tset! grid w x y 1))))
 
+;; --- Cave Rooms ---
+;; Carve an organic cave shape into the grid at a given position.
+
+(defn carve-cave-room! [grid w h cx cy]
+  "Carve a cave room centered near cx,cy. Returns center point or nil."
+  (let [cave-w (+ 8 (rand-int 10))
+        cave-h (+ 6 (rand-int 6))
+        blob (generate-blob cave-w cave-h 55 5
+                            #{5 6 7 8} #{4 5 6 7 8}
+                            4 3)]
+    (when blob
+      (let [ox (- cx (quot (:w blob) 2))
+            oy (- cy (quot (:h blob) 2))
+            ;; collect all carved cells to find true center
+            carved (atom [])]
+        (dotimes [by (:bh blob)]
+          (dotimes [bx (:bw blob)]
+            (when (> (aget (:cells blob) (+ bx (* by (:bw blob)))) 0)
+              (let [tx (+ ox bx) ty (+ oy by)]
+                (when (in-bounds? w h tx ty)
+                  (tset! grid w tx ty 1)
+                  (swap! carved conj [tx ty]))))))
+        (when (seq @carved)
+          ;; return the middle cell of all carved positions
+          (let [mid (quot (count @carved) 2)]
+            (nth @carved mid)))))))
+
+;; --- Connectivity Check ---
+;; BFS flood fill to count reachable floor tiles from a start point.
+
+(def floor-tiles #{1 2 3 5 10 11 12 13 14 15 16 17 18})
+
+(defn flood-count [grid w h sx sy]
+  "Count reachable floor tiles from (sx,sy)."
+  (let [visited (int-array (* w h))
+        queue (atom [[sx sy]])
+        cnt (atom 0)]
+    (while (seq @queue)
+      (let [[cx cy] (first @queue)]
+        (swap! queue rest)
+        (let [idx (+ cx (* cy w))]
+          (when (and (>= cx 0) (< cx w) (>= cy 0) (< cy h)
+                     (= (aget visited idx) 0)
+                     (contains? floor-tiles (tget grid w cx cy)))
+            (aset visited idx 1)
+            (swap! cnt inc)
+            (swap! queue conj [(inc cx) cy])
+            (swap! queue conj [(dec cx) cy])
+            (swap! queue conj [cx (inc cy)])
+            (swap! queue conj [cx (dec cy)])))))
+    @cnt))
+
+(defn count-all-floor [grid w h]
+  "Count total floor tiles on the map."
+  (let [cnt (atom 0)]
+    (dotimes [y h]
+      (dotimes [x w]
+        (when (contains? floor-tiles (tget grid w x y))
+          (swap! cnt inc))))
+    @cnt))
+
+(defn is-connected? [grid w h]
+  "Check if all floor tiles are reachable from some floor tile."
+  (let [start (atom nil)]
+    (dotimes [y h]
+      (dotimes [x w]
+        (when (and (nil? @start) (contains? floor-tiles (tget grid w x y)))
+          (reset! start [x y]))))
+    (if (nil? @start)
+      true
+      (let [[sx sy] @start
+            reachable (flood-count grid w h sx sy)
+            total (count-all-floor grid w h)]
+        (= reachable total)))))
+
+;; --- Lake Placement ---
+;; Generate blob-shaped lakes and place them without breaking connectivity.
+
+(defn place-lake!
+  "Place a blob lake of the given type. deep-tile is the interior,
+   shallow-tile (or nil) is the wreath around it.
+   size-class: :small (6-12), :medium (12-22), :large (20-35).
+   Returns true if placed."
+  [grid w h deep-tile shallow-tile wreath-width size-class]
+  (let [[min-w extra-w min-h extra-h] (case (or size-class :medium)
+                                         :small  [6 6 4 4]
+                                         :medium [12 10 6 6]
+                                         :large  [20 15 10 8])
+        lake-w (+ min-w (rand-int extra-w))
+        lake-h (+ min-h (rand-int extra-h))
+        blob (generate-blob lake-w lake-h 55 5
+                            #{5 6 7 8} #{4 5 6 7 8}
+                            3 3)]
+    (when blob
+      ;; try up to 30 random placements
+      (let [placed (atom false)]
+        (dotimes [_ 30]
+          (when-not @placed
+            (let [ox (+ 2 (rand-int (max 1 (- w lake-w 4))))
+                  oy (+ 2 (rand-int (max 1 (- h lake-h 4))))
+                  ;; check: would this break connectivity?
+                  ;; snapshot grid, apply, test, revert if bad
+                  backup (byte-array (* w h))]
+              ;; save affected region
+              (dotimes [i (* w h)]
+                (aset backup i (aget grid i)))
+              ;; carve deep lake
+              (dotimes [by (:bh blob)]
+                (dotimes [bx (:bw blob)]
+                  (when (> (aget (:cells blob) (+ bx (* by (:bw blob)))) 0)
+                    (let [tx (+ ox bx) ty (+ oy by)]
+                      (when (and (in-bounds? w h tx ty)
+                                 (let [t (tget grid w tx ty)] (or (= 1 t) (= 2 t))))
+                        (tset! grid w tx ty deep-tile))))))
+              ;; carve shallow wreath
+              (when (and shallow-tile (> wreath-width 0))
+                (dotimes [by (:bh blob)]
+                  (dotimes [bx (:bw blob)]
+                    (when (> (aget (:cells blob) (+ bx (* by (:bw blob)))) 0)
+                      (doseq [dy (range (- wreath-width) (inc wreath-width))]
+                        (doseq [dx (range (- wreath-width) (inc wreath-width))]
+                          (when (<= (+ (* dx dx) (* dy dy)) (* wreath-width wreath-width))
+                            (let [tx (+ ox bx dx) ty (+ oy by dy)]
+                              (when (and (in-bounds? w h tx ty)
+                                         (let [t (tget grid w tx ty)] (or (= 1 t) (= 2 t))))
+                                (tset! grid w tx ty shallow-tile))))))))))
+              ;; check connectivity
+              (if (is-connected? grid w h)
+                (reset! placed true)
+                ;; revert
+                (dotimes [i (* w h)]
+                  (aset grid i (aget backup i)))))))
+        @placed))))
+
+;; --- Probability Flood Spread ---
+;; Brogue-style spreading: start at a point, flood outward with decreasing probability.
+;; Each wave tries to spread to 4-neighbors at (prob)%, then prob decreases by decrement.
+;; Produces large organic patches that can fill entire rooms.
+
+(defn spread-feature! [grid w h sx sy tile start-prob decrement allowed-tiles]
+  (let [visited (int-array (* w h))
+        ;; wave 0: seed
+        _ (aset visited (+ sx (* sy w)) 1)
+        wave (atom [[sx sy]])
+        prob (atom start-prob)]
+    (while (and (seq @wave) (> @prob 0))
+      (let [next-wave (atom [])]
+        (doseq [[cx cy] @wave]
+          (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
+            (let [nx (+ cx dx) ny (+ cy dy)
+                  idx (+ nx (* ny w))]
+              (when (and (in-bounds? w h nx ny)
+                         (= (aget visited idx) 0)
+                         (contains? allowed-tiles (tget grid w nx ny))
+                         (< (rand-int 100) @prob))
+                (aset visited idx 1)
+                (tset! grid w nx ny tile)
+                (swap! next-wave conj [nx ny])))))
+        (reset! wave @next-wave)
+        (swap! prob - decrement)))))
+
+;; --- Grass Patches ---
+;; Brogue-style: pick a random floor tile, spread grass from it.
+;; start-prob 75, decrement 5 = can fill entire rooms.
+
+(defn place-grass-patch! [grid w h]
+  (let [;; find a random floor tile to seed from
+        attempts 30
+        found (atom nil)]
+    (dotimes [_ attempts]
+      (when-not @found
+        (let [x (+ 1 (rand-int (- w 2)))
+              y (+ 1 (rand-int (- h 2)))]
+          (when (= 1 (tget grid w x y))
+            (reset! found [x y])))))
+    (when @found
+      (let [[sx sy] @found]
+        (tset! grid w sx sy 2)
+        (spread-feature! grid w h sx sy 2 75 5 #{1})))))
+
+;; --- Bridge Building ---
+;; After lakes are placed, scan for bridge opportunities.
+;; A bridge connects two walkable shores across a bridgeable gap (chasm or deep water).
+;; Only build if it meaningfully shortens the walking distance between the shores.
+;; Both horizontal and vertical bridges. Bridges must be 2-8 tiles of gap.
+
+(def bridgeable-tiles #{6 4})  ;; chasm, deep water
+
+(defn walk-distance
+  "BFS shortest path distance between two points over walkable tiles.
+   Returns distance or nil if unreachable. Caps search at max-dist."
+  [grid w h sx sy tx ty max-dist]
+  (let [visited (int-array (* w h))
+        queue (atom [[sx sy 0]])]
+    (aset visited (+ sx (* sy w)) 1)
+    (loop []
+      (when (seq @queue)
+        (let [[cx cy dist] (first @queue)]
+          (swap! queue rest)
+          (if (and (= cx tx) (= cy ty))
+            dist
+            (when (< dist max-dist)
+              (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
+                (let [nx (+ cx dx) ny (+ cy dy)
+                      idx (+ nx (* ny w))]
+                  (when (and (>= nx 0) (< nx w) (>= ny 0) (< ny h)
+                             (= (aget visited idx) 0)
+                             (contains? walkable-tiles (tget grid w nx ny)))
+                    (aset visited idx 1)
+                    (swap! queue conj [nx ny (inc dist)]))))
+              (recur))))))))
+
+(defn try-bridge
+  "Scan from (x,y) in direction (dx,dy) for a bridge opportunity.
+   Returns [end-x end-y span] or nil."
+  [grid w h x y dx dy]
+  (let [;; starting tile must be walkable
+        start-tile (tget grid w x y)]
+    (when (contains? walkable-tiles start-tile)
+      ;; step into the gap
+      (let [gx (atom (+ x dx)) gy (atom (+ y dy))
+            span (atom 0)]
+        (while (and (in-bounds? w h @gx @gy)
+                    (contains? bridgeable-tiles (tget grid w @gx @gy))
+                    (< @span 8))
+          ;; check flanks: sides of the bridge must be wall or gap (not open floor)
+          (let [fx (- dy) fy dx  ;; perpendicular
+                left-tile (tget grid w (+ @gx fx) (+ @gy fy))
+                right-tile (tget grid w (- @gx fx) (- @gy fy))]
+            (when-not (and (or (= 8 left-tile) (contains? bridgeable-tiles left-tile))
+                           (or (= 8 right-tile) (contains? bridgeable-tiles right-tile)))
+              ;; open exposure on one side — that's fine, but track it
+              nil))
+          (swap! span inc)
+          (swap! gx + dx)
+          (swap! gy + dy))
+        ;; check: did we land on walkable ground?
+        (when (and (>= @span 2) (<= @span 8)
+                   (in-bounds? w h @gx @gy)
+                   (contains? walkable-tiles (tget grid w @gx @gy)))
+          [@gx @gy @span])))))
+
+(defn build-bridges!
+  "Scan the grid for bridge opportunities. Build bridges that shorten
+   pathing distance by at least 3x the bridge length. Repeat until
+   no more useful bridges found."
+  [grid w h]
+  (let [built-any (atom true)
+        total (atom 0)]
+    (while (and @built-any (< @total 6))
+      (reset! built-any false)
+      ;; shuffle scan order for variety
+      (let [coords (shuffle (for [y (range 1 (dec h)) x (range 1 (dec w))] [x y]))]
+        (doseq [[x y] coords]
+          (when (and (not @built-any) (< @total 6)
+                     (contains? walkable-tiles (tget grid w x y)))
+            ;; try all 4 directions
+            (doseq [[dx dy] [[1 0] [0 1] [-1 0] [0 -1]]]
+              (when (and (not @built-any) (< @total 6))
+                (when-let [[ex ey span] (try-bridge grid w h x y dx dy)]
+                  ;; would this bridge shorten the walk significantly?
+                  (let [detour (walk-distance grid w h x y ex ey (* span 6))]
+                    (when (or (nil? detour)           ;; unreachable = definitely bridge
+                              (> detour (* span 3)))  ;; detour > 3x bridge length
+                      ;; build it
+                      (let [bx (atom (+ x dx)) by (atom (+ y dy))]
+                        (dotimes [_ span]
+                          (tset! grid w @bx @by 17)
+                          (swap! bx + dx)
+                          (swap! by + dy)))
+                      (swap! total inc)
+                      (reset! built-any true))))))))))))
+
+;; --- Room Attachment ---
+;; After initial rooms are placed, try to grow new rooms from existing walls.
+;; This fills in empty space and creates a tighter, more Brogue-like layout.
+
+(defn find-wall-attachment-point [grid w h]
+  "Find a wall tile adjacent to floor on one side and solid wall on the other.
+   Returns [wall-x wall-y floor-dx floor-dy] or nil."
+  (let [candidates (atom [])]
+    (dotimes [y h]
+      (dotimes [x w]
+        (when (and (in-bounds? w h x y) (= 8 (tget grid w x y)))
+          ;; check 4 directions: need floor on one side, wall on the other
+          (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
+            (let [fx (+ x dx) fy (+ y dy)    ;; floor side
+                  bx (- x dx) by (- y dy)]   ;; back side (where new room goes)
+              (when (and (in-bounds? w h fx fy)
+                         (in-bounds? w h bx by)
+                         (contains? #{1 2 18} (tget grid w fx fy))
+                         (= 8 (tget grid w bx by))
+                         ;; make sure there's space behind for a room
+                         (let [rx (+ bx (* (- dx) 2)) ry (+ by (* (- dy) 2))]
+                           (and (in-bounds? w h rx ry)
+                                (= 8 (tget grid w rx ry)))))
+                (swap! candidates conj [x y (- dx) (- dy)])))))))
+    (when (seq @candidates)
+      (nth @candidates (rand-int (count @candidates))))))
+
+(defn attach-room! [grid w h rooms]
+  "Try to attach a new room to an existing wall. Returns new room center or nil."
+  (when-let [[wx wy dx dy] (find-wall-attachment-point grid w h)]
+    ;; carve a room in the direction away from existing floor
+    (let [rw (+ 4 (rand-int 6))
+          rh (+ 3 (rand-int 4))
+          ;; position room based on direction
+          x1 (if (> dx 0) (+ wx 1) (if (< dx 0) (- wx rw) (- wx (quot rw 2))))
+          y1 (if (> dy 0) (+ wy 1) (if (< dy 0) (- wy rh) (- wy (quot rh 2))))
+          x2 (+ x1 rw -1)
+          y2 (+ y1 rh -1)
+          ;; clamp
+          x1 (max 1 x1) y1 (max 1 y1)
+          x2 (min (- w 2) x2) y2 (min (- h 2) y2)]
+      ;; check that area is all wall (no overlap with existing rooms)
+      (let [all-wall (atom true)]
+        (doseq [ry (range y1 (inc y2))]
+          (doseq [rx (range x1 (inc x2))]
+            (when (not= 8 (tget grid w rx ry))
+              (reset! all-wall false))))
+        (when @all-wall
+          ;; carve it
+          (carve-room! grid w x1 y1 x2 y2)
+          ;; open the wall tile as a door or floor
+          (tset! grid w wx wy (if (< (rand) 0.3) 11 1))
+          (let [cx (quot (+ x1 x2) 2) cy (quot (+ y1 y2) 2)]
+            (swap! rooms conj [cx cy])
+            [cx cy]))))))
+
 ;; --- Level Generation ---
 
-(defn generate-level [w h]
+(defn ensure-connectivity! [grid w h rooms]
+  "If the map is disconnected, carve extra corridors between room centers
+   until everything is reachable."
+  (let [rs (vec rooms)]
+    (when (> (count rs) 1)
+      (dotimes [attempt 20]
+        (when-not (is-connected? grid w h)
+          ;; pick two random room centers and connect them
+          (let [[x1 y1] (nth rs (rand-int (count rs)))
+                [x2 y2] (nth rs (rand-int (count rs)))]
+            (if (< (rand) 0.5)
+              (do (carve-h-corridor! grid w x1 x2 y1)
+                  (carve-v-corridor! grid w y1 y2 x2))
+              (do (carve-v-corridor! grid w y1 y2 x1)
+                  (carve-h-corridor! grid w x1 x2 y2)))))))))
+
+(defn place-room-in-sector!
+  "Place a room (rect or cave) in a given sector of the map."
+  [grid w h rooms sx sy sw sh cave-chance]
+  (let [use-cave (< (rand) cave-chance)
+        ;; pick a point within the sector
+        rx (+ sx 2 (rand-int (max 1 (- sw 5))))
+        ry (+ sy 2 (rand-int (max 1 (- sh 5))))]
+    (if use-cave
+      (when-let [center (carve-cave-room! grid w h rx ry)]
+        (swap! rooms conj center))
+      (let [rw (+ 4 (rand-int 7))
+            rh (+ 3 (rand-int 4))
+            x1 (max 1 (min (- w rw 1) rx))
+            y1 (max 1 (min (- h rh 1) ry))
+            x2 (min (- w 2) (+ x1 rw -1))
+            y2 (min (- h 2) (+ y1 rh -1))]
+        (carve-room! grid w x1 y1 x2 y2)
+        (swap! rooms conj [(quot (+ x1 x2) 2) (quot (+ y1 y2) 2)])))))
+
+(defn generate-level
+  ([w h] (generate-level w h 1))
+  ([w h depth]
   (let [grid (make-terrain w h)
         rooms (atom [])
-        num-rooms (+ 5 (rand-int 6))]
-    (dotimes [_ num-rooms]
-      (let [rw (+ 4 (rand-int 8))
-            rh (+ 3 (rand-int 5))
-            rx (+ 1 (rand-int (- w rw 2)))
-            ry (+ 1 (rand-int (- h rh 2)))]
-        (carve-room! grid w rx ry (+ rx rw -1) (+ ry rh -1))
-        (swap! rooms conj [(+ rx (quot rw 2)) (+ ry (quot rh 2))])))
-    (doseq [i (range 1 (count @rooms))]
-      (let [[x1 y1] (nth @rooms (dec i))
-            [x2 y2] (nth @rooms i)]
-        (if (< (rand) 0.5)
-          (do (carve-h-corridor! grid w x1 x2 y1)
-              (carve-v-corridor! grid w y1 y2 x2))
-          (do (carve-v-corridor! grid w y1 y2 x1)
-              (carve-h-corridor! grid w x1 x2 y2)))))
-    ;; place doors at corridor-room junctions
+        cave-chance (min 0.6 (+ 0.25 (* depth 0.05)))
+        ;; divide map into a grid of sectors for even room distribution
+        cols 3
+        rows 2
+        sw (quot w cols)
+        sh (quot h rows)]
+
+    ;; === Phase 1a: Place 1-2 rooms per sector for even coverage ===
+    (doseq [sy (range rows)]
+      (doseq [sx (range cols)]
+        (let [x0 (* sx sw) y0 (* sy sh)]
+          (place-room-in-sector! grid w h rooms x0 y0 sw sh cave-chance)
+          ;; second room in some sectors
+          (when (< (rand) 0.6)
+            (place-room-in-sector! grid w h rooms x0 y0 sw sh cave-chance)))))
+
+    ;; === Phase 1b: A few more random rooms for variety ===
+    (dotimes [_ (+ 2 (rand-int 3))]
+      (place-room-in-sector! grid w h rooms 0 0 w h cave-chance))
+
+    ;; === Phase 2: Connect rooms with corridors ===
+    ;; Shuffle rooms so corridors don't always go sector-by-sector
+    (let [shuffled (shuffle @rooms)]
+      (reset! rooms shuffled)
+      (doseq [i (range 1 (count @rooms))]
+        (let [[x1 y1] (nth @rooms (dec i))
+              [x2 y2] (nth @rooms i)]
+          (if (< (rand) 0.5)
+            (do (carve-h-corridor! grid w x1 x2 y1)
+                (carve-v-corridor! grid w y1 y2 x2))
+            (do (carve-v-corridor! grid w y1 y2 x1)
+                (carve-h-corridor! grid w x1 x2 y2))))))
+
+    ;; === Phase 2b: Attach extra rooms to walls to fill space ===
+    (dotimes [_ 30]
+      (attach-room! grid w h rooms))
+
+    ;; === Phase 2c: Ensure connectivity ===
+    (ensure-connectivity! grid w h @rooms)
+
+    ;; === Phase 3: Place doors at corridor junctions (fewer: ~30%) ===
     (doseq [y (range 1 (dec h))]
       (doseq [x (range 1 (dec w))]
-        (when (= 1 (tget grid w x y))  ;; floor tile
-          ;; door candidate: wall on N+S and floor on E+W, or wall on E+W and floor on N+S
+        (when (= 1 (tget grid w x y))
           (let [n (tget grid w x (dec y))
                 s (tget grid w x (inc y))
                 e (tget grid w (inc x) y)
-                ww (tget grid w (dec x) y)
-                h-door (and (= 8 n) (= 8 s) (= 1 e) (= 1 ww))
-                v-door (and (= 8 e) (= 8 ww) (= 1 n) (= 1 s))]
-            (when (and (or h-door v-door) (< (rand) 0.6))
+                wt (tget grid w (dec x) y)
+                h-door (and (= 8 n) (= 8 s) (= 1 e) (= 1 wt))
+                v-door (and (= 8 e) (= 8 wt) (= 1 n) (= 1 s))]
+            (when (and (or h-door v-door) (< (rand) 0.3))
               (tset! grid w x y 11))))))
-    ;; scatter grass/fungus in some rooms
-    (doseq [y (range 1 (dec h))]
-      (doseq [x (range 1 (dec w))]
-        (when (and (= 1 (tget grid w x y))
-                   (< (rand) 0.15))
-          (tset! grid w x y 2))))
-    ;; place torches on walls (adjacent to floor, ~10% chance)
+
+    ;; === Phase 4: Lakes ===
+    ;; Water lakes — 2 to 3 per level, mix of medium and large
+    (dotimes [_ (+ 2 (rand-int 2))]
+      (place-lake! grid w h 4 3 2
+                   (if (< (rand) 0.4) :large :medium)))
+
+    ;; Chasm — common, can be very large (Brogue-style, up to 1/3 of level)
+    (when (< (rand) 0.6)
+      (place-lake! grid w h 6 10 1
+                   (if (< (rand) 0.5) :large :medium)))
+
+    ;; Lava — scales with depth. Absent on floor 1, rare on 2-3, common on 4+
+    ;; Lava — Brogue style: absent before depth 4, then 33% chance per level
+    (when (>= depth 4)
+      (when (< (rand) 0.33)
+        (place-lake! grid w h 7 nil 0
+                     (if (>= depth 7) :medium :small))))
+
+    ;; === Phase 5: Grass patches — generous, 4-8 patches ===
+    (dotimes [_ (+ 4 (rand-int 5))]
+      (place-grass-patch! grid w h))
+
+    ;; === Phase 6: Build bridges across chasms/water ===
+    (build-bridges! grid w h)
+
+    ;; === Phase 7: Torches on walls ===
     (doseq [y (range 1 (dec h))]
       (doseq [x (range 1 (dec w))]
         (when (and (= 8 (tget grid w x y))
                    (< (rand) 0.04))
-          ;; only if adjacent to a floor tile
           (let [adj-floor (or (contains? walkable-tiles (tget grid w (inc x) y))
                               (contains? walkable-tiles (tget grid w (dec x) y))
                               (contains? walkable-tiles (tget grid w x (inc y)))
                               (contains? walkable-tiles (tget grid w x (dec y))))]
             (when adj-floor
               (tset! grid w x y 9))))))
-    ;; occasional shallow water pools
-    (dotimes [_ (rand-int 3)]
-      (let [px (+ 2 (rand-int (- w 4)))
-            py (+ 2 (rand-int (- h 4)))]
-        (when (= 1 (tget grid w px py))
-          (doseq [dy (range -1 2)]
-            (doseq [dx (range -1 2)]
-              (let [tx (+ px dx) ty (+ py dy)]
-                (when (and (= 1 (tget grid w tx ty))
-                           (< (rand) 0.6))
-                  (tset! grid w tx ty 3))))))))
-    ;; occasional chasm with ledge border (30% chance)
-    (when (< (rand) 0.3)
-      (let [px (+ 3 (rand-int (- w 6)))
-            py (+ 3 (rand-int (- h 6)))
-            radius (+ 1 (rand-int 2))]
-        ;; carve chasm with ledge border — only in open floor
-        (doseq [dy (range (- (inc radius)) (+ radius 2))]
-          (doseq [dx (range (- (inc radius)) (+ radius 2))]
-            (let [tx (+ px dx) ty (+ py dy)
-                  dist-sq (+ (* dx dx) (* dy dy))
-                  tile (tget grid w tx ty)]
-              (when (or (= tile 1) (= tile 2))
-                (cond
-                  ;; inner: chasm
-                  (<= dist-sq (* radius radius))
-                  (tset! grid w tx ty 6)
-                  ;; ring: ledge
-                  (<= dist-sq (* (inc radius) (inc radius)))
-                  (tset! grid w tx ty 10))))))))
-    ;; occasional lava pool (20% chance)
-    (when (< (rand) 0.2)
-      (let [px (+ 2 (rand-int (- w 4)))
-            py (+ 2 (rand-int (- h 4)))]
-        (when (= 1 (tget grid w px py))
-          (tset! grid w px py 7)
-          (doseq [dy (range -1 2)]
-            (doseq [dx (range -1 2)]
-              (let [tx (+ px dx) ty (+ py dy)]
-                (when (and (or (= 1 (tget grid w tx ty))
-                               (= 2 (tget grid w tx ty)))
-                           (< (rand) 0.4))
-                  (tset! grid w tx ty 7))))))))
-    ;; stairs
+
+    ;; === Phase 8: Stairs ===
     (let [[sx sy] (first @rooms)
           [ex ey] (last @rooms)]
       (tset! grid w sx sy 14)
       (tset! grid w ex ey 13))
-    {:grid grid :rooms @rooms}))
+
+    {:grid grid :rooms @rooms})))

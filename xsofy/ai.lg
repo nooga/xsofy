@@ -21,8 +21,6 @@
          (not= p1 p2))))
 
 ;; --- Simple Pathfinding ---
-;; Step toward target, preferring cardinal directions
-;; Full A* later — for now, greedy move toward player
 
 (defn sign [n]
   (cond (pos? n) 1 (neg? n) -1 :else 0))
@@ -33,6 +31,10 @@
         dx (sign (- tx fx))
         dy (sign (- ty fy))]
     [dx dy]))
+
+(defn step-away [from to]
+  (let [[dx dy] (step-toward from to)]
+    [(- dx) (- dy)]))
 
 (defn can-move? [world x y entity-id]
   (let [{:keys [terrain width height]} world
@@ -53,6 +55,10 @@
             (snd/deliver-sound world (snd/door-open [x y] ename))))
       world)))
 
+(defn trample-at [world nx ny]
+  (terrain/trample! (:terrain world) (:width world) nx ny)
+  world)
+
 (defn try-move [world entity-id dx dy]
   (let [entity (get-in world [:entities entity-id])
         [ex ey] (:pos entity)
@@ -60,23 +66,45 @@
         ny (+ ey dy)]
     (if (can-move? world nx ny entity-id)
       (-> (open-door-if-needed world entity-id nx ny)
+          (trample-at nx ny)
           (assoc-in [:entities entity-id :pos] [nx ny]))
       ;; try cardinal fallbacks if diagonal blocked
       (cond
         (and (not= dx 0) (not= dy 0)
              (can-move? world (+ ex dx) ey entity-id))
-        (assoc-in world [:entities entity-id :pos] [(+ ex dx) ey])
+        (-> world
+            (trample-at (+ ex dx) ey)
+            (assoc-in [:entities entity-id :pos] [(+ ex dx) ey]))
 
         (and (not= dx 0) (not= dy 0)
              (can-move? world ex (+ ey dy) entity-id))
-        (assoc-in world [:entities entity-id :pos] [ex (+ ey dy)])
+        (-> world
+            (trample-at ex (+ ey dy))
+            (assoc-in [:entities entity-id :pos] [ex (+ ey dy)]))
 
         :else world))))
+
+;; --- Random Walk ---
+
+(def cardinal-dirs [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
+
+(defn random-step [world entity-id]
+  "Take a random walkable step."
+  (let [entity (get-in world [:entities entity-id])
+        [ex ey] (:pos entity)
+        dirs (shuffle cardinal-dirs)
+        valid (first (filter (fn [[dx dy]] (can-move? world (+ ex dx) (+ ey dy) entity-id)) dirs))]
+    (if valid
+      (try-move world entity-id (first valid) (second valid))
+      world)))
 
 ;; --- Awareness ---
 
 (def wake-radius 8)
-(def chase-radius 12)
+(def chase-radius 14)
+(def flee-hp-pct 0.25)    ;; flee below 25% HP
+(def wander-chance 30)    ;; % chance to wander each turn when sleeping
+(def investigate-turns 6) ;; turns to search last known position
 
 (defn can-see-player? [world entity]
   (let [fov (:fov world)
@@ -84,7 +112,14 @@
     ;; simplified: if entity is in player's FOV, assume mutual visibility
     (contains? fov pos)))
 
-;; --- AI State Transitions ---
+;; --- AI State Machine ---
+;; States: :sleep, :wander, :hunt, :investigate, :flee
+;;
+;; :sleep     — standing still, might wander or wake on seeing player
+;; :wander    — roaming randomly, alert to player presence
+;; :hunt      — chasing the player, attacks when adjacent
+;; :investigate — moving to last known player position, then searching
+;; :flee      — running away from player (low HP)
 
 (defn update-ai-state [world entity-id]
   (let [entity (get-in world [:entities entity-id])
@@ -96,22 +131,83 @@
             pos (:pos entity)
             player-pos (:pos player)
             dist (distance pos player-pos)
-            sees-player (can-see-player? world entity)]
+            sees-player (can-see-player? world entity)
+            hp (get-in entity [:body :hp] 1)
+            max-hp (get-in entity [:body :max-hp] 1)
+            low-hp (< (/ (float hp) max-hp) flee-hp-pct)]
         (cond
+          ;; --- From any state: flee if low HP and can see player ---
+          (and low-hp sees-player (< dist chase-radius) (not= state :flee))
+          (-> world
+              (assoc-in [:entities entity-id :ai :state] :flee))
+
+          ;; --- SLEEP ---
           (= state :sleep)
-          (if (and sees-player (< dist wake-radius))
-            (assoc-in world [:entities entity-id :ai :state] :hunt)
-            world)
+          (cond
+            ;; see player nearby → hunt
+            (and sees-player (< dist wake-radius))
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :hunt)
+                (assoc-in [:entities entity-id :ai :target] player-pos))
+            ;; random chance to start wandering
+            (< (rand-int 100) wander-chance)
+            (assoc-in world [:entities entity-id :ai :state] :wander)
+            :else world)
 
+          ;; --- WANDER ---
+          (= state :wander)
+          (cond
+            ;; see player → hunt
+            (and sees-player (< dist wake-radius))
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :hunt)
+                (assoc-in [:entities entity-id :ai :target] player-pos))
+            ;; random chance to go back to sleep
+            (< (rand-int 100) 10)
+            (assoc-in world [:entities entity-id :ai :state] :sleep)
+            :else world)
+
+          ;; --- HUNT ---
           (= state :hunt)
-          (if (or (> dist chase-radius) (not sees-player))
-            (assoc-in world [:entities entity-id :ai :state] :sleep)
-            world)
+          (cond
+            ;; lost sight and out of range → investigate last known pos
+            (and (not sees-player) (> dist chase-radius))
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :investigate)
+                (assoc-in [:entities entity-id :ai :search-turns] investigate-turns))
+            ;; update target if we can see player
+            sees-player
+            (assoc-in world [:entities entity-id :ai :target] player-pos)
+            :else world)
 
+          ;; --- INVESTIGATE ---
+          (= state :investigate)
+          (cond
+            ;; spotted player again → hunt
+            (and sees-player (< dist chase-radius))
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :hunt)
+                (assoc-in [:entities entity-id :ai :target] player-pos))
+            ;; ran out of search turns → sleep
+            (<= (get ai :search-turns 0) 0)
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :sleep)
+                (assoc-in [:entities entity-id :ai :target] nil))
+            :else
+            (update-in world [:entities entity-id :ai :search-turns] dec))
+
+          ;; --- FLEE ---
           (= state :flee)
-          (if (> dist chase-radius)
+          (cond
+            ;; player far away or not visible → sleep
+            (or (> dist chase-radius) (not sees-player))
             (assoc-in world [:entities entity-id :ai :state] :sleep)
-            world)
+            ;; HP recovered → hunt instead
+            (not low-hp)
+            (-> world
+                (assoc-in [:entities entity-id :ai :state] :hunt)
+                (assoc-in [:entities entity-id :ai :target] player-pos))
+            :else world)
 
           :else world)))))
 
@@ -125,11 +221,15 @@
       (let [ai (:ai entity)
             state (get ai :state :sleep)
             pos (:pos entity)
-            player-pos (:pos player)]
+            player-pos (:pos player)
+            target (get ai :target)]
         (if (or (nil? pos) (nil? player-pos))
           world
           (case state
             :sleep world
+
+            :wander
+            (random-step world entity-id)
 
             :hunt
             (if (adjacent? pos player-pos)
@@ -137,9 +237,21 @@
               (let [[dx dy] (step-toward pos player-pos)]
                 (try-move world entity-id dx dy)))
 
+            :investigate
+            (if (and target (not= pos target))
+              ;; move toward last known position
+              (let [[dx dy] (step-toward pos target)]
+                (try-move world entity-id dx dy))
+              ;; at target or no target — search randomly
+              (random-step world entity-id))
+
             :flee
-            (let [[dx dy] (step-toward pos player-pos)]
-              (try-move world entity-id (- dx) (- dy)))
+            (if (adjacent? pos player-pos)
+              ;; cornered — fight back
+              (attack-fn world entity-id :player)
+              ;; run away
+              (let [[dx dy] (step-away pos player-pos)]
+                (try-move world entity-id dx dy)))
 
             ;; default
             world))))))
