@@ -505,8 +505,27 @@
           (consume-item item-id)
           (log-msg "You feel stronger!"))
 
+      :enchant
+      (-> world
+          (assoc :screen :quick-menu :menu-action :enchant :enchant-scroll-id item-id))
+
       ;; default
       (log-msg world (str "You can't use the " iname ".")))))
+
+;; --- Enchanting ---
+
+(defn enchant-item [world target-id scroll-id]
+  "Apply enchant scroll to a weapon or armor. +1 enchant, -1 str req."
+  (let [target (get-in world [:entities target-id])
+        slot (get-in target [:item :slot])
+        iname (or (:item-name target) (name (or (:template target) (:id target))))]
+    (if (or (= slot :weapon) (= slot :armor))
+      (-> world
+          (update-in [:entities target-id :item :enchant] #(inc (or % 0)))
+          (update-in [:entities target-id :item :str-req] #(max 0 (dec (or % 1))))
+          (consume-item scroll-id)
+          (log-msg (str "The " iname " glows brightly! (+1 enchantment)")))
+      (log-msg world "You can't enchant that."))))
 
 ;; --- Tick System ---
 ;; Every entity with :ai has :ticks. Lowest ticks acts next.

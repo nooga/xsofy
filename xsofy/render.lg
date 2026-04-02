@@ -411,6 +411,7 @@
     :unequip "Remove what?"
     :drop "Drop what?"
     :use "Use what?"
+    :enchant "Enchant what?"
     "Select item:"))
 
 (defn menu-filter [world action]
@@ -435,6 +436,9 @@
 
               (= action :use)
               (when (= slot :consumable) [i item-id])
+
+              (= action :enchant)
+              (when (or (= slot :weapon) (= slot :armor)) [i item-id])
 
               :else nil)))
         inv)))))

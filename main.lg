@@ -90,8 +90,11 @@
     (let [item (get-in world [:entities item-id])
           slot (get-in item [:item :slot])]
       (if (= slot :consumable)
-        (-> (world/use-item world item-id)
-            (dissoc :screen :inv-sel))
+        (let [result (world/use-item world item-id)]
+          ;; if use-item opened a submenu (enchant), keep its screen
+          (if (:screen result)
+            (dissoc result :inv-sel)
+            (dissoc result :screen :inv-sel)))
         (assoc world :screen :inventory)))
     (assoc world :screen :inventory)))
 
@@ -99,8 +102,11 @@
   (let [sel (inv-sel world)
         cnt (inv-count world)]
     (cond
-      ;; close
-      (or (= k "\u001b") (= k "i"))
+      ;; close — esc always, i only when nothing selected
+      (= k "\u001b")
+      (-> world (dissoc :screen :inv-sel))
+
+      (and (= k "i") (< sel 0))
       (-> world (dissoc :screen :inv-sel))
 
       ;; navigate
@@ -164,6 +170,13 @@
             (world/use-item world item-id)
             world)
 
+          :enchant
+          (let [scroll-id (:enchant-scroll-id world)]
+            (if scroll-id
+              (-> (world/enchant-item world item-id scroll-id)
+                  (dissoc :enchant-scroll-id :screen :menu-action :menu-sel))
+              world))
+
           world)))))
 
 (defn quick-menu-input [world k]
@@ -184,18 +197,22 @@
 
       ;; space to confirm selection
       (and (= k " ") (>= sel 0) (< sel (count items)))
-      (let [[inv-idx item-id] (nth items sel)]
-        (-> (execute-menu-action world action inv-idx)
-            (dissoc :screen :menu-action :menu-sel)))
+      (let [[inv-idx item-id] (nth items sel)
+            result (execute-menu-action world action inv-idx)]
+        (if (:screen result)
+          (dissoc result :menu-sel)
+          (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id)))
 
       ;; letter key — find matching item by inventory index and execute
       (and (= 1 (count k)) (some? (letter-to-index k)))
       (let [target-idx (letter-to-index k)
             match (first (filter (fn [[inv-idx _]] (= inv-idx target-idx)) items))]
         (if match
-          (let [[inv-idx item-id] match]
-            (-> (execute-menu-action world action inv-idx)
-                (dissoc :screen :menu-action :menu-sel)))
+          (let [[inv-idx item-id] match
+                result (execute-menu-action world action inv-idx)]
+            (if (:screen result)
+              (dissoc result :menu-sel)
+              (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id)))
           world))
 
       :else world)))
