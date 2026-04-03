@@ -11,7 +11,8 @@
             [xsofy.ui :as ui]))
 
 (defn pause! [ms]
-  (async/<!! (async/timeout ms)))
+  (when-not *in-wasm*
+    (async/<!! (async/timeout ms))))
 
 ;; --- Color Helpers ---
 

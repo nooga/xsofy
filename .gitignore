@@ -5,3 +5,4 @@ CLAUDE.md
 debug.log
 *.lgb
 xoy
+dist/

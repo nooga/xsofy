@@ -96,7 +96,8 @@
    [220 120 50]])  ;; amber
 
 (defn pause! [ms]
-  (async/<!! (async/timeout ms)))
+  (when-not *in-wasm*
+    (async/<!! (async/timeout ms))))
 
 ;; --- Title Screen ---
 

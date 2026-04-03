@@ -8,10 +8,11 @@
     (reset! log-file (open "debug.log" :append))))
 
 (defn log [& args]
-  (ensure-log)
-  (when @log-file
-    (write! @log-file (str (apply str (interpose " " args)) "\n"))
-    (flush! @log-file)))
+  (when-not *in-wasm*
+    (ensure-log)
+    (when @log-file
+      (write! @log-file (str (apply str (interpose " " args)) "\n"))
+      (flush! @log-file))))
 
 (defn close-log []
   (when @log-file
