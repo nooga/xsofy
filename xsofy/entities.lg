@@ -276,6 +276,50 @@
       (or (get-in arm [:item :defense]) 0)
       0)))
 
+(def min-split-hp 3) ;; slimes won't split below this HP
+
+(def split-walkable #{1 2 3 5 10 12 13 14 15 16 17 18})
+
+(defn find-split-pos [world pos]
+  "Find an adjacent walkable empty tile for the split spawn."
+  (let [grid (:terrain world)
+        w (:width world)
+        dirs (shuffle [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
+        [px py] pos]
+    (first (filter (fn [[dx dy]]
+                     (let [nx (+ px dx) ny (+ py dy)
+                           tile (aget grid (+ nx (* ny w)))]
+                       (and (contains? split-walkable tile)
+                            (nil? (creature-at world [nx ny])))))
+                   dirs))))
+
+(defn try-split [world id new-hp]
+  "If entity splits on hit and has enough HP, spawn a clone at half HP."
+  (let [entity (get-in world [:entities id])
+        splits (get-in entity [:properties :splits-on-hit])
+        pos (:pos entity)]
+    (if (and splits (>= new-hp min-split-hp))
+      (when-let [dir (find-split-pos world pos)]
+        (let [half-hp (quot new-hp 2)
+              remain-hp (- new-hp half-hp)
+              [dx dy] dir
+              [px py] pos
+              clone-pos [(+ px dx) (+ py dy)]
+              species (:template entity)
+              ;; spawn clone and set its HP
+              w (spawn world species clone-pos)
+              ;; find the clone (last spawned entity of this species)
+              clone-id (last (filter (fn [k]
+                                       (and (= species (:template (get-in w [:entities k])))
+                                            (= clone-pos (:pos (get-in w [:entities k])))))
+                                     (keys (:entities w))))]
+          (when clone-id
+            (-> w
+                (assoc-in [:entities id :body :hp] remain-hp)
+                (assoc-in [:entities clone-id :body :hp] half-hp)
+                (assoc-in [:entities clone-id :body :max-hp] half-hp)))))
+      nil)))
+
 (defn damage-entity [world id amount]
   (let [entity (get-in world [:entities id])
         armor-val (+ (get-in entity [:body :armor] 0)
@@ -298,4 +342,7 @@
                         (spawn-item w drop-type pos))
                       w drops)]
         (remove-entity w id))
-      (assoc-in world [:entities id :body :hp] new-hp))))
+      ;; survived — check for split
+      (let [split-world (try-split world id new-hp)]
+        (or split-world
+            (assoc-in world [:entities id :body :hp] new-hp))))))
