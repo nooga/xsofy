@@ -332,10 +332,12 @@
 (defn -main []
   (init-terminal)
   (try
-    (let [game-title (title/show-title-screen)
+    (let [{:keys [title scheme]} (title/show-title-screen)
           quest (title/generate-quest)
+          _ (title/show-descending-screen 1 scheme)
           world (-> (world/make-world 79 30)
-                    (assoc :title game-title
+                    (assoc :title title
+                           :scheme scheme
                            :quest-item (:item quest))
                     (#(reduce world/log-msg % (:messages quest))))]
       (game-loop world))

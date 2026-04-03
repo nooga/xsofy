@@ -6,3 +6,4 @@ debug.log
 *.lgb
 xoy
 dist/
+.DS_Store

@@ -94,6 +94,13 @@
       (aset grid i 8))
     grid))
 
+;; --- Direction offsets as arrays (no allocation in hot loops) ---
+(def ^:private dir-dx (ints [1 -1 0 0]))
+(def ^:private dir-dy (ints [0 0 1 -1]))
+;; 8-directional for CA neighbor counting
+(def ^:private dir8-dx (ints [-1 0 1 -1 1 -1 0 1]))
+(def ^:private dir8-dy (ints [-1 -1 -1 0 0 1 1 1]))
+
 ;; --- Cellular Automata Blob ---
 ;; Generates organic shapes for caves, lakes, grass patches.
 ;; birth/survive are sets of neighbor counts.
@@ -102,21 +109,55 @@
   (let [out (int-array (* bw bh))]
     (dotimes [y bh]
       (dotimes [x bw]
-        (let [neighbors (atom 0)]
-          (doseq [dy (range -1 2)]
-            (doseq [dx (range -1 2)]
-              (when-not (and (= dx 0) (= dy 0))
-                (let [nx (+ x dx) ny (+ y dy)]
-                  (when (and (>= nx 0) (< nx bw) (>= ny 0) (< ny bh)
-                             (> (aget cells (+ nx (* ny bw))) 0))
-                    (swap! neighbors inc))))))
-          (let [alive (> (aget cells (+ x (* y bw))) 0)
-                n @neighbors
-                new-alive (if alive
-                            (contains? survive n)
-                            (contains? birth n))]
-            (aset out (+ x (* y bw)) (if new-alive 1 0))))))
+        (let [n (loop [neighbors 0 di 0]
+                  (if (>= di 8) neighbors
+                    (let [nx (+ x (aget dir8-dx di)) ny (+ y (aget dir8-dy di))]
+                      (recur (if (and (>= nx 0) (< nx bw) (>= ny 0) (< ny bh)
+                                      (> (aget cells (+ nx (* ny bw))) 0))
+                               (inc neighbors) neighbors)
+                             (inc di)))))
+              alive (> (aget cells (+ x (* y bw))) 0)
+              new-alive (if alive
+                          (contains? survive n)
+                          (contains? birth n))]
+          (aset out (+ x (* y bw)) (if new-alive 1 0)))))
     out))
+
+;; --- Array-based BFS queue ---
+;; Marks visited before enqueueing so queue stays bounded to w*h.
+
+(defn bfs-flood-label!
+  "BFS flood fill on cells array, writing label-id into labels array.
+   Returns number of cells filled."
+  [cells labels bw bh sx sy lid]
+  (let [sz (* bw bh)
+        qx (int-array sz)
+        qy (int-array sz)
+        si (+ sx (* sy bw))]
+    (if (or (<= (aget cells si) 0) (not= (aget labels si) 0))
+      0
+      (do (aset labels si lid)
+          (aset qx 0 sx)
+          (aset qy 0 sy)
+          (loop [head 0 tail 1 size 1]
+            (if (>= head tail)
+              size
+              (let [cx (aget qx head) cy (aget qy head)
+                    t (loop [di 0 t tail]
+                        (if (>= di 4) t
+                          (let [nx (+ cx (aget dir-dx di)) ny (+ cy (aget dir-dy di))]
+                            (if (and (>= nx 0) (< nx bw) (>= ny 0) (< ny bh))
+                              (let [ni (+ nx (* ny bw))]
+                                (if (and (> (aget cells ni) 0)
+                                         (= (aget labels ni) 0))
+                                  (do (aset labels ni lid)
+                                      (aset qx t nx)
+                                      (aset qy t ny)
+                                      (recur (inc di) (inc t)))
+                                  (recur (inc di) t)))
+                              (recur (inc di) t)))))
+                    added (- t tail)]
+                (recur (inc head) t (+ size added)))))))))
 
 (defn generate-blob
   "Generate an organic blob via cellular automata.
@@ -129,53 +170,43 @@
     ;; run CA rounds
     (dotimes [_ rounds]
       (reset! cells (ca-step @cells bw bh birth survive)))
-    ;; find largest connected blob via flood fill
+    ;; find largest connected blob via flood fill using array BFS
     (let [labels (int-array (* bw bh))
-          label-id (atom 1)
-          sizes (atom {})]
-      (dotimes [y bh]
-        (dotimes [x bw]
-          (when (and (> (aget @cells (+ x (* y bw))) 0)
-                     (= (aget labels (+ x (* y bw))) 0))
-            ;; flood fill with current label
-            (let [lid @label-id
-                  queue (atom [[x y]])
-                  size (atom 0)]
-              (while (seq @queue)
-                (let [[cx cy] (first @queue)]
-                  (swap! queue rest)
-                  (let [idx (+ cx (* cy bw))]
-                    (when (and (>= cx 0) (< cx bw) (>= cy 0) (< cy bh)
-                               (> (aget @cells idx) 0)
-                               (= (aget labels idx) 0))
-                      (aset labels idx lid)
-                      (swap! size inc)
-                      (swap! queue conj [(inc cx) cy])
-                      (swap! queue conj [(dec cx) cy])
-                      (swap! queue conj [cx (inc cy)])
-                      (swap! queue conj [cx (dec cy)])))))
-              (swap! sizes assoc lid @size)
-              (swap! label-id inc)))))
-      ;; pick largest blob
-      (when (seq @sizes)
-        (let [best-label (first (apply max-key second @sizes))
-              ;; collect cells and find bounds
-              min-x (atom bw) max-x (atom 0)
-              min-y (atom bh) max-y (atom 0)
-              result (int-array (* bw bh))]
-          (dotimes [y bh]
-            (dotimes [x bw]
-              (when (= (aget labels (+ x (* y bw))) best-label)
-                (aset result (+ x (* y bw)) 1)
-                (when (< x @min-x) (reset! min-x x))
-                (when (> x @max-x) (reset! max-x x))
-                (when (< y @min-y) (reset! min-y y))
-                (when (> y @max-y) (reset! max-y y)))))
-          (let [rw (inc (- @max-x @min-x))
-                rh (inc (- @max-y @min-y))]
-            (when (and (>= rw min-w) (>= rh min-h))
-              {:cells result :bw bw :bh bh
-               :x @min-x :y @min-y :w rw :h rh})))))))
+          final-cells @cells]
+      (loop [label-id 1 best-label 0 best-size 0 y 0 x 0]
+        (cond
+          (>= y bh)
+          ;; done scanning — extract best blob
+          (when (> best-size 0)
+            (let [min-x (atom bw) max-x (atom 0)
+                  min-y (atom bh) max-y (atom 0)
+                  result (int-array (* bw bh))]
+              (dotimes [ry bh]
+                (dotimes [rx bw]
+                  (when (= (aget labels (+ rx (* ry bw))) best-label)
+                    (aset result (+ rx (* ry bw)) 1)
+                    (when (< rx @min-x) (reset! min-x rx))
+                    (when (> rx @max-x) (reset! max-x rx))
+                    (when (< ry @min-y) (reset! min-y ry))
+                    (when (> ry @max-y) (reset! max-y ry)))))
+              (let [rw (inc (- @max-x @min-x))
+                    rh (inc (- @max-y @min-y))]
+                (when (and (>= rw min-w) (>= rh min-h))
+                  {:cells result :bw bw :bh bh
+                   :x @min-x :y @min-y :w rw :h rh}))))
+
+          (>= x bw)
+          (recur label-id best-label best-size (inc y) 0)
+
+          :else
+          (let [idx (+ x (* y bw))]
+            (if (and (> (aget final-cells idx) 0)
+                     (= (aget labels idx) 0))
+              (let [size (bfs-flood-label! final-cells labels bw bh x y label-id)]
+                (if (> size best-size)
+                  (recur (inc label-id) label-id size y (inc x))
+                  (recur (inc label-id) best-label best-size y (inc x))))
+              (recur label-id best-label best-size y (inc x)))))))))
 
 ;; --- Carving ---
 
@@ -224,52 +255,59 @@
             (nth @carved mid)))))))
 
 ;; --- Connectivity Check ---
-;; BFS flood fill to count reachable floor tiles from a start point.
+;; Array-based BFS flood fill — no atoms, no allocations in the hot loop.
 
 (def floor-tiles #{1 2 3 5 10 11 12 13 14 15 16 17 18})
 
 (defn flood-count [grid w h sx sy]
-  "Count reachable floor tiles from (sx,sy)."
-  (let [visited (int-array (* w h))
-        queue (atom [[sx sy]])
-        cnt (atom 0)]
-    (while (seq @queue)
-      (let [[cx cy] (first @queue)]
-        (swap! queue rest)
-        (let [idx (+ cx (* cy w))]
-          (when (and (>= cx 0) (< cx w) (>= cy 0) (< cy h)
-                     (= (aget visited idx) 0)
-                     (contains? floor-tiles (tget grid w cx cy)))
-            (aset visited idx 1)
-            (swap! cnt inc)
-            (swap! queue conj [(inc cx) cy])
-            (swap! queue conj [(dec cx) cy])
-            (swap! queue conj [cx (inc cy)])
-            (swap! queue conj [cx (dec cy)])))))
-    @cnt))
-
-(defn count-all-floor [grid w h]
-  "Count total floor tiles on the map."
-  (let [cnt (atom 0)]
-    (dotimes [y h]
-      (dotimes [x w]
-        (when (contains? floor-tiles (tget grid w x y))
-          (swap! cnt inc))))
-    @cnt))
+  "Count reachable floor tiles from (sx,sy) using array-based BFS.
+   Marks visited before enqueueing so queue stays bounded to w*h."
+  (let [sz (* w h)
+        visited (int-array sz)
+        qx (int-array sz)
+        qy (int-array sz)
+        si (+ sx (* sy w))]
+    (if (or (< sx 0) (>= sx w) (< sy 0) (>= sy h)
+            (not (contains? floor-tiles (aget grid si))))
+      0
+      (do (aset visited si 1)
+          (aset qx 0 sx)
+          (aset qy 0 sy)
+          (loop [head 0 tail 1 cnt 1]
+            (if (>= head tail)
+              cnt
+              (let [cx (aget qx head) cy (aget qy head)
+                    t (loop [di 0 t tail]
+                        (if (>= di 4) t
+                          (let [nx (+ cx (aget dir-dx di)) ny (+ cy (aget dir-dy di))]
+                            (if (and (>= nx 0) (< nx w) (>= ny 0) (< ny h))
+                              (let [ni (+ nx (* ny w))]
+                                (if (and (= (aget visited ni) 0)
+                                         (contains? floor-tiles (aget grid ni)))
+                                  (do (aset visited ni 1)
+                                      (aset qx t nx)
+                                      (aset qy t ny)
+                                      (recur (inc di) (inc t)))
+                                  (recur (inc di) t)))
+                              (recur (inc di) t)))))
+                    added (- t tail)]
+                (recur (inc head) t (+ cnt added)))))))))
 
 (defn is-connected? [grid w h]
-  "Check if all floor tiles are reachable from some floor tile."
-  (let [start (atom nil)]
-    (dotimes [y h]
-      (dotimes [x w]
-        (when (and (nil? @start) (contains? floor-tiles (tget grid w x y)))
-          (reset! start [x y]))))
-    (if (nil? @start)
-      true
-      (let [[sx sy] @start
-            reachable (flood-count grid w h sx sy)
-            total (count-all-floor grid w h)]
-        (= reachable total)))))
+  "Check if all floor tiles are reachable from some floor tile.
+   Single pass: count total floors while finding start, then BFS once."
+  (let [sz (* w h)]
+    (loop [i 0 total 0 sx -1 sy -1]
+      (if (>= i sz)
+        (if (< sx 0)
+          true  ;; no floor tiles = trivially connected
+          (= (flood-count grid w h sx sy) total))
+        (let [t (aget grid i)]
+          (if (contains? floor-tiles t)
+            (if (< sx 0)
+              (recur (inc i) (inc total) (rem i w) (quot i w))
+              (recur (inc i) (inc total) sx sy))
+            (recur (inc i) total sx sy)))))))
 
 ;; --- Lake Placement ---
 ;; Generate blob-shaped lakes and place them without breaking connectivity.
@@ -288,46 +326,54 @@
         lake-h (+ min-h (rand-int extra-h))
         blob (generate-blob lake-w lake-h 55 5
                             #{5 6 7 8} #{4 5 6 7 8}
-                            3 3)]
+                            3 3)
+        sz (* w h)]
     (when blob
-      ;; try up to 30 random placements
-      (let [placed (atom false)]
-        (dotimes [_ 30]
+      (let [placed (atom false)
+            backup (byte-array sz)
+            bcells (:cells blob)
+            bbw (:bw blob)
+            bbh (:bh blob)]
+        (dotimes [_ 15]
           (when-not @placed
             (let [ox (+ 2 (rand-int (max 1 (- w lake-w 4))))
                   oy (+ 2 (rand-int (max 1 (- h lake-h 4))))
-                  ;; check: would this break connectivity?
-                  ;; snapshot grid, apply, test, revert if bad
-                  backup (byte-array (* w h))]
-              ;; save affected region
-              (dotimes [i (* w h)]
-                (aset backup i (aget grid i)))
-              ;; carve deep lake
-              (dotimes [by (:bh blob)]
-                (dotimes [bx (:bw blob)]
-                  (when (> (aget (:cells blob) (+ bx (* by (:bw blob)))) 0)
+                  changed (atom false)]
+              ;; save backup
+              (dotimes [i sz] (aset backup i (aget grid i)))
+              ;; carve deep lake — track if any walkable tiles were overwritten
+              (dotimes [by bbh]
+                (dotimes [bx bbw]
+                  (when (> (aget bcells (+ bx (* by bbw))) 0)
                     (let [tx (+ ox bx) ty (+ oy by)]
-                      (when (and (in-bounds? w h tx ty)
-                                 (let [t (tget grid w tx ty)] (or (= 1 t) (= 2 t))))
-                        (tset! grid w tx ty deep-tile))))))
+                      (when (in-bounds? w h tx ty)
+                        (let [t (aget grid (+ tx (* ty w)))]
+                          (when (or (= 1 t) (= 2 t))
+                            (aset grid (+ tx (* ty w)) deep-tile)
+                            (reset! changed true))))))))
               ;; carve shallow wreath
               (when (and shallow-tile (> wreath-width 0))
-                (dotimes [by (:bh blob)]
-                  (dotimes [bx (:bw blob)]
-                    (when (> (aget (:cells blob) (+ bx (* by (:bw blob)))) 0)
+                (dotimes [by bbh]
+                  (dotimes [bx bbw]
+                    (when (> (aget bcells (+ bx (* by bbw))) 0)
                       (doseq [dy (range (- wreath-width) (inc wreath-width))]
                         (doseq [dx (range (- wreath-width) (inc wreath-width))]
                           (when (<= (+ (* dx dx) (* dy dy)) (* wreath-width wreath-width))
                             (let [tx (+ ox bx dx) ty (+ oy by dy)]
-                              (when (and (in-bounds? w h tx ty)
-                                         (let [t (tget grid w tx ty)] (or (= 1 t) (= 2 t))))
-                                (tset! grid w tx ty shallow-tile))))))))))
-              ;; check connectivity
-              (if (is-connected? grid w h)
-                (reset! placed true)
-                ;; revert
-                (dotimes [i (* w h)]
-                  (aset grid i (aget backup i)))))))
+                              (when (in-bounds? w h tx ty)
+                                (let [t (aget grid (+ tx (* ty w)))]
+                                  (when (or (= 1 t) (= 2 t))
+                                    (aset grid (+ tx (* ty w)) shallow-tile)
+                                    (reset! changed true))))))))))))
+              ;; only check connectivity if we actually overwrote walkable tiles
+              (if (not @changed)
+                ;; nothing changed, skip (try another position)
+                nil
+                (if (is-connected? grid w h)
+                  (reset! placed true)
+                  ;; revert
+                  (dotimes [i sz]
+                    (aset grid i (aget backup i))))))))
         @placed))))
 
 ;; --- Probability Flood Spread ---
@@ -386,27 +432,43 @@
 
 (defn walk-distance
   "BFS shortest path distance between two points over walkable tiles.
-   Returns distance or nil if unreachable. Caps search at max-dist."
+   Returns distance or nil if unreachable. Caps search at max-dist.
+   Uses int-array BFS with distance tracked in a separate dist array."
   [grid w h sx sy tx ty max-dist]
-  (let [visited (int-array (* w h))
-        queue (atom [[sx sy 0]])]
-    (aset visited (+ sx (* sy w)) 1)
-    (loop []
-      (when (seq @queue)
-        (let [[cx cy dist] (first @queue)]
-          (swap! queue rest)
+  (let [sz (* w h)
+        dist-arr (int-array sz)
+        visited (int-array sz)
+        qx (int-array sz)
+        qy (int-array sz)
+        si (+ sx (* sy w))]
+    ;; init
+    (aset visited si 1)
+    (aset dist-arr si 0)
+    (aset qx 0 sx)
+    (aset qy 0 sy)
+    (loop [head 0 tail 1]
+      (when (< head tail)
+        (let [cx (aget qx head) cy (aget qy head)
+              ci (+ cx (* cy w))
+              d (aget dist-arr ci)]
           (if (and (= cx tx) (= cy ty))
-            dist
-            (when (< dist max-dist)
-              (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
-                (let [nx (+ cx dx) ny (+ cy dy)
-                      idx (+ nx (* ny w))]
-                  (when (and (>= nx 0) (< nx w) (>= ny 0) (< ny h)
-                             (= (aget visited idx) 0)
-                             (contains? walkable-tiles (tget grid w nx ny)))
-                    (aset visited idx 1)
-                    (swap! queue conj [nx ny (inc dist)]))))
-              (recur))))))))
+            d
+            (when (<= d max-dist)
+              (let [nd (inc d)
+                    t (loop [di 0 t tail]
+                        (if (>= di 4) t
+                          (let [nx (+ cx (aget dir-dx di)) ny (+ cy (aget dir-dy di))
+                                ni (+ nx (* ny w))]
+                            (if (and (>= nx 0) (< nx w) (>= ny 0) (< ny h)
+                                     (= (aget visited ni) 0)
+                                     (contains? walkable-tiles (aget grid ni)))
+                              (do (aset visited ni 1)
+                                  (aset dist-arr ni nd)
+                                  (aset qx t nx)
+                                  (aset qy t ny)
+                                  (recur (inc di) (inc t)))
+                              (recur (inc di) t)))))]
+                (recur (inc head) t)))))))))
 
 (defn try-bridge
   "Scan from (x,y) in direction (dx,dy) for a bridge opportunity.
@@ -473,28 +535,31 @@
 ;; After initial rooms are placed, try to grow new rooms from existing walls.
 ;; This fills in empty space and creates a tighter, more Brogue-like layout.
 
+(def ^:private floor-adj-tiles #{1 2 18})
+
 (defn find-wall-attachment-point [grid w h]
   "Find a wall tile adjacent to floor on one side and solid wall on the other.
-   Returns [wall-x wall-y floor-dx floor-dy] or nil."
-  (let [candidates (atom [])]
+   Uses reservoir sampling — single scan, O(1) memory, uniform random pick."
+  (let [chosen (atom nil)
+        count (atom 0)]
     (dotimes [y h]
       (dotimes [x w]
-        (when (and (in-bounds? w h x y) (= 8 (tget grid w x y)))
-          ;; check 4 directions: need floor on one side, wall on the other
+        (when (and (in-bounds? w h x y) (= 8 (aget grid (+ x (* y w)))))
           (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
-            (let [fx (+ x dx) fy (+ y dy)    ;; floor side
-                  bx (- x dx) by (- y dy)]   ;; back side (where new room goes)
+            (let [fx (+ x dx) fy (+ y dy)
+                  bx (- x dx) by (- y dy)]
               (when (and (in-bounds? w h fx fy)
                          (in-bounds? w h bx by)
-                         (contains? #{1 2 18} (tget grid w fx fy))
-                         (= 8 (tget grid w bx by))
-                         ;; make sure there's space behind for a room
+                         (contains? floor-adj-tiles (aget grid (+ fx (* fy w))))
+                         (= 8 (aget grid (+ bx (* by w))))
                          (let [rx (+ bx (* (- dx) 2)) ry (+ by (* (- dy) 2))]
                            (and (in-bounds? w h rx ry)
-                                (= 8 (tget grid w rx ry)))))
-                (swap! candidates conj [x y (- dx) (- dy)])))))))
-    (when (seq @candidates)
-      (nth @candidates (rand-int (count @candidates))))))
+                                (= 8 (aget grid (+ rx (* ry w)))))))
+                (swap! count inc)
+                ;; reservoir sampling: replace with probability 1/count
+                (when (= 0 (rand-int @count))
+                  (reset! chosen [x y (- dx) (- dy)]))))))))
+    @chosen))
 
 (defn attach-room! [grid w h rooms]
   "Try to attach a new room to an existing wall. Returns new room center or nil."

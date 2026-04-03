@@ -323,6 +323,53 @@
      (min 255 (int (+ bg (* (- tg bg) intensity))))
      (min 255 (int (+ bb (* (- tb bb) intensity))))]))
 
+(defn vfx-dirty-cells
+  "Collect the set of [x y] cells touched by the current vfx frame."
+  [vfx]
+  (loop [events vfx dirty #{}]
+    (if (empty? events)
+      dirty
+      (let [event (first events)
+            cells (case (:type event)
+                    :bolt (let [[x0 y0] (:from event)
+                                [x1 y1] (:to event)]
+                            (line-cells x0 y0 x1 y1))
+                    :projectile (let [path (or (:path event) [])
+                                      step (or (:step event) 0)]
+                                  (if (< step (count path))
+                                    [(nth path step)]
+                                    []))
+                    :flash [(:pos event)]
+                    [])]
+        (recur (rest events) (core/into dirty cells))))))
+
+(defn restore-dirty-cells!
+  "Redraw only the given cells (map tile + any entity on them)."
+  [world r dirty]
+  (let [{:keys [terrain width height fov memory]} world
+        lights (or (:lights world) [])
+        stains (or (:stains world) {})
+        gases (or (:gases world) {})
+        ents (:entities world)
+        ;; build pos->entity lookup for dirty cells only
+        pos-ent (reduce (fn [m [k e]]
+                          (if (and (:pos e) (contains? dirty (:pos e)))
+                            (assoc m (:pos e) e)
+                            m))
+                        {} ents)]
+    (doseq [[x y] dirty]
+      (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+        (let [visible (contains? fov [x y])
+              remembered (get memory [x y])
+              tile (when visible (terrain/tget terrain width x y))
+              lv (when visible (light/light-at x y lights))
+              stain (when visible (get stains [x y]))
+              gas (when visible (get gases [x y]))]
+          (render-map-tile r x y tile visible remembered lv stain gas)
+          ;; re-render entity on this cell if any
+          (when-let [e (get pos-ent [x y])]
+            (render-entity world r e)))))))
+
 (defn render-vfx-frame [world r]
   "Render vfx as color overlays on existing tiles. Does not overwrite glyphs."
   (let [vfx (or (:vfx world) [])
@@ -339,14 +386,12 @@
                   [x1 y1] (:to event)
                   cells (line-cells x0 y0 x1 y1)
                   tint (or (:color event) [140 160 255])
-                  ;; first frame nearly white, then fade through tint
                   white [255 255 255]
-                  i2 (* intensity intensity)]  ;; square for sharper falloff
+                  i2 (* intensity intensity)]
               (doseq [[x y] cells]
                 (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
                   (let [tile (terrain/tget (:terrain world) (:width world) x y)
                         style (style-tile tile)
-                        ;; overdrive: blend base -> tint -> white as intensity increases
                         fg (boost-color (boost-color (:fg style) tint intensity)
                                         white i2)
                         bg (boost-color (boost-color (:bg style) tint (* intensity 0.7))
@@ -414,21 +459,26 @@
   (if (every? #(= :projectile (:type %)) vfx) 25 50))
 
 (defn animate-vfx! [world r]
-  "Run vfx animation loop with pauses between frames."
-  (loop [vfx (or (:vfx world) [])]
+  "Run vfx animation loop — only redraws affected cells between frames."
+  (loop [vfx (or (:vfx world) []) prev-dirty #{}]
     (when (seq vfx)
-      (render-vfx-frame (assoc world :vfx vfx) r)
-      (pause! (vfx-frame-delay vfx))
-      (let [next-vfx (tick-vfx vfx)]
-        (render-map world r)
-        (render-map-entities world r)
-        (term/flush)
-        (when (seq next-vfx)
-          (recur next-vfx)))))
-  ;; final cleanup
-  (render-map world r)
-  (render-map-entities world r)
-  (term/flush))
+      ;; collect cells this frame will touch
+      (let [cur-dirty (vfx-dirty-cells vfx)
+            ;; restore cells from previous frame that aren't in current frame
+            to-restore (core/into prev-dirty cur-dirty)]
+        ;; restore all previously dirty cells first
+        (when (seq prev-dirty)
+          (restore-dirty-cells! world r prev-dirty)
+          (term/flush))
+        ;; render current vfx overlay
+        (render-vfx-frame (assoc world :vfx vfx) r)
+        (pause! (vfx-frame-delay vfx))
+        (let [next-vfx (tick-vfx vfx)]
+          (if (seq next-vfx)
+            (recur next-vfx cur-dirty)
+            ;; final frame — restore all dirty cells
+            (do (restore-dirty-cells! world r cur-dirty)
+                (term/flush))))))))
 
 ;; --- Item Display Helpers ---
 

@@ -14,6 +14,7 @@
             [xsofy.items :as items]
             [xsofy.debug :as dbg]
             [xsofy.bestiary]
+            [xsofy.title :as title]
             [math]))
 
 (declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path)
@@ -203,6 +204,7 @@
          :rune-table (:rune-table world)
          :depth depth
          :floors (:floors world)
+         :scheme (:scheme world)
          :running true}
         (inject-player player items nil))))
 
@@ -359,20 +361,22 @@
                        (str "You descend to depth " new-depth ".")
                        (str "You ascend to depth " new-depth ".")))))
       ;; generate new floor
-      (let [new-player (assoc player :pos [0 0])  ;; pos set by generate-floor
-            new-world (generate-floor width height new-depth new-player)
-            spawn-pos (get-in new-world [:entities :player :pos])]
-        ;; re-inject with proper items
-        ;; reset player ticks to 0 so they act first on new floor
-        (let [player (assoc player :ticks 0)]
-          (-> new-world
-              (assoc :log (:log saved)
-                     :turn (:turn saved)
-                     :gold (or (:gold saved) 0)
-                     :rune-table (:rune-table saved)
-                     :floors (:floors saved))
-              (inject-player player items spawn-pos)
-              (log-msg (str "You descend to depth " new-depth "."))))))))
+      (do (title/show-descending-screen new-depth (or (:scheme world) [80 120 220]))
+          (let [new-player (assoc player :pos [0 0])  ;; pos set by generate-floor
+                new-world (generate-floor width height new-depth new-player)
+                spawn-pos (get-in new-world [:entities :player :pos])]
+            ;; re-inject with proper items
+            ;; reset player ticks to 0 so they act first on new floor
+            (let [player (assoc player :ticks 0)]
+              (-> new-world
+                  (assoc :log (:log saved)
+                         :turn (:turn saved)
+                         :gold (or (:gold saved) 0)
+                         :rune-table (:rune-table saved)
+                         :floors (:floors saved)
+                         :scheme (:scheme world))
+                  (inject-player player items spawn-pos)
+                  (log-msg (str "You descend to depth " new-depth ".")))))))))
 
 (defn descend [world]
   (let [{:keys [terrain width depth]} world

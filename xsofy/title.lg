@@ -185,4 +185,64 @@
     ;; hold final frame, wait for key
     (draw-frame runes title subtitle tw th 50)
     (term/read-key)
-    title))
+    {:title title :scheme scheme}))
+
+;; --- Descending Screen ---
+;; Shown while terrain generates. Runes rise upward, flicker and fade.
+
+(def descending-messages
+  ["Descending..." "The stairs are slippery..."
+   "Darkness swallows you..." "You feel the air grow cold..."
+   "Something stirs below..." "The walls drip with moisture..."
+   "Ancient stones groan..." "A distant echo fades..."
+   "The torchlight flickers..." "You smell damp earth..."])
+
+(defn show-descending-screen
+  "Display a brief animated descending screen. Runes rise and fade."
+  [depth scheme]
+  (let [[tw th] (term/size)
+        cx (quot tw 2)
+        cy (quot th 2)
+        msg (nth descending-messages (rand-int (count descending-messages)))
+        depth-str (str "Depth " depth)
+        runes (scatter-runes tw th 25 scheme)]
+    ;; clear
+    (clear-screen tw th)
+    ;; animate — runes drift upward, erase old position each frame
+    (dotimes [frame 15]
+      (doseq [r runes]
+        (let [;; current y drifts upward (subtract), wrap around
+              cur-y (rem (+ th (:y r) (- (quot frame 2))) th)
+              ;; previous y to erase
+              prev-y (rem (+ th (:y r) (- (quot (dec frame) 2))) th)
+              b (rune-brightness (:phase r) (* frame 3))
+              [cr cg cb] (:color r)]
+          ;; erase previous position (if it moved)
+          (when (not= cur-y prev-y)
+            (term/move-cursor (:x r) (inc prev-y))
+            (term/set-fg 10 10 10)
+            (term/set-bg 10 10 10)
+            (term/write " "))
+          ;; draw at new position — flicker and fade
+          (term/move-cursor (:x r) (inc cur-y))
+          (if (< b 0.05)
+            (do (term/set-fg 10 10 10) (term/set-bg 10 10 10) (term/write " "))
+            (do (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))
+                (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
+                (term/write (:glyph r))))))
+      ;; depth label
+      (let [dx (max 1 (- cx (quot (count depth-str) 2)))
+            fade (min 1.0 (/ (float frame) 8.0))]
+        (term/move-cursor dx (- cy 1))
+        (term/set-fg (int (* 180 fade)) (int (* 160 fade)) (int (* 100 fade)))
+        (term/set-bg 10 10 10)
+        (term/write depth-str))
+      ;; message
+      (let [mx (max 1 (- cx (quot (count msg) 2)))
+            mfade (min 1.0 (max 0.0 (/ (float (- frame 5)) 8.0)))]
+        (term/move-cursor mx (+ cy 1))
+        (term/set-fg (int (* 120 mfade)) (int (* 110 mfade)) (int (* 90 mfade)))
+        (term/set-bg 10 10 10)
+        (term/write msg))
+      (term/flush)
+      (pause! 60))))
