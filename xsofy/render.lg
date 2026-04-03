@@ -351,11 +351,11 @@
         gases (or (:gases world) {})
         ents (:entities world)
         ;; build pos->entity lookup for dirty cells only
-        pos-ent (reduce (fn [m [k e]]
-                          (if (and (:pos e) (contains? dirty (:pos e)))
-                            (assoc m (:pos e) e)
-                            m))
-                        {} ents)]
+        pos-ent (core/reduce (fn [m [k e]]
+                               (if (and (:pos e) (contains? dirty (:pos e)))
+                                 (assoc m (:pos e) e)
+                                 m))
+                             {} ents)]
     (doseq [[x y] dirty]
       (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
         (let [visible (contains? fov [x y])
