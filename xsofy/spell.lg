@@ -137,7 +137,7 @@
               (let [[x y] pos
                     world (fire/ignite-forced world x y 4)
                     targets (u/targets-at world pos nil)]
-                (reduce (fn [w e] (status/apply-status w (:id e) :burning 4))
+                (reduce (fn [w e] (status/apply-status w (:id e) :burning 12))
                         world targets)))
             (:world ctx)
             (:cursors ctx))]
@@ -149,7 +149,7 @@
               (let [[x y] pos
                     world (fx/add-stain world x y :water 2)
                     targets (u/targets-at world pos nil)]
-                (reduce (fn [w e] (status/apply-status w (:id e) :frozen 3))
+                (reduce (fn [w e] (status/apply-status w (:id e) :frozen 8))
                         world targets)))
             (:world ctx)
             (:cursors ctx))]

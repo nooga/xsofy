@@ -53,6 +53,14 @@
     (status/apply-status world entity-id :webbed 3)
     world))
 
+(defn apply-water-extinguish [world entity-id nx ny]
+  "Water (shallow or deep) extinguishes burning creatures."
+  (let [tile (terrain/tget (:terrain world) (:width world) nx ny)]
+    (if (and (or (= tile 3) (= tile 4))
+             (status/has-status? world entity-id :burning))
+      (status/remove-status world entity-id :burning)
+      world)))
+
 (defn try-move [world entity-id dx dy]
   (let [entity (get-in world [:entities entity-id])
         [ex ey] (:pos entity)
@@ -71,7 +79,8 @@
           (-> (open-door-if-needed world entity-id nx ny)
               (trample-at nx ny)
               (assoc-in [:entities entity-id :pos] [nx ny])
-              (apply-web-trap entity-id nx ny))
+              (apply-web-trap entity-id nx ny)
+              (apply-water-extinguish entity-id nx ny))
           ;; try cardinal fallbacks if diagonal blocked
           (cond
             (and (not= dx 0) (not= dy 0)
@@ -79,14 +88,16 @@
             (-> world
                 (trample-at (+ ex dx) ey)
                 (assoc-in [:entities entity-id :pos] [(+ ex dx) ey])
-                (apply-web-trap entity-id (+ ex dx) ey))
+                (apply-web-trap entity-id (+ ex dx) ey)
+                (apply-water-extinguish entity-id (+ ex dx) ey))
 
             (and (not= dx 0) (not= dy 0)
                  (can-move? world ex (+ ey dy) entity-id))
             (-> world
                 (trample-at ex (+ ey dy))
                 (assoc-in [:entities entity-id :pos] [ex (+ ey dy)])
-                (apply-web-trap entity-id ex (+ ey dy)))
+                (apply-web-trap entity-id ex (+ ey dy))
+                (apply-water-extinguish entity-id ex (+ ey dy)))
 
             :else world))))))
 
@@ -169,6 +180,11 @@
                                   (< dist 3)
                                   (= state :hunt))]
         (cond
+          ;; --- Burning: panic and flee randomly ---
+          (and (status/has-status? world entity-id :burning)
+               (not (get-in entity [:properties :fire-immune])))
+          (assoc-in world [:entities entity-id :ai :state] :flee)
+
           ;; --- From any state: flee if low HP and can see player ---
           (or (and low-hp sees-player (< dist chase-radius) (not= state :flee))
               ranged-too-close)
@@ -346,10 +362,12 @@
                 (adjacent? pos player-pos)
                 (attack-fn world entity-id :player)
 
-                ;; run away
+                ;; run — random if burning (panic), away from player otherwise
                 :else
-                (let [[dx dy] (step-away pos player-pos)]
-                  (try-move world entity-id dx dy))))
+                (if (status/has-status? world entity-id :burning)
+                  (random-step world entity-id)
+                  (let [[dx dy] (step-away pos player-pos)]
+                    (try-move world entity-id dx dy)))))
 
             ;; default
             world))))))

@@ -76,7 +76,7 @@
                           (reduce (fn [w e]
                                     (-> w
                                         (ent/damage-entity (:id e) fire-damage)
-                                        (status/apply-status (:id e) :burning 2)))
+                                        (status/apply-status (:id e) :burning 10)))
                                   w targets)))
                       w @new-ttl)]
         ;; update fire ttl, recompute lights since fire changed

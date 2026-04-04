@@ -450,7 +450,15 @@
 
 ;; --- Combat ---
 
-;; --- Hazard Tile Effects ---
+;; --- Tile Effects ---
+
+(defn apply-water-effects [world entity-id tile]
+  "Shallow or deep water extinguishes burning creatures."
+  (if (and (or (= tile 3) (= tile 4))
+           (get-in world [:entities entity-id])
+           (status/has-status? world entity-id :burning))
+    (status/remove-status world entity-id :burning)
+    world))
 
 (defn apply-hazard-effects [world entity-id x y]
   "Apply effects of standing on a hazard tile. Flying creatures are immune."
@@ -465,14 +473,22 @@
             (-> world
                 (ent/damage-entity entity-id 8)
                 (#(if (get-in % [:entities entity-id])
-                    (status/apply-status % entity-id :burning 3)
+                    (status/apply-status % entity-id :burning 12)
                     %))))
         ;; chasm: 10 fall damage
         6 (ent/damage-entity world entity-id 10)
-        ;; deep water: apply swimming status
-        4 (status/apply-status world entity-id :swimming 999)
+        ;; deep water: swimming + extinguish fire
+        4 (-> world
+              (status/apply-status entity-id :swimming 999)
+              (apply-water-effects entity-id tile))
         ;; not a hazard
         world))))
+
+(defn apply-tile-effects [world entity-id x y]
+  "Apply non-hazard tile effects after any movement (e.g. water extinguishes fire)."
+  (let [{:keys [terrain width]} world
+        tile (terrain/tget terrain width x y)]
+    (apply-water-effects world entity-id tile)))
 
 (def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
 
@@ -1180,6 +1196,8 @@
                           (status/apply-status :player :webbed 3)
                           (log-msg "You walk into a web!"))
                       w)
+                  ;; tile effects (water extinguishes fire, etc.)
+                  w (apply-tile-effects w :player nx ny)
                   ;; check if leaving water
                   w (check-leave-water w)]
               w)

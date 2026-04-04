@@ -24,7 +24,8 @@
   (let [current (get-in world [:entities entity-id :statuses stype])
         ;; refresh: take the longer duration
         new-ttl (if current (max ttl (or (:ttl current) 0)) ttl)]
-    (assoc-in world [:entities entity-id :statuses stype] {:ttl new-ttl})))
+    (assoc-in world [:entities entity-id :statuses stype]
+              {:ttl new-ttl :max-ttl new-ttl})))
 
 (defn remove-status [world entity-id stype]
   (update-in world [:entities entity-id :statuses] dissoc stype))
@@ -83,14 +84,16 @@
           [(:color def_) (:bg def_)])))))
 
 (defn entity-active-statuses [entity]
-  "Returns list of {:name :ttl :color} for sidebar display."
+  "Returns list of {:name :ttl :max-ttl :color} for sidebar display."
   (let [statuses (or (:statuses entity) {})]
     (->> statuses
          (map (fn [[stype sdata]]
                 (let [def_ (get status-defs stype)]
                   (when def_
                     {:name (or (:name def_) (name stype))
+                     :stype stype
                      :ttl (or (:ttl sdata) 0)
+                     :max-ttl (or (:max-ttl sdata) (:ttl sdata) 1)
                      :color (or (:color def_) [200 200 200])}))))
          (filter some?)
          (vec))))

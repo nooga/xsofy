@@ -183,20 +183,50 @@
 
 ;; --- Sidebar Panel ---
 
-(defn render-creature-entry [r i c]
+;; --- Status bar colors per effect type ---
+(def status-bar-colors
+  {:burning  {:fill [180 60 10]  :empty [50 15 5]}
+   :frozen   {:fill [60 100 200] :empty [15 25 50]}
+   :poison   {:fill [40 150 40]  :empty [10 35 10]}
+   :webbed   {:fill [160 160 170] :empty [35 35 38]}
+   :swimming {:fill [40 80 150]  :empty [10 20 40]}
+   :slowed   {:fill [100 100 140] :empty [25 25 35]}
+   :confused {:fill [150 60 180] :empty [35 15 40]}
+   :haste    {:fill [200 200 60] :empty [45 45 12]}})
+
+(defn render-status-bars
+  "Render status effect bars starting at row. Returns next row."
+  [r row entity]
+  (let [statuses (status/entity-active-statuses entity)]
+    (reduce (fn [row s]
+              (if (>= row (:h r)) row
+                (let [colors (get status-bar-colors (:stype s)
+                               {:fill [120 120 120] :empty [30 30 30]})
+                      max-ttl (:max-ttl s)
+                      ttl (:ttl s)]
+                  (ui/bar r row (str " " (:name s))
+                          ttl max-ttl
+                          (:fill colors) (:empty colors) (:color s))
+                  (inc row))))
+            row statuses)))
+
+(defn render-creature-entry
+  "Render a creature entry at row. Returns next row."
+  [r row c]
   (let [chp (or (get-in c [:body :hp]) 0)
         cmhp (or (get-in c [:body :max-hp]) 1)
         tpl (:template c)
         eid (:id c)
         cname (if tpl (name tpl) (if eid (name eid) "???"))
         color (or (get-in c [:visual :color]) [200 60 60])
-        glyph (or (get-in c [:visual :glyph]) "?")
-        row (+ 8 (* i 3))]
+        glyph (or (get-in c [:visual :glyph]) "?")]
     (when (< (+ row 1) (:h r))
       (ui/write-line r row (str " " glyph " " cname) color ui/bg)
-      (ui/bar r (+ row 1) (str " " chp "/" cmhp)
-              chp cmhp
-              [140 30 30] [40 12 12] [180 150 130]))))
+      (let [row (inc row)]
+        (ui/bar r row (str " " chp "/" cmhp)
+                chp cmhp
+                [140 30 30] [40 12 12] [180 150 130])
+        (render-status-bars r (inc row) c)))))
 
 (defn render-sidebar [world r]
   (ui/clear-rect r)
@@ -212,49 +242,46 @@
                     (str (get-in wep [:item :min-dmg] 1) "-" (get-in wep [:item :max-dmg] 2))
                     "1-2")
           def-val (if arm (or (get-in arm [:item :defense]) 0) 0)]
+      ;; player header + HP bar
       (ui/write-line r 0 " @ You" [255 220 80] ui/bg)
       (ui/bar r 1 (str " HP " hp "/" max-hp)
               hp max-hp
               [140 30 30] [40 12 12] [220 180 160])
-      (ui/write-line r 2 (str " Str " str_ "  Def " def-val)
-                     [140 130 110] ui/bg)
-      (ui/write-line r 3 (str " " wep-name " (" dmg-str ")") [160 160 180] ui/bg)
-      (ui/write-line r 4 (str " " arm-name) [140 130 110] ui/bg)
-      (ui/write-line r 5 (str " Depth " (:depth world))
-                     [100 100 100] ui/bg)
-      ;; player status effects
-      (let [pstatuses (status/entity-active-statuses player)
-            row (atom 5)]
-        (doseq [s pstatuses]
-          (ui/write-line r @row (str " " (:name s) " (" (:ttl s) ")")
-                         (:color s) ui/bg)
-          (swap! row inc))
-        (let [gold (or (:gold world) 0)]
-          (when (> gold 0)
-            (ui/write-line r @row (str " Gold " gold)
-                           [255 220 50] ui/bg)
-            (swap! row inc)))
-        (ui/write-line r (inc @row) (apply str (repeat (:w r) "-"))
-                       [40 40 40] ui/bg)))
-    ;; visible creatures
-    (let [fov (or (:fov world) #{})
-          ents (vec (vals (:entities world)))
-          creatures (vec (filter
-                           (fn [e]
-                             (and (some? e)
-                                  (some? (:id e))
-                                  (not= :player (:id e))
-                                  (some? (:pos e))
-                                  (some? (get-in e [:body :hp]))
-                                  (contains? fov (:pos e))))
-                           ents))
-          creatures (vec (sort-by (fn [e] (or (get-in e [:body :hp]) 0)) creatures))
-          max-shown (if (> (:h r) 10) (quot (- (:h r) 9) 3) 0)
-          n (min (count creatures) max-shown)]
-      (dotimes [i n]
-        (let [c (nth creatures i nil)]
-          (when (some? c)
-            (render-creature-entry r i c)))))))
+      ;; player status bars
+      (let [row (render-status-bars r 2 player)]
+        ;; stats
+        (ui/write-line r row (str " Str " str_ "  Def " def-val)
+                       [140 130 110] ui/bg)
+        (ui/write-line r (+ row 1) (str " " wep-name " (" dmg-str ")") [160 160 180] ui/bg)
+        (ui/write-line r (+ row 2) (str " " arm-name) [140 130 110] ui/bg)
+        (let [row (+ row 3)
+              gold (or (:gold world) 0)
+              row (if (> gold 0)
+                    (do (ui/write-line r row (str " Gold " gold) [255 220 50] ui/bg)
+                        (inc row))
+                    row)]
+          (ui/write-line r row (str " Depth " (:depth world)) [100 100 100] ui/bg)
+          ;; separator
+          (let [sep-row (inc row)]
+            (ui/write-line r sep-row (apply str (repeat (:w r) "-")) [40 40 40] ui/bg)
+            ;; visible creatures
+            (let [fov (or (:fov world) #{})
+                  ents (vec (vals (:entities world)))
+                  creatures (vec (filter
+                                   (fn [e]
+                                     (and (some? e)
+                                          (some? (:id e))
+                                          (not= :player (:id e))
+                                          (some? (:pos e))
+                                          (some? (get-in e [:body :hp]))
+                                          (contains? fov (:pos e))))
+                                   ents))
+                  creatures (vec (sort-by (fn [e] (or (get-in e [:body :hp]) 0)) creatures))]
+              (loop [i 0 row (inc sep-row)]
+                (when (and (< i (count creatures)) (< row (:h r)))
+                  (let [c (nth creatures i)
+                        next-row (render-creature-entry r row c)]
+                    (recur (inc i) (or next-row (+ row 2))))))))))))
 
 ;; --- Log Panel ---
 
