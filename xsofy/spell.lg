@@ -4,6 +4,7 @@
             [xsofy.status :as status]
             [xsofy.fire :as fire]
             [xsofy.terrain :as terrain]
+            [xsofy.util :as u]
             [xsofy.runes :as runes]
             [math]))
 
@@ -35,17 +36,12 @@
   (let [w (:world ctx)]
     (->> (:cursors ctx)
          (mapcat (fn [pos]
-                   (->> (vals (:entities w))
-                        (filter (fn [e] (and (some? e) (map? e)
-                                             (= pos (:pos e))
-                                             (not= (:caster ctx) (:id e))
-                                             (not (contains? (:hits ctx) (:id e)))))))))
+                   (filter (fn [e] (and (not= (:caster ctx) (:id e))
+                                        (not (contains? (:hits ctx) (:id e)))))
+                           (u/targets-at w pos nil))))
          (vec))))
 
-(defn distance [p1 p2]
-  (let [[x1 y1] p1 [x2 y2] p2
-        dx (- x2 x1) dy (- y2 y1)]
-    (math/sqrt (+ (* dx dx) (* dy dy)))))
+(def distance u/distance)
 
 ;; --- Selector Primitives (set cursors) ---
 
@@ -109,12 +105,7 @@
         new-hits (atom (:hits ctx))
         w (reduce
             (fn [world pos]
-              (let [targets (vec (filter
-                                  (fn [e] (and (some? e) (map? e) (:id e)
-                                               (= pos (:pos e))
-                                               (get-in e [:body :hp])
-                                               (not= (:caster ctx) (:id e))))
-                                  (vals (:entities world))))]
+              (let [targets (u/targets-at world pos (:caster ctx))]
                 (reduce (fn [w e]
                           (let [armor (get-in e [:body :armor] 0)
                                 actual (max 1 (- amount armor))]
@@ -129,9 +120,7 @@
 (defn r-heal [ctx amount]
   (let [w (reduce
             (fn [world pos]
-              (let [targets (->> (vals (:entities world))
-                                 (filter (fn [e] (and (some? e) (map? e)
-                                                       (= pos (:pos e))))))]
+              (let [targets (u/entities-at world pos)]
                 (reduce (fn [w e]
                           (let [hp (get-in e [:body :hp] 0)
                                 max-hp (get-in e [:body :max-hp] hp)
@@ -146,14 +135,8 @@
   (let [w (reduce
             (fn [world pos]
               (let [[x y] pos
-                    ;; ignite terrain
                     world (fire/ignite-forced world x y 4)
-                    ;; set entities on fire
-                    targets (vec (filter
-                                  (fn [e] (and (some? e) (map? e) (:id e)
-                                               (= pos (:pos e))
-                                               (get-in e [:body :hp])))
-                                  (vals (:entities world))))]
+                    targets (u/targets-at world pos nil)]
                 (reduce (fn [w e] (status/apply-status w (:id e) :burning 4))
                         world targets)))
             (:world ctx)
@@ -165,11 +148,7 @@
             (fn [world pos]
               (let [[x y] pos
                     world (fx/add-stain world x y :water 2)
-                    targets (vec (filter
-                                  (fn [e] (and (some? e) (map? e) (:id e)
-                                               (= pos (:pos e))
-                                               (get-in e [:body :hp])))
-                                  (vals (:entities world))))]
+                    targets (u/targets-at world pos nil)]
                 (reduce (fn [w e] (status/apply-status w (:id e) :frozen 3))
                         world targets)))
             (:world ctx)
@@ -184,11 +163,7 @@
         {:keys [terrain width height]} (:world ctx)]
     (let [w (reduce
               (fn [world pos]
-                (let [targets (->> (vals (:entities world))
-                                   (filter (fn [e] (and (some? e) (map? e)
-                                                         (:pos e)
-                                                         (= pos (:pos e))
-                                                         (not= (:caster ctx) (:id e))))))]
+                (let [targets (u/targets-at world pos (:caster ctx))]
                   (reduce (fn [w e]
                             (let [epos (:pos e)]
                               (if (nil? epos) w

@@ -4,6 +4,7 @@
             [async]
             [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
+            [xsofy.util :as u]
             [xsofy.lighting :as light]
             [xsofy.effects :as fx]
             [xsofy.status :as status]
@@ -15,9 +16,7 @@
 
 ;; --- Color Helpers ---
 
-(defn dim-color [rgb factor]
-  (let [[r g b] rgb]
-    [(int (* r factor)) (int (* g factor)) (int (* b factor))]))
+(def dim-color u/scale)
 
 ;; --- Tile Rendering ---
 
@@ -31,26 +30,12 @@
   (let [[r g b] rgb]
     [(int (* r 0.3))
      (int (* g 0.3))
-     (min 255 (int (* b 0.4)))]))
+     (u/clamp8 (* b 0.4))]))
 
 ;; --- Map Panel ---
 
-;; deterministic hash for per-cell color variation
-(defn cell-hash [x y]
-  (let [h (+ (* x 374761393) (* y 668265263))]
-    (bit-and (bit-xor h (bit-shift-right h 13)) 255)))
-
-(defn jitter-color [rgb x y amount]
-  (if (nil? rgb)
-    [80 80 80]
-    (let [h (cell-hash x y)
-          offset (- (rem h (* 2 amount)) amount)
-          r (nth rgb 0 80)
-          g (nth rgb 1 80)
-          b (nth rgb 2 80)]
-      [(max 0 (min 255 (+ r offset)))
-       (max 0 (min 255 (+ g (quot offset 2))))
-       (max 0 (min 255 (+ b (quot offset 3))))])))
+(def cell-hash u/cell-hash)
+(def jitter-color u/jitter)
 
 ;; dancing tiles: water and lava get randomized color each frame
 (def dancing-tiles #{3 4 7})
@@ -314,13 +299,7 @@
                    (+ err (if adj-x (- dy) 0) (if adj-y dx 0))
                    cells)))))))
 
-(defn boost-color [base-rgb tint-rgb intensity]
-  "Brighten base toward tint. intensity 1.0 = full tint, 0.0 = no change."
-  (let [[br bg bb] base-rgb
-        [tr tg tb] tint-rgb]
-    [(min 255 (int (+ br (* (- tr br) intensity))))
-     (min 255 (int (+ bg (* (- tg bg) intensity))))
-     (min 255 (int (+ bb (* (- tb bb) intensity))))]))
+(def boost-color u/lerp)
 
 (defn vfx-dirty-cells
   "Collect the set of [x y] cells touched by the current vfx frame."

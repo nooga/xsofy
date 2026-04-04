@@ -1,38 +1,21 @@
 (ns xsofy.ai
   (:require [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
+            [xsofy.util :as u]
             [xsofy.fire :as fire]
             [xsofy.status :as status]
             [xsofy.sound :as snd]
             [math]))
 
-;; --- Distance ---
+;; --- Spatial (delegated to util) ---
 
-(defn distance [p1 p2]
-  (let [[x1 y1] p1
-        [x2 y2] p2
-        dx (- x2 x1)
-        dy (- y2 y1)]
-    (math/sqrt (+ (* dx dx) (* dy dy)))))
-
-(defn adjacent? [p1 p2]
-  (let [[x1 y1] p1
-        [x2 y2] p2]
-    (and (<= (math/abs (- x2 x1)) 1)
-         (<= (math/abs (- y2 y1)) 1)
-         (not= p1 p2))))
+(def distance u/distance)
+(def adjacent? u/adjacent?)
 
 ;; --- Simple Pathfinding ---
 
-(defn sign [n]
-  (cond (pos? n) 1 (neg? n) -1 :else 0))
-
 (defn step-toward [from to]
-  (let [[fx fy] from
-        [tx ty] to
-        dx (sign (- tx fx))
-        dy (sign (- ty fy))]
-    [dx dy]))
+  (u/direction from to))
 
 (defn step-away [from to]
   (let [[dx dy] (step-toward from to)]
@@ -130,7 +113,7 @@
 
 ;; --- Random Walk ---
 
-(def cardinal-dirs [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
+(def cardinal-dirs u/dirs8)
 
 (defn random-step [world entity-id]
   "Take a random walkable step."

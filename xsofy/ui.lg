@@ -1,5 +1,6 @@
 (ns xsofy.ui
-  (:require [term]))
+  (:require [term]
+            [xsofy.util :as u]))
 
 ;; --- Rect ---
 
@@ -19,13 +20,7 @@
 
 ;; --- Color Math ---
 
-(defn lerp-color [a b t]
-  (let [[ar ag ab] (or a [0 0 0])
-        [br bg bb] (or b [0 0 0])
-        t (or t 0.0)]
-    [(int (+ ar (* (- br ar) t)))
-     (int (+ ag (* (- bg ag) t)))
-     (int (+ ab (* (- bb ab) t)))]))
+(def lerp-color u/lerp)
 
 ;; --- Drawing Primitives ---
 

@@ -1,0 +1,140 @@
+(ns xsofy.util
+  (:require [math]))
+
+;; ==========================================================
+;; Spatial Math
+;; ==========================================================
+
+(defn distance [p1 p2]
+  (let [[x1 y1] p1 [x2 y2] p2
+        dx (- x2 x1) dy (- y2 y1)]
+    (math/sqrt (+ (* dx dx) (* dy dy)))))
+
+(defn manhattan [p1 p2]
+  (let [[x1 y1] p1 [x2 y2] p2]
+    (+ (math/abs (- x2 x1)) (math/abs (- y2 y1)))))
+
+(defn sign [n]
+  (cond (> n 0) 1 (< n 0) -1 :else 0))
+
+(defn direction
+  "Normalized direction from p1 toward p2 as [-1/0/1, -1/0/1]."
+  [p1 p2]
+  (let [[x1 y1] p1 [x2 y2] p2]
+    [(sign (- x2 x1)) (sign (- y2 y1))]))
+
+(defn adjacent? [p1 p2]
+  (let [[x1 y1] p1 [x2 y2] p2
+        dx (math/abs (- x2 x1))
+        dy (math/abs (- y2 y1))]
+    (and (<= dx 1) (<= dy 1) (not (and (= dx 0) (= dy 0))))))
+
+;; ==========================================================
+;; Direction Constants
+;; ==========================================================
+
+(def dirs4 [[1 0] [-1 0] [0 1] [0 -1]])
+(def dirs8 [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
+
+(def neighbors dirs8)
+
+;; ==========================================================
+;; Entity Queries
+;; These work on the world map directly, providing common filters.
+;; ==========================================================
+
+(defn entity?
+  "True if e is a valid entity map (not nil, not a keyword, has an :id)."
+  [e]
+  (and (some? e) (map? e) (:id e)))
+
+(defn alive?
+  "True if entity has positive HP."
+  [e]
+  (and (entity? e) (> (get-in e [:body :hp] 0) 0)))
+
+(defn creatures
+  "All creature entities in world (excludes items and nil values)."
+  [world]
+  (vec (filter (fn [e] (and (entity? e) (not= :item (:entity-type e))))
+               (vals (:entities world)))))
+
+(defn creatures-at
+  "All creatures at position pos."
+  [world pos]
+  (vec (filter (fn [e] (and (entity? e)
+                             (not= :item (:entity-type e))
+                             (= pos (:pos e))))
+               (vals (:entities world)))))
+
+(defn entities-at
+  "All entities (including items) at position pos."
+  [world pos]
+  (vec (filter (fn [e] (and (entity? e) (= pos (:pos e))))
+               (vals (:entities world)))))
+
+(defn living-entities
+  "All entities with HP > 0."
+  [world]
+  (vec (filter alive? (vals (:entities world)))))
+
+(defn targets-at
+  "Creatures at pos, excluding caster-id, with HP."
+  [world pos caster-id]
+  (vec (filter (fn [e] (and (entity? e)
+                             (:pos e)
+                             (= pos (:pos e))
+                             (get-in e [:body :hp])
+                             (not= caster-id (:id e))))
+               (vals (:entities world)))))
+
+;; ==========================================================
+;; Color Math
+;; All colors are [r g b] integer triples, 0-255.
+;; ==========================================================
+
+(defn clamp8 [n]
+  (max 0 (min 255 (int n))))
+
+(defn lerp
+  "Linear interpolate from a to b by t (0.0 = a, 1.0 = b)."
+  [a b t]
+  (let [[ar ag ab] (or a [0 0 0])
+        [br bg bb] (or b [0 0 0])]
+    [(clamp8 (+ ar (* (- br ar) t)))
+     (clamp8 (+ ag (* (- bg ag) t)))
+     (clamp8 (+ ab (* (- bb ab) t)))]))
+
+(defn scale
+  "Multiply each channel by factor."
+  [rgb factor]
+  (let [[r g b] rgb]
+    [(clamp8 (* r factor))
+     (clamp8 (* g factor))
+     (clamp8 (* b factor))]))
+
+(defn add-color
+  "Add two colors, clamped."
+  [a b]
+  (let [[ar ag ab] a [br bg bb] b]
+    [(clamp8 (+ ar br))
+     (clamp8 (+ ag bg))
+     (clamp8 (+ ab bb))]))
+
+(defn cell-hash
+  "Deterministic spatial hash for per-cell color variation."
+  [x y]
+  (let [h (+ (* x 374761393) (* y 668265263))]
+    (bit-and (bit-xor h (bit-shift-right h 13)) 255)))
+
+(defn jitter
+  "Deterministic per-cell color jitter. Amount controls max offset."
+  [rgb x y amount]
+  (if (nil? rgb)
+    [80 80 80]
+    (let [h (cell-hash x y)
+          offset (- (rem h (* 2 amount)) amount)
+          [r g b] rgb]
+      [(clamp8 (+ r offset))
+       (clamp8 (+ g (quot offset 2)))
+       (clamp8 (+ b (quot offset 3)))])))

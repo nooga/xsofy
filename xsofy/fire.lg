@@ -1,6 +1,7 @@
 (ns xsofy.fire
   (:require [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
+            [xsofy.util :as u]
             [xsofy.status :as status]))
 
 ;; --- Fire System ---
@@ -14,11 +15,6 @@
 (def fire-damage 3)
 (def fire-spread-chance 30)  ;; percent per adjacent flammable per tick
 (def fire-default-ttl 5)
-
-(def neighbors
-  [[-1 -1] [0 -1] [1 -1]
-   [-1  0]         [1  0]
-   [-1  1] [0  1] [1  1]])
 
 (defn ignite [world x y]
   "Set a tile on fire. Only works on flammable tiles or if forced."
@@ -54,7 +50,7 @@
               ;; keep burning
               (swap! new-ttl assoc [x y] (dec ttl))
               ;; spread to adjacent flammable
-              (doseq [[dx dy] neighbors]
+              (doseq [[dx dy] u/dirs8]
                 (let [nx (+ x dx) ny (+ y dy)]
                   (when (and (>= nx 0) (< nx width) (>= ny 0) (< ny height))
                     (let [ntile (terrain/tget terrain width nx ny)]
