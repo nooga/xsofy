@@ -438,6 +438,7 @@
 ;; Both horizontal and vertical bridges. Bridges must be 2-8 tiles of gap.
 
 (def bridgeable-tiles #{6 4})  ;; chasm, deep water
+(def bridge-shore-tiles #{1 2 5 8 10 16 17 18})  ;; solid ground for bridge endpoints (no shallow water)
 
 (defn walk-distance
   "BFS shortest path distance between two points over walkable tiles.
@@ -479,34 +480,34 @@
                               (recur (inc di) t)))))]
                 (recur (inc head) t)))))))))
 
+(def bridge-gap-tiles #{4 6 3})  ;; deep water, chasm, shallow water — all part of the gap
+
 (defn try-bridge
   "Scan from (x,y) in direction (dx,dy) for a bridge opportunity.
+   Start and end must be on solid shore tiles (not shallow water).
    Returns [end-x end-y span] or nil."
   [grid w h x y dx dy]
-  (let [;; starting tile must be walkable
-        start-tile (tget grid w x y)]
-    (when (contains? walkable-tiles start-tile)
-      ;; step into the gap
+  (let [start-tile (tget grid w x y)]
+    (when (contains? bridge-shore-tiles start-tile)
+      ;; step into the gap (deep water, shallow water, chasm)
       (let [gx (atom (+ x dx)) gy (atom (+ y dy))
             span (atom 0)]
         (while (and (in-bounds? w h @gx @gy)
-                    (contains? bridgeable-tiles (tget grid w @gx @gy))
+                    (contains? bridge-gap-tiles (tget grid w @gx @gy))
                     (< @span 8))
-          ;; check flanks: sides of the bridge must be wall or gap (not open floor)
-          (let [fx (- dy) fy dx  ;; perpendicular
+          (let [fx (- dy) fy dx
                 left-tile (tget grid w (+ @gx fx) (+ @gy fy))
                 right-tile (tget grid w (- @gx fx) (- @gy fy))]
-            (when-not (and (or (= 8 left-tile) (contains? bridgeable-tiles left-tile))
-                           (or (= 8 right-tile) (contains? bridgeable-tiles right-tile)))
-              ;; open exposure on one side — that's fine, but track it
+            (when-not (and (or (= 8 left-tile) (contains? bridge-gap-tiles left-tile))
+                           (or (= 8 right-tile) (contains? bridge-gap-tiles right-tile)))
               nil))
           (swap! span inc)
           (swap! gx + dx)
           (swap! gy + dy))
-        ;; check: did we land on walkable ground?
+        ;; must land on solid shore (not shallow water)
         (when (and (>= @span 2) (<= @span 8)
                    (in-bounds? w h @gx @gy)
-                   (contains? walkable-tiles (tget grid w @gx @gy)))
+                   (contains? bridge-shore-tiles (tget grid w @gx @gy)))
           [@gx @gy @span])))))
 
 (defn build-bridges!
@@ -522,7 +523,7 @@
       (let [coords (shuffle (for [y (range 1 (dec h)) x (range 1 (dec w))] [x y]))]
         (doseq [[x y] coords]
           (when (and (not @built-any) (< @total 6)
-                     (contains? walkable-tiles (tget grid w x y)))
+                     (contains? bridge-shore-tiles (tget grid w x y)))
             ;; try all 4 directions
             (doseq [[dx dy] [[1 0] [0 1] [-1 0] [0 -1]]]
               (when (and (not @built-any) (< @total 6))

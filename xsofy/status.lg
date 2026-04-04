@@ -15,7 +15,8 @@
    :confused {:color [200 100 255] :bg [40 20 50] :name "confused"}
    :slowed   {:color [140 140 180] :bg [30 30 40] :name "slowed"}
    :haste    {:color [255 255 100] :bg [40 40 15] :name "haste"}
-   :webbed   {:color [200 200 210] :bg [30 30 32] :name "webbed"}})
+   :webbed   {:color [200 200 210] :bg [30 30 32] :name "webbed"}
+   :swimming {:color [60 100 180] :bg [10 20 50] :name "swimming"}})
 
 ;; --- Apply / Remove ---
 

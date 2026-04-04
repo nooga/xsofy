@@ -469,9 +469,8 @@
                     %))))
         ;; chasm: 10 fall damage
         6 (ent/damage-entity world entity-id 10)
-        ;; deep water: apply slowed status, chance to damage scrolls
-        4 (-> world
-              (status/apply-status entity-id :slowed 3))
+        ;; deep water: apply swimming status
+        4 (status/apply-status world entity-id :swimming 999)
         ;; not a hazard
         world))))
 
@@ -1024,6 +1023,54 @@
                                             (or hit-name "target")
                                             " for " dmg "."))))))))))))))))
 
+(defn swim-drop-item [world]
+  "While swimming, 15% chance to lose an item from inventory each move."
+  (if (< (rand-int 100) 15)
+    (let [inv (or (get-in world [:entities :player :inventory]) [])
+          equipment (or (get-in world [:entities :player :equipment]) {})
+          equipped-ids (set (filter some? (vals equipment)))
+          droppable (vec (filter #(not (contains? equipped-ids %)) inv))]
+      (if (seq droppable)
+        (let [item-id (nth droppable (rand-int (count droppable)))
+              iname (or (get-in world [:entities item-id :item-name])
+                        (name (or (get-in world [:entities item-id :template]) :item)))]
+          (-> (ent/drop-item world item-id :player)
+              (log-msg (str "The " iname " slips from your grasp!"))))
+        world))
+    world))
+
+(defn check-leave-water [world]
+  "Remove swimming status when player is no longer on deep water."
+  (if (status/has-status? world :player :swimming)
+    (let [{:keys [terrain width]} world
+          [px py] (get-in world [:entities :player :pos])
+          tile (terrain/tget terrain width px py)]
+      (if (not= tile 4)
+        (-> (status/remove-status world :player :swimming)
+            (log-msg "You climb out of the water."))
+        world))
+    world))
+
+(defn drift-water-items [world]
+  "Items on deep water drift in a random direction each turn."
+  (let [{:keys [terrain width height]} world
+        items (->> (vals (:entities world))
+                   (filter (fn [e] (and (= :item (:entity-type e)) (:pos e)))))]
+    (reduce (fn [w item]
+              (let [[x y] (:pos item)
+                    tile (terrain/tget terrain width x y)]
+                (if (= tile 4)
+                  (let [[dx dy] (nth [[1 0] [-1 0] [0 1] [0 -1]] (rand-int 4))
+                        nx (+ x dx) ny (+ y dy)
+                        ntile (terrain/tget terrain width nx ny)]
+                    (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                             (or (= ntile 4) (= ntile 3)
+                                 (contains? terrain/walkable-tiles ntile)))
+                      (assoc-in w [:entities (:id item) :pos] [nx ny])
+                      w))
+                  w)))
+            world items)))
+
 (defn player-move [world dx dy]
   (let [{:keys [terrain width height]} world
         [px py] (get-in world [:entities :player :pos])
@@ -1132,7 +1179,9 @@
                       (-> w
                           (status/apply-status :player :webbed 3)
                           (log-msg "You walk into a web!"))
-                      w)]
+                      w)
+                  ;; check if leaving water
+                  w (check-leave-water w)]
               w)
             (log-msg world "Blocked."))))
 
@@ -1146,13 +1195,24 @@
                     (update :turn inc)
                     update-fov)]
           w)
-        ;; not flying: prompt for confirmation
-        (let [info (get terrain/hazard-info tile)]
-          (-> world
-              (assoc :screen :confirm-hazard
-                     :hazard-prompt (:prompt info)
-                     :hazard-pos [nx ny]
-                     :hazard-dx dx :hazard-dy dy))))
+        ;; already swimming? deep water doesn't need re-confirmation
+        (if (and (= tile 4) (status/has-status? world :player :swimming))
+          (let [swim-cost (* move-cost 2)  ;; swimming is slow
+                w (-> world
+                      (assoc-in [:entities :player :pos] [nx ny])
+                      (add-ticks :player swim-cost)
+                      (update :turn inc)
+                      update-fov)
+                ;; chance to drop an item while swimming
+                w (swim-drop-item w)]
+            w)
+          ;; not flying, not swimming: prompt for confirmation
+          (let [info (get terrain/hazard-info tile)]
+            (-> world
+                (assoc :screen :confirm-hazard
+                       :hazard-prompt (:prompt info)
+                       :hazard-pos [nx ny]
+                       :hazard-dx dx :hazard-dy dy)))))
 
       ;; wall
       :else
@@ -1231,8 +1291,8 @@
           acted (> (:turn w) (:turn world))
           w (if acted
               (let [w2 (run-until-player-turn w)
-                    ;; fire simulation + burning entities ignite terrain
-                    w3 (-> w2 fire/step-fire fire/burning-entities-ignite)]
+                    ;; fire simulation + burning entities ignite terrain + water drift
+                    w3 (-> w2 fire/step-fire fire/burning-entities-ignite drift-water-items)]
                 (if (get-in w3 [:entities :player])
                   (update-fov w3)
                   w3))
