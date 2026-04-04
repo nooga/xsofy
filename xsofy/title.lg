@@ -8,10 +8,10 @@
          "Dungeons" "Barrows" "Sanctums" "Citadels" "Spires" "Tombs"
          "Labyrinths" "Oubliettes" "Sepulchres" "Chasms" "Warrens"
          "Dominions" "Reaches" "Passages" "Chambers" "Shrines"
-         "Tunnels" "Caves" "Cloisters" "Casemates" "Halls" "Chambers"
+         "Tunnels" "Caves" "Caverns" "Cloisters" "Casemates" "Halls" "Chambers"
          "Shrines" "Temples" "Cisterns" "Containers" "Hells" "Coils"
          "Labirynths" "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"
-         "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos"])
+         "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos" "Realms" "Dimensions"])
 
 (def ys ["Recursion" "Nil" "Off-By-One" "Eval" "Nesting"
          "Garbage Collection" "Structural Sharing" "Eventual Consistency"
@@ -30,7 +30,8 @@
          "Tuesday" "Trepidation" "Darkness" "Drab" "Beige" "Questionable Beauty"
          "Mildew" "Moisture" "Understandable Nature" "Varying Utility" "Grotesque"
          "Terror" "Labirynthian Design" "Boredom" "Bondage" "Procrastination"
-         "Polite Enquiry" "Measured Response" "Madness" "Inconvenience"])
+         "Polite Enquiry" "Measured Response" "Madness" "Inconvenience"
+         "Rage Quitting"])
 
 (defn generate-title []
   (str (nth xs (rand-int (count xs)))
