@@ -1,5 +1,6 @@
 (ns xsofy.combat
   (:require [xsofy.entities :as ent]
+            [xsofy.terrain :as terrain]
             [math]))
 
 ;; --- Strength Modifier ---
@@ -113,3 +114,82 @@
          :speed speed
          :sneak (and did-hit sneak (> sneak-mult 1))
          :net-enchant net-enchant}))))
+
+;; --- Attack Patterns ---
+;; Given attacker position, direction, and weapon, compute which positions to attack.
+;; Returns a vector of [x y] positions (may be empty for reach weapons with no target).
+
+(defn rotate-cw
+  "Rotate direction 45 degrees clockwise."
+  [dx dy]
+  (cond
+    (and (= dx 1)  (= dy 0))  [1 1]
+    (and (= dx 1)  (= dy 1))  [0 1]
+    (and (= dx 0)  (= dy 1))  [-1 1]
+    (and (= dx -1) (= dy 1))  [-1 0]
+    (and (= dx -1) (= dy 0))  [-1 -1]
+    (and (= dx -1) (= dy -1)) [0 -1]
+    (and (= dx 0)  (= dy -1)) [1 -1]
+    (and (= dx 1)  (= dy -1)) [1 0]
+    :else [dx dy]))
+
+(defn rotate-ccw
+  "Rotate direction 45 degrees counter-clockwise."
+  [dx dy]
+  (cond
+    (and (= dx 1)  (= dy 0))  [1 -1]
+    (and (= dx 1)  (= dy -1)) [0 -1]
+    (and (= dx 0)  (= dy -1)) [-1 -1]
+    (and (= dx -1) (= dy -1)) [-1 0]
+    (and (= dx -1) (= dy 0))  [-1 1]
+    (and (= dx -1) (= dy 1))  [0 1]
+    (and (= dx 0)  (= dy 1))  [1 1]
+    (and (= dx 1)  (= dy 1))  [1 0]
+    :else [dx dy]))
+
+(defn pattern-target-positions
+  "Compute attack target positions for a weapon's attack pattern.
+   Returns vector of [x y] positions to try attacking.
+   px,py = attacker pos, dx,dy = attack direction, world for terrain checks."
+  [world px py dx dy pattern]
+  (let [tx (+ px dx) ty (+ py dy)]
+    (case (or pattern :single)
+      ;; default: just the bump tile
+      :single [[tx ty]]
+
+      ;; spear lunge: target + tile behind target
+      :lunge [[tx ty] [(+ tx dx) (+ ty dy)]]
+
+      ;; axe cleave: 3-tile arc (center + two flanks)
+      :cleave (let [[cwx cwy] (rotate-cw dx dy)
+                    [ccwx ccwy] (rotate-ccw dx dy)]
+                [[tx ty]
+                 [(+ px cwx) (+ py cwy)]
+                 [(+ px ccwx) (+ py ccwy)]])
+
+      ;; war hammer impact: just the target (knockback handled separately)
+      :impact [[tx ty]]
+
+      ;; whip reach: scan straight line up to 5 tiles for first creature
+      :reach (vec (map (fn [i] [(+ px (* dx (inc i))) (+ py (* dy (inc i)))])
+                       (range 5)))
+
+      ;; flail skip: tile at range 2, fallback to range 1
+      :skip [[(+ px (* dx 2)) (+ py (* dy 2))] [tx ty]]
+
+      ;; fallback
+      [[tx ty]])))
+
+(defn get-attack-pattern [world attacker-id]
+  "Get the attack pattern keyword for the attacker's weapon, or :single."
+  (let [wep (ent/get-weapon world attacker-id)]
+    (or (get-in wep [:item :attack-pattern]) :single)))
+
+(defn attack-direction-glyph
+  "Return a VFX glyph for a directional attack."
+  [dx dy]
+  (cond
+    (and (= dx 0) (not= dy 0)) "|"
+    (and (not= dx 0) (= dy 0)) "-"
+    (and (= dx dy))             "\\"
+    :else                       "/"))

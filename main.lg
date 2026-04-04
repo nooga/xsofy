@@ -65,9 +65,13 @@
           slot (get-in item [:item :slot])
           iname (get-item-name world item-id)]
       (if slot
-        (-> (ent/unequip-item world :player slot)
-            (world/log-msg (str "You remove the " iname "."))
-            (assoc :screen :inventory))
+        (if (ent/cursed? world item-id)
+          (-> world
+              (world/log-msg (str "The " iname " is cursed! You can't remove it."))
+              (assoc :screen :inventory))
+          (-> (ent/unequip-item world :player slot)
+              (world/log-msg (str "You remove the " iname "."))
+              (assoc :screen :inventory)))
         (assoc world :screen :inventory)))
     (assoc world :screen :inventory)))
 
@@ -77,12 +81,18 @@
           equipment (or (get-in world [:entities :player :equipment]) {})
           slot (get-in world [:entities item-id :item :slot])
           equipped-id (when slot (get equipment slot))
-          w (if (= equipped-id item-id)
-              (ent/unequip-item world :player slot)
-              world)]
-      (-> (ent/drop-item w item-id :player)
-          (world/log-msg (str "You drop the " iname "."))
-          (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world))))))
+          ;; can't drop equipped cursed items
+          is-equipped-cursed (and (= equipped-id item-id) (ent/cursed? world item-id))]
+      (if is-equipped-cursed
+        (-> world
+            (world/log-msg (str "The " iname " is cursed! You can't remove it."))
+            (assoc :screen :inventory))
+        (let [w (if (= equipped-id item-id)
+                  (ent/unequip-item world :player slot)
+                  world)]
+          (-> (ent/drop-item w item-id :player)
+              (world/log-msg (str "You drop the " iname "."))
+              (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world))))))))
     (assoc world :screen :inventory)))
 
 (defn inv-use [world]
@@ -154,17 +164,22 @@
 
                      :unequip
                      (if slot
-                       (-> (ent/unequip-item world :player slot)
-                           (world/log-msg (str "You remove the " iname ".")))
+                       (if (ent/cursed? world item-id)
+                         (world/log-msg world (str "The " iname " is cursed! You can't remove it."))
+                         (-> (ent/unequip-item world :player slot)
+                             (world/log-msg (str "You remove the " iname "."))))
                        world)
 
                      :drop
                      (let [equipped-id (when slot (get equipment slot))
-                           w (if (= equipped-id item-id)
-                               (ent/unequip-item world :player slot)
-                               world)]
-                       (-> (ent/drop-item w item-id :player)
-                           (world/log-msg (str "You drop the " iname "."))))
+                           is-cursed (and (= equipped-id item-id) (ent/cursed? world item-id))]
+                       (if is-cursed
+                         (world/log-msg world (str "The " iname " is cursed! You can't remove it."))
+                         (let [w (if (= equipped-id item-id)
+                                   (ent/unequip-item world :player slot)
+                                   world)]
+                           (-> (ent/drop-item w item-id :player)
+                               (world/log-msg (str "You drop the " iname "."))))))
 
                      :use
                      (if (= slot :consumable)

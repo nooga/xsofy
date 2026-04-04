@@ -63,6 +63,7 @@
                  :str-req (or (:str-req m) 1)
                  :enchant (or (:enchant m) 0)
                  :sneak-bonus (or (:sneak-bonus m) 3)}
+                (when (:attack-pattern m) {:attack-pattern (:attack-pattern m)})
                 (when (:ranged m) {:ranged true :range (or (:range m) 8)}))})
 
 (defn armor [m]
@@ -150,6 +151,30 @@
                      (assoc :id id
                             :template species
                             :pos pos))]
+    (assoc-in world [:entities id] instance)))
+
+(defn spawn-loot-item
+  "Spawn an item from a loot descriptor {:template :key :enchant N :runic {:runes [...] :name str}}."
+  [world descriptor pos]
+  (let [species (:template descriptor)
+        template (get @templates species)
+        _ (when (nil? template) (throw (str "Unknown item: " species)))
+        id (next-id species)
+        enchant (or (:enchant descriptor) 0)
+        runic (:runic descriptor)
+        instance (-> template
+                     (assoc :id id
+                            :template species
+                            :pos pos)
+                     ;; apply enchantment
+                     (cond-> (and (:item template) (not= 0 enchant))
+                       (assoc-in [:item :enchant] enchant))
+                     ;; apply runic program + name + color
+                     (cond-> runic
+                       (-> (assoc :runes (:runes runic))
+                           (assoc :item-name (str (:name runic) " "
+                                                  (or (:item-name template)
+                                                      (name species)))))))]
     (assoc-in world [:entities id] instance)))
 
 ;; --- Entity Queries ---
@@ -251,8 +276,16 @@
                 world)]
         (assoc-in w [:entities owner-id :equipment slot] item-id)))))
 
+(defn cursed? [world item-id]
+  "An item is cursed if its enchant level is negative."
+  (let [enchant (get-in world [:entities item-id :item :enchant] 0)]
+    (< enchant 0)))
+
 (defn unequip-item [world owner-id slot]
-  (update-in world [:entities owner-id :equipment] dissoc slot))
+  (let [item-id (get-in world [:entities owner-id :equipment slot])]
+    (if (and item-id (cursed? world item-id))
+      nil  ;; can't unequip cursed items — caller should check and show message
+      (update-in world [:entities owner-id :equipment] dissoc slot))))
 
 ;; --- Combat with Equipment ---
 

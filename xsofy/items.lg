@@ -1,12 +1,16 @@
 (ns xsofy.items
   (:require [xsofy.entities :refer [defitem visual weapon armor ring
-                                     consumable item-name item-desc drops runes]]))
+                                     consumable item-name item-desc drops runes]]
+            [math]))
 
 ;; --- Gold ---
 
 (defitem gold
   (visual "$" [255 220 50])
   (item-name "gold"))
+
+;; === BASE ITEM DEFINITIONS ===
+;; These are templates. Spawned items get enchantment + optional runic at runtime.
 
 ;; --- Weapons ---
 ;; speed: 100 = normal, <100 = fast, >100 = slow
@@ -34,19 +38,36 @@
   (visual "|" [180 160 120])
   (item-name "spear")
   (item-desc "Long reach. Hits the enemy behind your target.")
-  (weapon {:min-dmg 3 :max-dmg 5 :accuracy 100 :speed 100 :str-req 2}))
+  (weapon {:min-dmg 3 :max-dmg 5 :accuracy 100 :speed 100 :str-req 2
+           :attack-pattern :lunge}))
 
 (defitem axe
   (visual ")" [180 140 100])
   (item-name "axe")
-  (item-desc "Broad blade. Strikes all adjacent enemies.")
-  (weapon {:min-dmg 4 :max-dmg 8 :accuracy 90 :speed 110 :str-req 3}))
+  (item-desc "Broad blade. Strikes all adjacent enemies in an arc.")
+  (weapon {:min-dmg 4 :max-dmg 8 :accuracy 90 :speed 110 :str-req 3
+           :attack-pattern :cleave}))
 
 (defitem war-hammer
   (visual "\\" [160 140 120])
   (item-name "war hammer")
-  (item-desc "Crushingly slow. Two turns to recover on hit, but devastating.")
-  (weapon {:min-dmg 8 :max-dmg 14 :accuracy 90 :speed 200 :str-req 5}))
+  (item-desc "Crushingly slow. Sends enemies flying on impact.")
+  (weapon {:min-dmg 8 :max-dmg 14 :accuracy 90 :speed 200 :str-req 5
+           :attack-pattern :impact}))
+
+(defitem whip
+  (visual "~" [160 120 80])
+  (item-name "whip")
+  (item-desc "Cracks at range. Strikes the first enemy in a line up to 5 tiles.")
+  (weapon {:min-dmg 2 :max-dmg 4 :accuracy 100 :speed 100 :str-req 1
+           :attack-pattern :reach}))
+
+(defitem flail
+  (visual "}" [170 150 130])
+  (item-name "flail")
+  (item-desc "Swings over adjacent obstacles. Strikes at 2 tiles distance.")
+  (weapon {:min-dmg 6 :max-dmg 11 :accuracy 85 :speed 130 :str-req 3
+           :attack-pattern :skip}))
 
 (defitem rapier
   (visual "/" [230 230 250])
@@ -54,39 +75,7 @@
   (item-desc "Lightning fast. Strikes twice in the time of a normal weapon.")
   (weapon {:min-dmg 2 :max-dmg 5 :accuracy 110 :speed 50 :str-req 2}))
 
-;; --- Runic Weapons ---
-
-(defitem flaming-dagger
-  (visual "/" [255 140 40])
-  (item-name "flaming dagger")
-  (item-desc "A dagger wreathed in fire. Burns what it cuts.")
-  (weapon {:min-dmg 2 :max-dmg 4 :accuracy 100 :speed 60 :str-req 1 :sneak-bonus 5})
-  (runes :fire))
-
-(defitem frost-sword
-  (visual "/" [140 180 255])
-  (item-name "frost sword")
-  (item-desc "Coated in rime. Chills the area around the target.")
-  (weapon {:min-dmg 4 :max-dmg 7 :accuracy 100 :speed 100 :str-req 3})
-  (runes :apply :area 1 :ice))
-
-(defitem thunder-hammer
-  (visual "\\" [200 200 255])
-  (item-name "thunder hammer")
-  (item-desc "Crackles with lightning. Strikes arc to nearby foes.")
-  (weapon {:min-dmg 8 :max-dmg 14 :accuracy 90 :speed 200 :str-req 5})
-  (runes :arc :arc))
-
-(defitem vampiric-blade
-  (visual "/" [180 30 60])
-  (item-name "vampiric blade")
-  (item-desc "Drinks the life of those it cuts. Heals the wielder.")
-  (weapon {:min-dmg 3 :max-dmg 6 :accuracy 100 :speed 100 :str-req 2})
-  (runes :apply :damage 2 :self :apply :heal 2))
-
 ;; --- Ranged Weapons ---
-;; Bows use arrows from inventory. :ranged true marks them as ranged.
-;; Melee stats are weak fallback for when out of arrows.
 
 (defitem short-bow
   (visual ")" [140 110 60])
@@ -102,34 +91,7 @@
   (weapon {:min-dmg 3 :max-dmg 7 :accuracy 100 :speed 120 :str-req 3
            :ranged true :range 12}))
 
-;; --- Runic Bows ---
-
-(defitem flaming-bow
-  (visual ")" [255 140 40])
-  (item-name "flaming bow")
-  (item-desc "Arrows ignite on release. Sets targets ablaze.")
-  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 1
-           :ranged true :range 8})
-  (runes :fire))
-
-(defitem frost-bow
-  (visual ")" [140 180 255])
-  (item-name "frost bow")
-  (item-desc "Arrows trail frost. Freezes on impact.")
-  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 2
-           :ranged true :range 8})
-  (runes :ice))
-
-;; --- Arrows ---
-
-(defitem arrow
-  (visual "/" [180 160 120])
-  (item-name "arrow")
-  (item-desc "A wooden arrow with a stone tip. Stack of ammunition.")
-  (consumable {:effect :ammo :count 5}))
-
 ;; --- Armor ---
-;; defense: higher = harder to hit. 10 = leather, 50 = plate
 
 (defitem leather-armor
   (visual "[" [140 100 60])
@@ -175,32 +137,275 @@
   (item-desc "Glowing runes. Enhances a weapon or armor.")
   (consumable {:effect :enchant :count 1}))
 
-;; --- Loot Tables ---
+;; --- Arrows ---
 
-(def depth-loot
-  {1 {:weapons [:dagger :short-sword :short-bow :flaming-dagger]
-      :armor   [:leather-armor]
-      :potions [:health-potion :health-potion :strength-potion]
-      :scrolls [:scroll-identify]
-      :ammo    [:arrow]}
-   2 {:weapons [:short-sword :long-sword :spear :rapier :short-bow :long-bow :flaming-dagger :frost-sword]
-      :armor   [:leather-armor :chain-mail]
-      :potions [:health-potion :strength-potion]
-      :scrolls [:scroll-identify :scroll-enchant]
-      :ammo    [:arrow]}
-   3 {:weapons [:long-sword :axe :war-hammer :rapier :long-bow :thunder-hammer :vampiric-blade :frost-sword :flaming-bow :frost-bow]
-      :armor   [:chain-mail :plate-armor]
-      :potions [:health-potion :strength-potion]
-      :scrolls [:scroll-identify :scroll-enchant :scroll-enchant]
-      :ammo    [:arrow]}})
+(defitem arrow
+  (visual "/" [180 160 120])
+  (item-name "arrow")
+  (item-desc "A wooden arrow with a stone tip. Stack of ammunition.")
+  (consumable {:effect :ammo :count 5}))
 
+;; --- Legacy runic weapons (kept for starting items / debug) ---
+
+(defitem flaming-dagger
+  (visual "/" [255 140 40])
+  (item-name "flaming dagger")
+  (weapon {:min-dmg 2 :max-dmg 4 :accuracy 100 :speed 60 :str-req 1 :sneak-bonus 5})
+  (runes :fire))
+
+(defitem frost-sword
+  (visual "/" [140 180 255])
+  (item-name "frost sword")
+  (weapon {:min-dmg 4 :max-dmg 7 :accuracy 100 :speed 100 :str-req 3})
+  (runes :apply :area 1 :ice))
+
+(defitem thunder-hammer
+  (visual "\\" [200 200 255])
+  (item-name "thunder hammer")
+  (weapon {:min-dmg 8 :max-dmg 14 :accuracy 90 :speed 200 :str-req 5
+           :attack-pattern :impact})
+  (runes :arc :arc))
+
+(defitem vampiric-blade
+  (visual "/" [180 30 60])
+  (item-name "vampiric blade")
+  (weapon {:min-dmg 3 :max-dmg 6 :accuracy 100 :speed 100 :str-req 2})
+  (runes :apply :damage 2 :self :apply :heal 2))
+
+(defitem flaming-bow
+  (visual ")" [255 140 40])
+  (item-name "flaming bow")
+  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 1
+           :ranged true :range 8})
+  (runes :fire))
+
+(defitem frost-bow
+  (visual ")" [140 180 255])
+  (item-name "frost bow")
+  (weapon {:min-dmg 2 :max-dmg 5 :accuracy 100 :speed 100 :str-req 2
+           :ranged true :range 8})
+  (runes :ice))
+
+;; ==========================================================
+;; DEPTH CURVE LOOT SYSTEM
+;; ==========================================================
+
+;; --- Depth frequency ---
+;; Gaussian bell curve: peaks at `peak`, falls off with `spread`.
+
+(defn depth-freq [depth peak spread]
+  (math/exp (- (/ (* (float (- depth peak)) (float (- depth peak)))
+                   (* 2.0 spread spread)))))
+
+;; --- Loot Table ---
+;; Each entry: {:template :key  :category :cat  :peak N  :spread N  :weight N  :cost N}
+
+(def loot-table
+  [;; weapons — peak early to late, overlapping
+   {:template :dagger       :category :weapon  :peak 1  :spread 1.5  :weight 10  :cost 2}
+   {:template :short-sword  :category :weapon  :peak 2  :spread 2.0  :weight 9   :cost 2}
+   {:template :rapier       :category :weapon  :peak 2  :spread 2.0  :weight 6   :cost 3}
+   {:template :spear        :category :weapon  :peak 3  :spread 2.5  :weight 7   :cost 2}
+   {:template :long-sword   :category :weapon  :peak 4  :spread 2.0  :weight 7   :cost 3}
+   {:template :axe          :category :weapon  :peak 4  :spread 2.0  :weight 5   :cost 3}
+   {:template :war-hammer   :category :weapon  :peak 6  :spread 2.5  :weight 4   :cost 4}
+   {:template :whip         :category :weapon  :peak 2  :spread 2.5  :weight 6   :cost 2}
+   {:template :flail        :category :weapon  :peak 5  :spread 2.0  :weight 4   :cost 3}
+   ;; ranged
+   {:template :short-bow    :category :weapon  :peak 1  :spread 2.0  :weight 5   :cost 2}
+   {:template :long-bow     :category :weapon  :peak 4  :spread 2.5  :weight 4   :cost 3}
+   ;; armor
+   {:template :leather-armor :category :armor  :peak 1  :spread 2.0  :weight 8   :cost 3}
+   {:template :chain-mail    :category :armor  :peak 3  :spread 2.0  :weight 6   :cost 4}
+   {:template :plate-armor   :category :armor  :peak 6  :spread 2.5  :weight 3   :cost 5}
+   ;; potions — always available
+   {:template :health-potion    :category :potion  :peak 1  :spread 99.0  :weight 15  :cost 1}
+   {:template :strength-potion  :category :potion  :peak 3  :spread 99.0  :weight 5   :cost 2}
+   ;; scrolls
+   {:template :scroll-identify  :category :scroll  :peak 1  :spread 99.0  :weight 8   :cost 1}
+   {:template :scroll-enchant   :category :scroll  :peak 3  :spread 99.0  :weight 6   :cost 2}
+   ;; ammo
+   {:template :arrow  :category :ammo  :peak 1  :spread 99.0  :weight 10  :cost 1}])
+
+;; --- Category caps per floor ---
+
+(def category-caps
+  {:weapon 2  :armor 2  :potion 3  :scroll 2  :ammo 3})
+
+;; --- Weighted random selection ---
+
+(defn weighted-pick
+  "Pick a random item from entries using :eff-weight. Returns the entry or nil."
+  [entries]
+  (when (seq entries)
+    (let [total (reduce (fn [sum e] (+ sum (:eff-weight e))) 0.0 entries)]
+      (when (> total 0)
+        (let [roll (* (rand) total)]
+          (loop [remaining entries acc 0.0]
+            (when (seq remaining)
+              (let [e (first remaining)
+                    acc (+ acc (:eff-weight e))]
+                (if (>= acc roll)
+                  e
+                  (recur (rest remaining) acc))))))))))
+
+;; --- Enchantment ---
+
+(defn roll-enchant [depth]
+  (let [roll (- (rand-int 4) 1)
+        depth-bonus (quot depth 3)
+        result (+ roll depth-bonus)]
+    (max -3 (min 5 result))))
+
+;; --- Procedural Runics ---
+
+;; Effect pools with weights
+(def runic-effects
+  [{:effect :fire  :weight 20  :name "flaming"}
+   {:effect :ice   :weight 20  :name "freezing"}
+   {:effect :push  :weight 15  :name "repulsing"}
+   {:effect :arc   :weight 5   :name "thundering"}])
+
+(def runic-self-effects
+  [{:effect :heal    :weight 15  :name "vampiric"}
+   {:effect :damage  :weight 10  :name "volatile"}])
+
+(defn pick-effect [pool]
+  (let [total (reduce (fn [s e] (+ s (:weight e))) 0 pool)
+        roll (rand-int total)]
+    (loop [remaining pool acc 0]
+      (when (seq remaining)
+        (let [e (first remaining)
+              acc (+ acc (:weight e))]
+          (if (>= acc roll)
+            e
+            (recur (rest remaining) acc)))))))
+
+;; Runic templates by quality tier
+(defn generate-runic-program [depth tier]
+  (let [eff (pick-effect runic-effects)
+        param (+ 1 (rand-int (min 4 (+ 1 (quot depth 2)))))]
+    (case tier
+      ;; useful: simple on-hit effects
+      :useful
+      (let [shape (rand-int 3)]
+        (case shape
+          0 {:runes [(:effect eff)]
+             :name (:name eff)}
+          1 {:runes [:apply (:effect eff) param]
+             :name (:name eff)}
+          2 (let [eff2 (pick-effect (vec (filter #(not= (:effect %) (:effect eff)) runic-effects)))]
+              {:runes [(:effect eff) (:effect eff2)]
+               :name (str (:name eff) " " (:name eff2))})))
+
+      ;; powerful: area, chain, vampiric
+      :powerful
+      (let [shape (rand-int 3)
+            radius (+ 1 (rand-int 2))]
+        (case shape
+          0 {:runes [:apply :area radius (:effect eff)]
+             :name (str "furious " (:name eff))}
+          1 {:runes [:arc :arc]
+             :name "thundering"}
+          2 (let [dmg (+ 1 (rand-int 3))
+                  heal (max 1 (dec dmg))]
+              {:runes [:apply :damage dmg :self :apply :heal heal]
+               :name "vampiric"})))
+
+      ;; dangerous: useful but with self-targeting twist
+      :dangerous
+      (let [self-eff (pick-effect runic-self-effects)]
+        {:runes [(:effect eff) :self (:effect self-eff)]
+         :name (str (:name eff) " " (:name self-eff))})
+
+      ;; broken: inverted — hurts the wielder
+      :broken
+      (let [shape (rand-int 2)]
+        (case shape
+          0 {:runes [:self (:effect eff)]
+             :name (str "cursed " (:name eff))}
+          1 {:runes [:self :apply :damage param]
+             :name "self-destructive"})))))
+
+(defn roll-quality-tier []
+  (let [r (rand-int 100)]
+    (cond
+      (< r 55) :useful
+      (< r 80) :powerful
+      (< r 95) :dangerous
+      :else    :broken)))
+
+(defn runic-chance [depth]
+  (cond
+    (<= depth 2) 0.15
+    (<= depth 4) 0.25
+    :else         0.35))
+
+;; Runic color tint based on primary effect
+(def runic-colors
+  {:fire  [255 140 40]
+   :ice   [140 180 255]
+   :push  [120 255 120]
+   :arc   [200 200 255]
+   :heal  [180 30 60]
+   :damage [255 60 60]})
+
+(defn runic-color [program]
+  (let [rune-list (:runes program)
+        primary (first (filter keyword? rune-list))]
+    (get runic-colors primary [200 180 120])))
+
+;; --- Floor Loot Generation ---
+
+(defn roll-floor-loot
+  "Generate a vector of item descriptors for a floor.
+   Each descriptor: {:template :key :enchant N :runic {:runes [...] :name str} or nil}"
+  [depth]
+  (let [budget (atom (+ 6 depth (rand-int 3)))
+        counts (atom {})  ;; category -> count
+        ;; compute effective weights
+        weighted (vec (filter
+                        #(> (:eff-weight %) 0.01)
+                        (mapv (fn [entry]
+                                (assoc entry :eff-weight
+                                       (* (:weight entry)
+                                          (depth-freq depth (:peak entry) (:spread entry)))))
+                              loot-table)))
+        items (atom [])]
+    (dotimes [_ 30]  ;; max 30 attempts
+      (when (> @budget 0)
+        (let [;; filter by budget and category caps
+              available (vec (filter
+                              (fn [e]
+                                (and (<= (:cost e) @budget)
+                                     (< (get @counts (:category e) 0)
+                                        (get category-caps (:category e) 99))))
+                              weighted))]
+          (when (seq available)
+            (when-let [pick (weighted-pick available)]
+              (let [cat (:category pick)
+                    tpl (:template pick)
+                    ;; roll enchant for weapons and armor
+                    enchant (if (or (= cat :weapon) (= cat :armor))
+                              (roll-enchant depth) 0)
+                    ;; roll runic for weapons and armor
+                    is-runic (and (or (= cat :weapon) (= cat :armor))
+                                  (< (rand) (runic-chance depth)))
+                    runic (when is-runic
+                            (generate-runic-program depth (roll-quality-tier)))
+                    cost (+ (:cost pick) (if is-runic 2 0))]
+                (when (<= cost @budget)
+                  (swap! budget - cost)
+                  (swap! counts update cat #(inc (or % 0)))
+                  (swap! items conj {:template tpl
+                                     :enchant enchant
+                                     :runic runic}))))))))
+    @items))
+
+;; --- Legacy API (still used by populate-room until world.lg is updated) ---
 
 (defn random-loot [depth]
-  (let [table (get depth-loot (min depth 3) (get depth-loot 3))
-        category (rand-int 5)]
-    (case category
-      0 (let [pool (:weapons table)] (nth pool (rand-int (count pool))))
-      1 (let [pool (:armor table)] (nth pool (rand-int (count pool))))
-      2 (let [pool (:potions table)] (nth pool (rand-int (count pool))))
-      3 (let [pool (:scrolls table)] (nth pool (rand-int (count pool))))
-      4 (let [pool (:ammo table)] (nth pool (rand-int (count pool)))))))
+  (let [items (roll-floor-loot depth)]
+    (if (seq items)
+      (:template (nth items (rand-int (count items))))
+      :health-potion)))

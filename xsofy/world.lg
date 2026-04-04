@@ -21,42 +21,89 @@
 
 (def view-radius 12)
 
-;; --- Depth-based creature spawning ---
+;; --- Depth-based creature spawning (gaussian curves) ---
 
-(def depth-creatures
-  {1 [:rat :rat :goblin :goblin]
-   2 [:rat :goblin :goblin :archer]
-   3 [:goblin :goblin :archer :slime]})
+(defn depth-freq [depth peak spread]
+  (math/exp (- (/ (* (float (- depth peak)) (float (- depth peak)))
+                   (* 2.0 spread spread)))))
 
-(defn creatures-for-depth [depth]
-  (get depth-creatures (min depth 3) [:goblin]))
+(def creature-table
+  [;; early dungeon
+   {:species :rat            :peak 1  :spread 1.2  :weight 14}
+   {:species :kobold         :peak 1  :spread 1.5  :weight 8}
+   {:species :goblin         :peak 2  :spread 1.5  :weight 10}
+   ;; getting dangerous
+   {:species :archer         :peak 2  :spread 1.5  :weight 6}
+   {:species :spider         :peak 3  :spread 1.5  :weight 7}
+   {:species :slime          :peak 3  :spread 2.0  :weight 5}
+   ;; mid dungeon
+   {:species :goblin-shaman  :peak 4  :spread 1.5  :weight 5}
+   {:species :fire-imp       :peak 4  :spread 1.5  :weight 5}
+   ;; dangerous
+   {:species :ogre           :peak 5  :spread 1.5  :weight 4}
+   {:species :troll          :peak 5  :spread 2.0  :weight 3}
+   ;; late dungeon
+   {:species :wraith         :peak 6  :spread 1.5  :weight 4}
+   {:species :ice-elemental  :peak 6  :spread 1.5  :weight 3}
+   ;; deep dungeon
+   {:species :dragon         :peak 8  :spread 2.0  :weight 2}])
 
-(defn populate-room [world room-center grid tw th depth]
-  (let [pool (creatures-for-depth depth)
-        num-creatures (rand-int 3)
-        num-items (rand-int 2)
+(defn pick-creature [depth]
+  "Pick a creature using depth-weighted random selection."
+  (let [weighted (mapv (fn [e]
+                         (assoc e :eff-weight
+                                (* (:weight e)
+                                   (depth-freq depth (:peak e) (:spread e)))))
+                       creature-table)
+        total (reduce (fn [s e] (+ s (:eff-weight e))) 0.0 weighted)
+        roll (* (rand) total)]
+    (loop [remaining weighted acc 0.0]
+      (if (empty? remaining)
+        :goblin  ;; fallback
+        (let [e (first remaining)
+              acc (+ acc (:eff-weight e))]
+          (if (>= acc roll)
+            (:species e)
+            (recur (rest remaining) acc)))))))
+
+(defn populate-room-creatures [world room-center grid tw th depth]
+  "Spawn creatures in a room using depth-curved selection."
+  (let [num-creatures (rand-int 3)
         [rx ry] room-center]
-    ;; spawn creatures
-    (let [w (loop [world world n num-creatures]
-              (if (<= n 0) world
-                (let [species (nth pool (rand-int (count pool)))
-                      ox (+ rx (- (rand-int 5) 2))
-                      oy (+ ry (- (rand-int 5) 2))]
-                  (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
-                           (terrain/walkable? grid tw th ox oy)
-                           (nil? (ent/creature-at world [ox oy])))
-                    (recur (ent/spawn world species [ox oy]) (dec n))
-                    (recur world (dec n))))))]
-      ;; spawn items
-      (loop [world w n num-items]
-        (if (<= n 0) world
-          (let [item-type (items/random-loot depth)
-                ox (+ rx (- (rand-int 5) 2))
-                oy (+ ry (- (rand-int 5) 2))]
-            (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
-                     (terrain/walkable? grid tw th ox oy))
-              (recur (ent/spawn-item world item-type [ox oy]) (dec n))
-              (recur world (dec n)))))))))
+    (loop [world world n num-creatures]
+      (if (<= n 0) world
+        (let [species (pick-creature depth)
+              ox (+ rx (- (rand-int 5) 2))
+              oy (+ ry (- (rand-int 5) 2))]
+          (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
+                   (terrain/walkable? grid tw th ox oy)
+                   (nil? (ent/creature-at world [ox oy])))
+            (recur (ent/spawn world species [ox oy]) (dec n))
+            (recur world (dec n))))))))
+
+(defn find-spawn-pos [grid tw th rx ry]
+  "Find a walkable position near (rx,ry) for item placement."
+  (loop [attempts 5]
+    (when (> attempts 0)
+      (let [ox (+ rx (- (rand-int 5) 2))
+            oy (+ ry (- (rand-int 5) 2))]
+        (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
+                 (terrain/walkable? grid tw th ox oy))
+          [ox oy]
+          (recur (dec attempts)))))))
+
+(defn distribute-loot [world loot-bag rooms grid tw th]
+  "Distribute a bag of loot descriptors across rooms (skip first room = player start)."
+  (let [target-rooms (vec (rest rooms))
+        num-rooms (count target-rooms)]
+    (if (or (empty? loot-bag) (= 0 num-rooms))
+      world
+      (reduce (fn [w descriptor]
+                (let [[rx ry] (nth target-rooms (rand-int num-rooms))]
+                  (if-let [pos (find-spawn-pos grid tw th rx ry)]
+                    (ent/spawn-loot-item w descriptor pos)
+                    w)))
+              world loot-bag))))
 
 ;; --- FOV ---
 
@@ -96,13 +143,18 @@
                  :depth depth
                  :running true}]
       (dbg/log "  populating rooms")
-      (let [populated (reduce (fn [wrld room]
-                                (dbg/log "    populate room:" room)
-                                (populate-room wrld room grid w h depth))
-                              world
-                              (rest rooms))]
+      (let [;; spawn creatures per room
+            with-creatures (reduce (fn [wrld room]
+                                     (dbg/log "    populate room:" room)
+                                     (populate-room-creatures wrld room grid w h depth))
+                                   world
+                                   (rest rooms))
+            ;; generate floor loot and distribute across rooms
+            loot-bag (items/roll-floor-loot depth)
+            _ (dbg/log "  loot bag:" (count loot-bag) "items")
+            with-loot (distribute-loot with-creatures loot-bag rooms grid w h)]
         (dbg/log "  rooms populated, running update-fov")
-        (let [result (update-fov populated)]
+        (let [result (update-fov with-loot)]
           (dbg/log "  generate-floor done")
           result)))))
 
@@ -398,6 +450,17 @@
 
 ;; --- Combat ---
 
+(defn push-entity [world entity-id dx dy]
+  "Push an entity 1 tile in direction [dx dy] if the destination is walkable and empty."
+  (let [entity (get-in world [:entities entity-id])
+        [ex ey] (:pos entity)
+        nx (+ ex dx) ny (+ ey dy)
+        {:keys [terrain width height]} world]
+    (if (and (terrain/walkable? terrain width height nx ny)
+             (nil? (ent/creature-at world [nx ny])))
+      (assoc-in world [:entities entity-id :pos] [nx ny])
+      nil)))
+
 (defn melee-attack [world attacker-id target-id]
   (let [attacker (get-in world [:entities attacker-id])
         target (get-in world [:entities target-id])]
@@ -419,12 +482,14 @@
                     w (if target-pos
                         (splatter-blood w2 (first target-pos) (second target-pos) dmg hp-before killed)
                         w2)
-                    ;; trigger weapon runes on hit
+                    ;; trigger runes on hit (weapon runes or creature runes)
                     wep (ent/get-weapon world attacker-id)
-                    w (if (and wep (:runes wep) target-pos)
-                        (let [result (spell/eval-spell w attacker-id target-pos (:runes wep))]
+                    hit-runes (or (when wep (:runes wep))
+                                  (:runes attacker))
+                    w (if (and hit-runes target-pos)
+                        (let [result (spell/eval-spell w attacker-id target-pos hit-runes)]
                           (-> (:world result)
-                              (update :vfx #(into (or % []) (:vfx result)))))
+                              (update :vfx #(vec (concat (or % []) (or (:vfx result) []))))))
                         w)
                     sneak-txt (if sneak " (sneak attack!)" "")]
                 (let [target-sounds (:sounds target)
@@ -583,23 +648,32 @@
 ;; --- Ranged Attack (uses projectile system) ---
 
 (defn ranged-attack [world attacker-id target-id]
-  "Creature fires a ranged attack at target."
+  "Creature fires a ranged attack at target. If creature has :spell-runes,
+   casts a rune program at target position after the projectile hits."
   (let [attacker (get-in world [:entities attacker-id])
         target (get-in world [:entities target-id])]
     (if (or (nil? attacker) (nil? target))
       world
       (let [spell-data (get-in attacker [:spells :ranged])
             dmg (or (:damage spell-data) 2)
-            atk-name (entity-name attacker)]
+            atk-name (entity-name attacker)
+            spell-runes (:spell-runes attacker)]
         (let [result (launch-projectile world (:pos attacker) (:pos target)
                                         attacker-id {:damage dmg})
               w (:world result)
-              hit (:hit result)]
+              hit (:hit result)
+              hit-pos (:hit-pos result)]
           (if (nil? hit)
             (log-msg w (str "The " atk-name "'s shot misses."))
             (let [hit-name (entity-name hit)
                   hit-id (:id hit)
-                  killed (nil? (get-in w [:entities hit-id]))]
+                  killed (nil? (get-in w [:entities hit-id]))
+                  ;; trigger spell runes at impact if creature has them
+                  w (if (and spell-runes hit-pos (seq spell-runes))
+                      (let [sr (spell/eval-spell w attacker-id hit-pos spell-runes)]
+                        (-> (:world sr)
+                            (update :vfx #(vec (concat (or % []) (or (:vfx sr) []))))))
+                      w)]
               (cond
                 (= hit-id :player)
                 (if killed
@@ -691,16 +765,26 @@
 ;; --- Enchanting ---
 
 (defn enchant-item [world target-id scroll-id]
-  "Apply enchant scroll to a weapon or armor. +1 enchant, -1 str req."
+  "Apply enchant scroll to a weapon or armor. +1 enchant, -1 str req.
+   If the item was cursed (negative enchant) and reaches 0, it's uncursed."
   (let [target (get-in world [:entities target-id])
         slot (get-in target [:item :slot])
-        iname (or (:item-name target) (name (or (:template target) (:id target))))]
+        iname (or (:item-name target) (name (or (:template target) (:id target))))
+        old-enchant (or (get-in target [:item :enchant]) 0)]
     (if (or (= slot :weapon) (= slot :armor))
-      (-> world
-          (update-in [:entities target-id :item :enchant] #(inc (or % 0)))
-          (update-in [:entities target-id :item :str-req] #(max 0 (dec (or % 1))))
-          (consume-item scroll-id)
-          (log-msg (str "The " iname " glows brightly! (+1 enchantment)")))
+      (let [new-enchant (inc old-enchant)
+            msg (cond
+                  (and (< old-enchant 0) (>= new-enchant 0))
+                  (str "The " iname " shudders and the curse lifts! (+" new-enchant ")")
+                  (< new-enchant 0)
+                  (str "The " iname " glows faintly. The curse weakens. (" new-enchant ")")
+                  :else
+                  (str "The " iname " glows brightly! (+" new-enchant " enchantment)"))]
+        (-> world
+            (assoc-in [:entities target-id :item :enchant] new-enchant)
+            (update-in [:entities target-id :item :str-req] #(max 0 (dec (or % 1))))
+            (consume-item scroll-id)
+            (log-msg msg)))
       (log-msg world "You can't enchant that."))))
 
 ;; --- Tick System ---
@@ -910,24 +994,78 @@
               update-fov
               (log-msg "You open the door.")))
 
-      ;; walkable
-      (terrain/walkable? terrain width height nx ny)
-      (let [target (ent/creature-at world [nx ny])]
-        (if (and target (not= :player (:id target)))
-          (let [result (combat/resolve-attack world :player (:id target))
-                speed (if result (or (:speed result) move-cost) move-cost)
-                w (melee-attack world :player (:id target))]
+      ;; walkable (or reach weapon can attack through walls)
+      (or (terrain/walkable? terrain width height nx ny)
+          (= :reach (combat/get-attack-pattern world :player)))
+      (let [pattern (combat/get-attack-pattern world :player)
+            wep (ent/get-weapon world :player)
+            bump-target (ent/creature-at world [nx ny])
+            ;; reach/skip weapons can initiate attack even without bump target
+            has-target (and bump-target (not= :player (:id bump-target)))
+            can-pattern-attack (contains? #{:reach :skip} pattern)
+            ;; compute all positions this pattern can hit
+            positions (when (or has-target can-pattern-attack)
+                        (combat/pattern-target-positions world px py dx dy pattern))
+            ;; find creatures at those positions
+            targets (when positions
+                      (vec (filter some?
+                             (map (fn [pos]
+                                    (let [c (ent/creature-at world pos)]
+                                      (when (and c (not= :player (:id c)))
+                                        {:id (:id c) :pos pos})))
+                                  positions))))
+            ;; for :reach, only hit the FIRST creature in the line
+            targets (if (and (= pattern :reach) (seq targets))
+                      [(first targets)]
+                      targets)
+            ;; for :skip, only hit the first valid target (range 2 preferred, range 1 fallback)
+            targets (if (and (= pattern :skip) (seq targets))
+                      [(first targets)]
+                      targets)]
+        (if (seq targets)
+          ;; attack all targets
+          (let [first-result (combat/resolve-attack world :player (:id (first targets)))
+                speed (if first-result (or (:speed first-result) move-cost) move-cost)
+                ;; attack each target in sequence
+                w (reduce (fn [w tgt]
+                            (melee-attack w :player (:id tgt)))
+                          world targets)
+                ;; for :impact pattern, push the primary target on hit
+                w (if (and (= pattern :impact) first-result (:hit first-result))
+                    (let [primary-id (:id (first targets))
+                          pushed (push-entity w primary-id dx dy)]
+                      (if pushed
+                        pushed
+                        ;; couldn't push — bonus damage
+                        (let [entity (get-in w [:entities primary-id])]
+                          (if entity
+                            (ent/damage-entity w primary-id 2)
+                            w))))
+                    w)
+                ;; generate VFX for multi-target or reach attacks
+                w (if (or (> (count targets) 1) (contains? #{:reach :lunge :skip} pattern))
+                    (let [vfx-cells (mapv :pos targets)
+                          glyph (combat/attack-direction-glyph dx dy)
+                          flash-events (mapv (fn [pos]
+                                               {:type :flash :pos pos
+                                                :color [255 255 255] :decay 3})
+                                             vfx-cells)]
+                      (update w :vfx #(vec (concat (or % []) flash-events))))
+                    w)]
             (-> w
                 (add-ticks :player speed)
                 (update :turn inc)
                 update-fov))
-          (let [w (-> world
-                      (trample-grass nx ny)
-                      (assoc-in [:entities :player :pos] [nx ny])
-                      (add-ticks :player move-cost)
-                      (update :turn inc)
-                      update-fov)]
-            (do-pickup w [nx ny]))))
+          ;; no targets — move normally (if tile is walkable)
+          (if (terrain/walkable? terrain width height nx ny)
+            (let [w (-> world
+                        (trample-grass nx ny)
+                        (assoc-in [:entities :player :pos] [nx ny])
+                        (add-ticks :player move-cost)
+                        (update :turn inc)
+                        update-fov)]
+              (do-pickup w [nx ny]))
+            (log-msg world "Blocked."))))
 
       ;; wall
       :else

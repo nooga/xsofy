@@ -14,7 +14,7 @@
 (deftrait :regenerating
   {:status {:regen {:per-turn 1}}})
 
-;; --- Creatures ---
+;; === DEPTH 1-2: Early dungeon ===
 
 (defcreature rat
   (visual "r" [140 100 60])
@@ -46,6 +46,21 @@
                     :mid  nil :far nil
                     :chance 2}]}))
 
+(defcreature kobold
+  (visual "k" [120 80 160])
+  (body {:hp 5 :strength 1})
+  (ai :pack {:speed 2})
+  (melee 2)
+  (sounds {:death {:near "The kobold yelps and collapses!"
+                   :mid  "You hear a yelp."
+                   :far  nil}
+           :idle  [{:near "The kobold chatters nervously."
+                    :mid  "You hear chattering."
+                    :far  nil
+                    :chance 3}]}))
+
+;; === DEPTH 2-3: Getting dangerous ===
+
 (defcreature archer
   (visual "a" [60 140 100])
   (body {:hp 6 :strength 1})
@@ -56,6 +71,91 @@
   (sounds {:death {:near "The archer gasps and collapses!"
                    :mid  "You hear a gasp."
                    :far  nil}}))
+
+(defcreature spider
+  (visual "S" [80 60 40])
+  (body {:hp 7 :strength 2})
+  (ai :hunter {:speed 2})
+  (melee 2)
+  ;; spider bites apply poison via rune program on hit
+  {:runes [:apply :damage 1]}
+  (sounds {:death {:near "The spider curls up and dies."
+                   :mid  "You hear a faint hiss."
+                   :far  nil}
+           :idle  [{:near "The spider clicks its mandibles."
+                    :mid  "You hear clicking."
+                    :far  nil
+                    :chance 3}]}))
+
+(defcreature slime
+  (visual "s" [100 200 100])
+  (body {:hp 12 :strength 1})
+  (ai :hunter {:speed 2})
+  (melee 1)
+  {:properties {:splits-on-hit true}}
+  (sounds {:death {:near "The slime dissolves with a hiss."
+                   :mid  "You hear a wet hiss."
+                   :far  nil}
+           :idle  [{:near "The slime squelches."
+                    :mid  "You hear squelching."
+                    :far  nil
+                    :chance 4}]}))
+
+;; === DEPTH 3-4: Mid dungeon ===
+
+(defcreature goblin-shaman
+  (visual "G" [30 200 80])
+  (body {:hp 10 :strength 2})
+  (ai :ranged {:preferred-range 4})
+  (melee 1)
+  ;; casts ice bolt at range
+  (spell :ranged {:damage 3 :range 6})
+  {:spell-runes [:ice]}
+  (drops :gold :gold)
+  (sounds {:death {:near "The shaman shrieks as its power fades!"
+                   :mid  "You hear a dying shriek."
+                   :far  nil}
+           :idle  [{:near "The shaman chants under its breath."
+                    :mid  "You hear chanting."
+                    :far  nil
+                    :chance 5}]}))
+
+(defcreature fire-imp
+  (visual "i" [255 120 30])
+  (body {:hp 5 :strength 1})
+  (ai :ranged {:preferred-range 3 :speed 2})
+  (melee 2)
+  (spell :ranged {:damage 3 :range 5})
+  {:spell-runes [:fire]}
+  (immune :fire)
+  (sounds {:death {:near "The fire imp pops like an ember!"
+                   :mid  "You hear a sharp pop."
+                   :far  nil}
+           :idle  [{:near "The fire imp crackles and sparks."
+                    :mid  "You hear crackling."
+                    :far  nil
+                    :chance 5}]}))
+
+;; === DEPTH 4-5: Dangerous ===
+
+(defcreature ogre
+  (visual "O" [160 130 80])
+  (body {:hp 25 :strength 5 :armor 2})
+  (ai :hunter)
+  (melee 5)
+  (drops :gold :gold :gold)
+  (sounds {:death {:near "The ogre crashes to the ground!"
+                   :mid  "You hear a thunderous crash."
+                   :far  "You hear a distant crash."}
+           :idle  [{:near "The ogre belches."
+                    :mid  "You hear a belch."
+                    :far  nil
+                    :chance 4}
+                   {:near "The ogre grunts and shuffles."
+                    :mid  "You hear heavy footsteps."
+                    :far  "You feel the ground tremble."
+                    :chance 6
+                    :radius 12}]}))
 
 (defcreature troll
   (trait :regenerating)
@@ -76,31 +176,54 @@
                     :mid  nil :far nil
                     :chance 2}]}))
 
-(defcreature fire-imp
-  (visual "i" [255 120 30])
-  (body {:hp 5 :strength 1})
-  (ai :aggressive {:speed 2})
-  (melee 2)
-  (spell :breath {:damage 3 :element :fire})
-  (immune :fire)
-  (sounds {:death {:near "The fire imp pops like an ember!"
-                   :mid  "You hear a sharp pop."
-                   :far  nil}
-           :idle  [{:near "The fire imp crackles and sparks."
-                    :mid  "You hear crackling."
-                    :far  nil
-                    :chance 5}]}))
+;; === DEPTH 5-6: Late dungeon ===
 
-(defcreature slime
-  (visual "s" [100 200 100])
-  (body {:hp 12 :strength 1})
+(defcreature wraith
+  (visual "W" [180 160 220])
+  (body {:hp 15 :strength 3})
   (ai :hunter {:speed 2})
-  (melee 1)
-  {:properties {:splits-on-hit true}}
-  (sounds {:death {:near "The slime dissolves with a hiss."
-                   :mid  "You hear a wet hiss."
+  (melee 3)
+  ;; drains life on hit
+  {:runes [:apply :damage 2 :self :apply :heal 1]}
+  (sounds {:death {:near "The wraith dissolves into mist."
+                   :mid  "You hear a hollow moan."
                    :far  nil}
-           :idle  [{:near "The slime squelches."
-                    :mid  "You hear squelching."
+           :idle  [{:near "The wraith drifts silently."
+                    :mid  nil :far nil
+                    :chance 2}]}))
+
+(defcreature ice-elemental
+  (visual "E" [100 160 255])
+  (body {:hp 18 :strength 3 :armor 2})
+  (ai :ranged {:preferred-range 3})
+  (melee 3)
+  (spell :ranged {:damage 4 :range 5})
+  {:spell-runes [:apply :area 1 :ice]}
+  (immune :ice)
+  (sounds {:death {:near "The elemental shatters into shards!"
+                   :mid  "You hear shattering ice."
+                   :far  "You hear a distant crack."}
+           :idle  [{:near "The elemental hums with cold."
+                    :mid  "You feel a chill."
                     :far  nil
                     :chance 4}]}))
+
+;; === DEPTH 7+: Deep dungeon ===
+
+(defcreature dragon
+  (visual "D" [255 60 30])
+  (body {:hp 40 :strength 6 :armor 3})
+  (ai :ranged {:preferred-range 4})
+  (melee 6)
+  (spell :ranged {:damage 5 :range 7})
+  {:spell-runes [:apply :area 2 :fire]}
+  (immune :fire)
+  (drops :gold :gold :gold :gold)
+  (sounds {:death {:near "The dragon crashes down with a final roar!"
+                   :mid  "You hear a terrible roar."
+                   :far  "The dungeon trembles."}
+           :idle  [{:near "The dragon's nostrils glow with heat."
+                    :mid  "You smell sulfur."
+                    :far  "You smell something acrid."
+                    :chance 6
+                    :radius 20}]}))
