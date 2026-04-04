@@ -284,6 +284,19 @@
              (term/read-key)
              (assoc world :running false))
 
+         :confirm-hazard
+         (do
+           ;; render the prompt on the message line
+           (render/render-full world)
+           (let [prompt (or (:hazard-prompt world) "Are you sure?")
+                 k (do (render/render-hazard-prompt world prompt)
+                       (term/read-key))
+                 w (if (= k "y")
+                     (world/confirm-hazard-step world)
+                     (world/cancel-hazard-step world))]
+             (render/render-full w)
+             (recur w w (term/size))))
+
          ;; default: game screen
          (let [;; determine auto-action or wait for input
                auto-key (cond

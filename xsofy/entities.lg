@@ -276,6 +276,10 @@
                 world)]
         (assoc-in w [:entities owner-id :equipment slot] item-id)))))
 
+(defn flying? [world entity-id]
+  "Check if entity has the flying property."
+  (get-in world [:entities entity-id :properties :flying] false))
+
 (defn cursed? [world item-id]
   "An item is cursed if its enchant level is negative."
   (let [enchant (get-in world [:entities item-id :item :enchant] 0)]

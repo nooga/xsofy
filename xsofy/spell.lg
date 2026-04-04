@@ -176,22 +176,44 @@
             (:cursors ctx))]
     (assoc ctx :world w)))
 
+;; Tiles you can be pushed into (walkable + hazards)
+(def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
+
 (defn r-push [ctx]
-  (let [origin (:origin ctx)]
+  (let [origin (:origin ctx)
+        {:keys [terrain width height]} (:world ctx)]
     (let [w (reduce
               (fn [world pos]
                 (let [targets (->> (vals (:entities world))
                                    (filter (fn [e] (and (some? e) (map? e)
+                                                         (:pos e)
                                                          (= pos (:pos e))
                                                          (not= (:caster ctx) (:id e))))))]
                   (reduce (fn [w e]
-                            (let [[ex ey] (:pos e)
-                                  [ox oy] origin
-                                  dx (- ex ox) dy (- ey oy)
-                                  len (max 1 (math/sqrt (+ (* dx dx) (* dy dy))))
-                                  ndx (int (/ dx len)) ndy (int (/ dy len))
-                                  nx (+ ex ndx) ny (+ ey ndy)]
-                              (assoc-in w [:entities (:id e) :pos] [nx ny])))
+                            (let [epos (:pos e)]
+                              (if (nil? epos) w
+                                (let [[ex ey] epos
+                                      [ox oy] origin
+                                      dx (- ex ox) dy (- ey oy)
+                                      len (max 1 (math/sqrt (+ (* dx dx) (* dy dy))))
+                                      ndx (int (/ dx len)) ndy (int (/ dy len))
+                                      nx (+ ex ndx) ny (+ ey ndy)
+                                      dest-tile (terrain/tget terrain width nx ny)
+                                      occupant (ent/creature-at w [nx ny])]
+                                  (cond
+                                    ;; occupied: both exchange hits (bump damage)
+                                    (and occupant (not= (:id occupant) (:id e)))
+                                    (let [w (ent/damage-entity w (:id e) 2)
+                                          w (if (get-in w [:entities (:id occupant)])
+                                              (ent/damage-entity w (:id occupant) 2)
+                                              w)]
+                                      w)
+                                    ;; pushable tile (walkable + hazards like lava/chasm/deep water)
+                                    (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                                         (contains? pushable-tiles dest-tile))
+                                    (assoc-in w [:entities (:id e) :pos] [nx ny])
+                                    ;; wall or void — can't push
+                                    :else w)))))
                           world targets)))
               (:world ctx)
               (:cursors ctx))]

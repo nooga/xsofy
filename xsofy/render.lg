@@ -825,6 +825,19 @@
 
 ;; --- Public API ---
 
+(defn render-hazard-prompt [world prompt]
+  "Render a hazard confirmation prompt at the bottom of the screen."
+  (let [[tw th] (term/size)
+        msg (str " " prompt " (y/n)")
+        y th]
+    (term/move-cursor 1 y)
+    (term/set-fg 255 200 60)
+    (term/set-bg 40 20 10)
+    (term/write (apply str (repeat tw " ")))
+    (term/move-cursor 1 y)
+    (term/write msg)
+    (term/flush)))
+
 (defn render-full [world]
   (let [[tw th] (term/size)
         panels (ui/layout tw th)]

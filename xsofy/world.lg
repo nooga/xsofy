@@ -108,7 +108,7 @@
 ;; --- FOV ---
 
 (defn update-fov [world]
-  (if-not (get-in world [:entities :player])
+  (if-not (get-in world [:entities :player :pos])
     world
     (let [{:keys [terrain width height]} world
           [px py] (get-in world [:entities :player :pos])
@@ -450,16 +450,62 @@
 
 ;; --- Combat ---
 
+;; --- Hazard Tile Effects ---
+
+(defn apply-hazard-effects [world entity-id x y]
+  "Apply effects of standing on a hazard tile. Flying creatures are immune."
+  (if (ent/flying? world entity-id)
+    world
+    (let [{:keys [terrain width]} world
+          tile (terrain/tget terrain width x y)]
+      (case tile
+        ;; lava: 8 fire damage + burning, fire-immune creatures unaffected
+        7 (if (get-in world [:entities entity-id :properties :fire-immune])
+            world
+            (-> world
+                (ent/damage-entity entity-id 8)
+                (#(if (get-in % [:entities entity-id])
+                    (status/apply-status % entity-id :burning 3)
+                    %))))
+        ;; chasm: 10 fall damage
+        6 (ent/damage-entity world entity-id 10)
+        ;; deep water: apply slowed status, chance to damage scrolls
+        4 (-> world
+              (status/apply-status entity-id :slowed 3))
+        ;; not a hazard
+        world))))
+
+(def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
+
 (defn push-entity [world entity-id dx dy]
-  "Push an entity 1 tile in direction [dx dy] if the destination is walkable and empty."
-  (let [entity (get-in world [:entities entity-id])
-        [ex ey] (:pos entity)
-        nx (+ ex dx) ny (+ ey dy)
-        {:keys [terrain width height]} world]
-    (if (and (terrain/walkable? terrain width height nx ny)
-             (nil? (ent/creature-at world [nx ny])))
-      (assoc-in world [:entities entity-id :pos] [nx ny])
-      nil)))
+  "Push an entity 1 tile in direction [dx dy].
+   Pushable into walkable tiles and hazards (lava, chasm, deep water).
+   If destination is occupied, both creatures take 2 bump damage instead."
+  (let [entity (get-in world [:entities entity-id])]
+    (when (and entity (:pos entity))
+      (let [[ex ey] (:pos entity)
+            nx (+ ex dx)
+            ny (+ ey dy)
+            {:keys [terrain width height]} world
+            dest-tile (terrain/tget terrain width nx ny)
+            occupant (ent/creature-at world [nx ny])]
+        (cond
+          ;; occupied — exchange hits
+          (and occupant (not= (:id occupant) entity-id))
+          (let [w (ent/damage-entity world entity-id 2)
+                w (if (get-in w [:entities (:id occupant)])
+                    (ent/damage-entity w (:id occupant) 2)
+                    w)]
+            w)
+          ;; pushable tile and empty
+          (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+               (contains? pushable-tiles dest-tile))
+          (let [w (assoc-in world [:entities entity-id :pos] [nx ny])]
+            (if (get-in w [:entities entity-id])
+              (apply-hazard-effects w entity-id nx ny)
+              w))
+          ;; wall — can't push
+          :else nil)))))
 
 (defn melee-attack [world attacker-id target-id]
   (let [attacker (get-in world [:entities attacker-id])
@@ -1045,17 +1091,17 @@
                 w (reduce (fn [w tgt]
                             (melee-attack w :player (:id tgt)))
                           world targets)
-                ;; for :impact pattern, push the primary target on hit
+                ;; for :impact pattern, push the primary target on hit (if still alive)
                 w (if (and (= pattern :impact) first-result (:hit first-result))
                     (let [primary-id (:id (first targets))
-                          pushed (push-entity w primary-id dx dy)]
-                      (if pushed
-                        pushed
-                        ;; couldn't push — bonus damage
-                        (let [entity (get-in w [:entities primary-id])]
-                          (if entity
-                            (ent/damage-entity w primary-id 2)
-                            w))))
+                          entity (get-in w [:entities primary-id])]
+                      (if (nil? entity)
+                        w  ;; already dead, nothing to push
+                        (let [pushed (push-entity w primary-id dx dy)]
+                          (if pushed
+                            pushed
+                            ;; couldn't push — bonus damage
+                            (ent/damage-entity w primary-id 2)))))
                     w)
                 ;; generate VFX for multi-target or reach attacks
                 w (if (or (> (count targets) 1) (contains? #{:reach :lunge :skip} pattern))
@@ -1090,9 +1136,49 @@
               w)
             (log-msg world "Blocked."))))
 
+      ;; hazard tile — flying creatures pass freely, others get confirmation
+      (contains? terrain/hazard-tiles tile)
+      (if (ent/flying? world :player)
+        ;; flying: just move over it
+        (let [w (-> world
+                    (assoc-in [:entities :player :pos] [nx ny])
+                    (add-ticks :player move-cost)
+                    (update :turn inc)
+                    update-fov)]
+          w)
+        ;; not flying: prompt for confirmation
+        (let [info (get terrain/hazard-info tile)]
+          (-> world
+              (assoc :screen :confirm-hazard
+                     :hazard-prompt (:prompt info)
+                     :hazard-pos [nx ny]
+                     :hazard-dx dx :hazard-dy dy))))
+
       ;; wall
       :else
       (log-msg world "Blocked.")))))
+
+(defn confirm-hazard-step [world]
+  "Execute the pending hazard step after player confirms."
+  (let [[nx ny] (:hazard-pos world)
+        {:keys [terrain width]} world
+        tile (terrain/tget terrain width nx ny)
+        info (get terrain/hazard-info tile)
+        w (-> world
+              (dissoc :screen :hazard-prompt :hazard-pos :hazard-dx :hazard-dy)
+              (assoc-in [:entities :player :pos] [nx ny])
+              (add-ticks :player move-cost)
+              (update :turn inc)
+              update-fov
+              (apply-hazard-effects :player nx ny))]
+    (if (get-in w [:entities :player])
+      (log-msg w (str "You step into the " (:name info) "."))
+      w)))
+
+(defn cancel-hazard-step [world]
+  "Cancel the pending hazard step."
+  (-> world
+      (dissoc :screen :hazard-prompt :hazard-pos :hazard-dx :hazard-dy)))
 
 ;; --- Turn Processing ---
 

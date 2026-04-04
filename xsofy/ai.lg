@@ -40,9 +40,11 @@
 
 (defn can-move? [world x y entity-id]
   (let [{:keys [terrain width height]} world
-        tile (terrain/tget (:terrain world) (:width world) x y)]
+        tile (terrain/tget (:terrain world) (:width world) x y)
+        flying (ent/flying? world entity-id)]
     (and (or (terrain/walkable? (:terrain world) width height x y)
-             (= tile 11))  ;; can open doors
+             (= tile 11)  ;; can open doors
+             (and flying (contains? terrain/hazard-tiles tile)))  ;; flying over hazards
          (let [blocker (ent/creature-at world [x y])]
            (or (nil? blocker)
                (= (:id blocker) entity-id))))))

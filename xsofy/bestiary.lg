@@ -185,8 +185,9 @@
   (body {:hp 15 :strength 3})
   (ai :hunter {:speed 2})
   (melee 3)
-  ;; drains life on hit
-  {:runes [:apply :damage 2 :self :apply :heal 1]}
+  ;; drains life on hit; floats over hazards
+  {:runes [:apply :damage 2 :self :apply :heal 1]
+   :properties {:flying true}}
   (sounds {:death {:near "The wraith dissolves into mist."
                    :mid  "You hear a hollow moan."
                    :far  nil}
