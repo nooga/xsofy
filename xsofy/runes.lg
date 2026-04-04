@@ -29,7 +29,7 @@
    ;; cursor modifiers
    :area :spread
    ;; effects
-   :fire :ice :damage :heal :poison :arc :push :conjure
+   :fire :ice :damage :heal :poison :arc :push :web :conjure
    ;; modifiers
    :friend :repeat :wait
    ;; transfer

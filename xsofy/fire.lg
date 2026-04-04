@@ -10,6 +10,7 @@
 
 (def fire-tile 15)
 (def ash-tile 16)
+(def web-tile 19)
 (def fire-damage 3)
 (def fire-spread-chance 30)  ;; percent per adjacent flammable per tick
 (def fire-default-ttl 5)
@@ -84,6 +85,58 @@
                       w @new-ttl)]
         ;; update fire ttl, recompute lights since fire changed
         (assoc w :fire-ttl @new-ttl :lights nil)))))
+
+;; --- Web System ---
+;; Webs are tile 19. Creatures stepping on them get :webbed status.
+;; Moving while webbed costs extra turns. After N struggles the web is trampled to ash.
+
+(defn place-web [world x y]
+  "Place a web at (x,y) if the tile is a walkable floor type."
+  (let [{:keys [terrain width]} world
+        tile (terrain/tget terrain width x y)]
+    (if (and (contains? #{1 2 16 18} tile))  ;; only on floor/grass/ash/trampled
+      (do (terrain/tset! terrain width x y web-tile)
+          world)
+      world)))
+
+(defn place-web-cone
+  "Place webs in a cone pattern from origin toward target direction.
+   Cone widens with distance: 1 tile at range 1, 3 at range 2, 5 at range 3."
+  [world ox oy dx dy]
+  (let [{:keys [terrain width height]} world
+        ;; perpendicular direction for widening
+        px (- dy) py dx]
+    (reduce (fn [w dist]
+              (let [cx (+ ox (* dx dist)) cy (+ oy (* dy dist))
+                    half-width (dec dist)]
+                (reduce (fn [w off]
+                          (let [wx (+ cx (* px off)) wy (+ cy (* py off))]
+                            (if (terrain/in-bounds? width height wx wy)
+                              (place-web w wx wy)
+                              w)))
+                        w
+                        (range (- half-width) (inc half-width)))))
+            world
+            (range 1 4))))  ;; range 1 to 3
+
+(defn on-web? [world x y]
+  "Check if position has a web tile."
+  (let [{:keys [terrain width]} world]
+    (= web-tile (terrain/tget terrain width x y))))
+
+(defn trample-web! [world x y]
+  "Destroy a web, leaving ash."
+  (let [{:keys [terrain width]} world]
+    (when (= web-tile (terrain/tget terrain width x y))
+      (terrain/tset! terrain width x y ash-tile))
+    world))
+
+(defn web-immune? [world entity-id]
+  "Spiders and entities with web immunity don't get caught."
+  (let [entity (get-in world [:entities entity-id])
+        species (:template entity)]
+    (or (= species :spider)
+        (get-in entity [:properties :web-immune]))))
 
 (defn burning-entities-ignite [world]
   "Burning entities set flammable terrain under them on fire."

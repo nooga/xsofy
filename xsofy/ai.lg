@@ -1,6 +1,8 @@
 (ns xsofy.ai
   (:require [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
+            [xsofy.fire :as fire]
+            [xsofy.status :as status]
             [xsofy.sound :as snd]
             [math]))
 
@@ -59,30 +61,49 @@
   (terrain/trample! (:terrain world) (:width world) nx ny)
   world)
 
+(defn apply-web-trap [world entity-id nx ny]
+  "Check if entity stepped on a web. If not immune, trap them."
+  (if (and (fire/on-web? world nx ny)
+           (not (fire/web-immune? world entity-id)))
+    (status/apply-status world entity-id :webbed 3)
+    world))
+
 (defn try-move [world entity-id dx dy]
   (let [entity (get-in world [:entities entity-id])
         [ex ey] (:pos entity)
-        nx (+ ex dx)
-        ny (+ ey dy)]
-    (if (can-move? world nx ny entity-id)
-      (-> (open-door-if-needed world entity-id nx ny)
-          (trample-at nx ny)
-          (assoc-in [:entities entity-id :pos] [nx ny]))
-      ;; try cardinal fallbacks if diagonal blocked
-      (cond
-        (and (not= dx 0) (not= dy 0)
-             (can-move? world (+ ex dx) ey entity-id))
-        (-> world
-            (trample-at (+ ex dx) ey)
-            (assoc-in [:entities entity-id :pos] [(+ ex dx) ey]))
+        ;; if webbed, struggle instead of moving
+        webbed (status/has-status? world entity-id :webbed)]
+    (if webbed
+      (let [ttl (get-in world [:entities entity-id :statuses :webbed :ttl] 1)]
+        (if (<= ttl 1)
+          (-> (fire/trample-web! world ex ey)
+              (status/remove-status entity-id :webbed))
+          (assoc-in world [:entities entity-id :statuses :webbed :ttl] (dec ttl))))
+      ;; normal movement
+      (let [nx (+ ex dx)
+            ny (+ ey dy)]
+        (if (can-move? world nx ny entity-id)
+          (-> (open-door-if-needed world entity-id nx ny)
+              (trample-at nx ny)
+              (assoc-in [:entities entity-id :pos] [nx ny])
+              (apply-web-trap entity-id nx ny))
+          ;; try cardinal fallbacks if diagonal blocked
+          (cond
+            (and (not= dx 0) (not= dy 0)
+                 (can-move? world (+ ex dx) ey entity-id))
+            (-> world
+                (trample-at (+ ex dx) ey)
+                (assoc-in [:entities entity-id :pos] [(+ ex dx) ey])
+                (apply-web-trap entity-id (+ ex dx) ey))
 
-        (and (not= dx 0) (not= dy 0)
-             (can-move? world ex (+ ey dy) entity-id))
-        (-> world
-            (trample-at ex (+ ey dy))
-            (assoc-in [:entities entity-id :pos] [ex (+ ey dy)]))
+            (and (not= dx 0) (not= dy 0)
+                 (can-move? world ex (+ ey dy) entity-id))
+            (-> world
+                (trample-at ex (+ ey dy))
+                (assoc-in [:entities entity-id :pos] [ex (+ ey dy)])
+                (apply-web-trap entity-id ex (+ ey dy)))
 
-        :else world))))
+            :else world))))))
 
 ;; --- Line of Sight ---
 

@@ -983,7 +983,22 @@
         [px py] (get-in world [:entities :player :pos])
         nx (+ px dx)
         ny (+ py dy)
-        tile (terrain/tget terrain width nx ny)]
+        tile (terrain/tget terrain width nx ny)
+        webbed (status/has-status? world :player :webbed)]
+    ;; webbed: struggle to break free instead of moving
+    (if webbed
+      (let [ttl (get-in world [:entities :player :statuses :webbed :ttl] 1)
+            w (if (<= ttl 1)
+                ;; break free — trample the web
+                (-> (fire/trample-web! world px py)
+                    (status/remove-status :player :webbed)
+                    (log-msg "You tear free from the web!"))
+                ;; still stuck — decrement
+                (-> (assoc-in world [:entities :player :statuses :webbed :ttl] (dec ttl))
+                    (log-msg "You struggle against the web...")))]
+        (-> w
+            (add-ticks :player move-cost)
+            (update :turn inc)))
     (cond
       ;; closed door — open it
       (= tile 11)
@@ -1063,13 +1078,21 @@
                         (assoc-in [:entities :player :pos] [nx ny])
                         (add-ticks :player move-cost)
                         (update :turn inc)
-                        update-fov)]
-              (do-pickup w [nx ny]))
+                        update-fov)
+                  w (do-pickup w [nx ny])
+                  ;; check if stepped on web
+                  w (if (and (fire/on-web? w nx ny)
+                             (not (fire/web-immune? w :player)))
+                      (-> w
+                          (status/apply-status :player :webbed 3)
+                          (log-msg "You walk into a web!"))
+                      w)]
+              w)
             (log-msg world "Blocked."))))
 
       ;; wall
       :else
-      (log-msg world "Blocked."))))
+      (log-msg world "Blocked.")))))
 
 ;; --- Turn Processing ---
 

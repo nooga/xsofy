@@ -3,6 +3,7 @@
             [xsofy.effects :as fx]
             [xsofy.status :as status]
             [xsofy.fire :as fire]
+            [xsofy.terrain :as terrain]
             [xsofy.runes :as runes]
             [math]))
 
@@ -221,6 +222,22 @@
 ;; Fns with args: (fn ctx arg1 ...) — called when applied.
 ;; Fns without args: (fn ctx) — called when bare.
 
+(defn r-web [ctx]
+  "Place webs in a cone from caster toward each cursor position."
+  (let [origin (:origin ctx)]
+    (let [w (reduce
+              (fn [world pos]
+                (let [[ox oy] origin
+                      [tx ty] pos
+                      ddx (- tx ox) ddy (- ty oy)
+                      ;; normalize to -1/0/1
+                      len (max 1 (max (math/abs ddx) (math/abs ddy)))
+                      dx (int (/ ddx len)) dy (int (/ ddy len))]
+                  (fire/place-web-cone world ox oy dx dy)))
+              (:world ctx)
+              (:cursors ctx))]
+      (assoc ctx :world w))))
+
 (def rune-primitives
   {:self     r-self
    :nearest  r-nearest
@@ -231,7 +248,8 @@
    :fire     r-fire
    :ice      r-ice
    :push     r-push
-   :arc      r-arc})
+   :arc      r-arc
+   :web      r-web})
 
 ;; default args when called bare (no apply)
 (def rune-defaults
