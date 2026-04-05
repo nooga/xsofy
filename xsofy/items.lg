@@ -97,19 +97,19 @@
   (visual "[" [140 100 60])
   (item-name "leather armor")
   (item-desc "Supple and light. Barely slows you down.")
-  (armor {:defense 15 :str-req 1}))
+  (armor {:defense 5 :str-req 1}))
 
 (defitem chain-mail
   (visual "[" [180 180 200])
   (item-name "chain mail")
   (item-desc "Interlocking rings. Good protection, some weight.")
-  (armor {:defense 30 :str-req 3}))
+  (armor {:defense 10 :str-req 2}))
 
 (defitem plate-armor
   (visual "[" [220 220 230])
   (item-name "plate armor")
   (item-desc "Heavy steel plates. Excellent protection, demands strength.")
-  (armor {:defense 50 :str-req 5}))
+  (armor {:defense 16 :str-req 3}))
 
 ;; --- Consumables ---
 
@@ -125,6 +125,12 @@
   (item-desc "Thick golden syrup. Permanently increases strength.")
   (consumable {:effect :strength :count 1}))
 
+(defitem life-potion
+  (visual "!" [255 100 200])
+  (item-name "life potion")
+  (item-desc "Shimmering pink elixir. Permanently increases vitality.")
+  (consumable {:effect :life :count 1}))
+
 (defitem scroll-identify
   (visual "?" [240 230 200])
   (item-name "scroll of identify")
@@ -136,6 +142,16 @@
   (item-name "scroll of enchantment")
   (item-desc "Glowing runes. Enhances a weapon or armor.")
   (consumable {:effect :enchant :count 1}))
+
+;; --- Runestones ---
+;; Consumed on pickup, teaches the player one rune meaning.
+;; The specific rune is set at spawn time via :rune-key on the entity.
+
+(defitem runestone
+  (visual "*" [180 140 255])
+  (item-name "runestone")
+  (item-desc "A smooth stone etched with a glowing rune. Touch it to learn its meaning.")
+  (consumable {:effect :runestone :count 1}))
 
 ;; --- Arrows ---
 
@@ -221,6 +237,7 @@
    ;; potions — always available
    {:template :health-potion    :category :potion  :peak 1  :spread 99.0  :weight 15  :cost 1}
    {:template :strength-potion  :category :potion  :peak 3  :spread 99.0  :weight 5   :cost 2}
+   {:template :life-potion      :category :potion  :peak 3  :spread 99.0  :weight 4   :cost 2}
    ;; scrolls
    {:template :scroll-identify  :category :scroll  :peak 1  :spread 99.0  :weight 8   :cost 1}
    {:template :scroll-enchant   :category :scroll  :peak 3  :spread 99.0  :weight 6   :cost 2}

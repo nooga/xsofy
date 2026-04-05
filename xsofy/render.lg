@@ -4,6 +4,7 @@
             [async :refer [timeout <!!]]
             [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
+            [xsofy.combat :as combat]
             [xsofy.util :as u]
             [xsofy.lighting :as light]
             [xsofy.effects :as fx]
@@ -242,7 +243,12 @@
           dmg-str (if wep
                     (str (get-in wep [:item :min-dmg] 1) "-" (get-in wep [:item :max-dmg] 2))
                     "1-2")
-          def-val (if arm (or (get-in arm [:item :defense]) 0) 0)
+          ;; compute effective defense: base armor def + enchant scaling + strength modifier
+          arm-def (if arm (or (get-in arm [:item :defense]) 0) 0)
+          arm-enchant (if arm (or (get-in arm [:item :enchant]) 0) 0)
+          arm-req (if arm (or (get-in arm [:item :str-req]) 1) 1)
+          arm-net (+ arm-enchant (combat/strength-modifier str_ arm-req))
+          def-val (+ (get-in player [:body :armor] 0) arm-def (int (* arm-net 10)))
           row (atom 0)]
       ;; player header + HP bar
       (ui/write-line r @row " @ You" [255 220 80] ui/bg)

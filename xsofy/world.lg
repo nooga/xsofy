@@ -17,7 +17,7 @@
             [xsofy.title :as title]
             [math]))
 
-(declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path)
+(declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path spawn-runestones)
 
 (def view-radius 12)
 
@@ -152,9 +152,10 @@
             ;; generate floor loot and distribute across rooms
             loot-bag (items/roll-floor-loot depth)
             _ (dbg/log "  loot bag:" (count loot-bag) "items")
-            with-loot (distribute-loot with-creatures loot-bag rooms grid w h)]
+            with-loot (distribute-loot with-creatures loot-bag rooms grid w h)
+            with-rooms (assoc with-loot :rooms-cache rooms)]
         (dbg/log "  rooms populated, running update-fov")
-        (let [result (update-fov with-loot)]
+        (let [result (update-fov with-rooms)]
           (dbg/log "  generate-floor done")
           result)))))
 
@@ -179,15 +180,15 @@
 (defn give-starting-items [world]
   (reduce (fn [w item-type] (give-item w item-type :player))
           world
-          [:flaming-dagger :frost-sword :thunder-hammer :vampiric-blade
-           :short-bow :arrow :arrow :arrow
-           :health-potion :health-potion :health-potion]))
+          [:dagger :leather-armor
+           :health-potion :health-potion]))
 
 (defn make-world [w h]
   (let [world (generate-floor w h 1 (make-player))]
     (-> world
         give-starting-items
-        (assoc :floors {} :gold 0 :rune-table (runes/generate-rune-table)))))
+        (assoc :floors {} :gold 0 :rune-table (runes/generate-rune-table))
+        spawn-runestones)))
 
 ;; --- Floor Transition ---
 ;; Saves current floor, extracts player + inventory items,
@@ -286,7 +287,7 @@
         :else
         (fx/add-stain world x y :blood 2)))
     ;; not killed — small chance of a drop on big hits
-    (if (and (> dmg 3) (< (rand-int 4) 1))
+    (if (and (> dmg 5) (< (rand-int 6) 1))
       (fx/blood-drop world x y)
       world)))
 
@@ -428,6 +429,7 @@
                          :floors (:floors saved)
                          :scheme (:scheme world))
                   (inject-player player items spawn-pos)
+                  spawn-runestones
                   (log-msg (str "You descend to depth " new-depth ".")))))))))
 
 (defn descend [world]
@@ -752,6 +754,59 @@
                   (log-msg w (str "The " atk-name "'s shot hits the " hit-name "!"))
                   w)))))))))
 
+;; --- Runestones ---
+
+(defn spawn-runestones [world]
+  "Spawn 1-2 runestones on the floor for unidentified runes."
+  (let [rune-table (or (:rune-table world) {})
+        unidentified (runes/undiscovered-runes rune-table)
+        {:keys [terrain width height]} world
+        rooms (:rooms-cache world)
+        num-stones (if (seq unidentified) (+ 1 (rand-int 2)) 0)]
+    (if (or (empty? unidentified) (nil? rooms))
+      world
+      (loop [w world n num-stones remaining (shuffle unidentified)]
+        (if (or (<= n 0) (empty? remaining))
+          w
+          (let [rune-info (first remaining)
+                rune-key (:rune rune-info)
+                ;; pick a random room (not the first = player start)
+                target-rooms (vec (rest rooms))
+                room (when (seq target-rooms)
+                       (nth target-rooms (rand-int (count target-rooms))))
+                [rx ry] (or room [5 5])
+                pos (find-spawn-pos terrain width height rx ry)]
+            (if pos
+              (let [id (ent/next-id :runestone)
+                    template (get @ent/templates :runestone)
+                    glyph (:glyph rune-info)
+                    instance (-> template
+                                 (assoc :id id
+                                        :template :runestone
+                                        :pos pos
+                                        :rune-key rune-key
+                                        :item-name (str "runestone " (or glyph "?"))))]
+                (recur (assoc-in w [:entities id] instance) (dec n) (rest remaining)))
+              (recur w (dec n) (rest remaining)))))))))
+
+(defn consume-runestone [world item]
+  "Consume a runestone, identifying its rune. Returns updated world."
+  (let [rune-key (:rune-key item)
+        rune-table (or (:rune-table world) {})]
+    (if (and rune-key (get rune-table rune-key))
+      (let [new-table (runes/identify-rune rune-table rune-key)
+            glyph (runes/rune-glyph new-table rune-key)
+            meaning (name rune-key)]
+        (-> world
+            (ent/remove-entity (:id item))
+            (assoc :rune-table new-table)
+            (log-msg (str "The runestone crumbles as you touch it. "
+                          "You learn: " glyph " means \"" meaning "\"!"))))
+      ;; no rune-key or already known — just pick up as normal
+      (-> world
+          (ent/remove-entity (:id item))
+          (log-msg "The runestone crumbles to dust.")))))
+
 ;; --- Pickup ---
 
 (defn pickup [world]
@@ -801,10 +856,16 @@
       :strength
       (-> world
           (update-in [:entities :player :body :strength] inc)
-          (update-in [:entities :player :body :max-hp] #(+ % 3))
-          (update-in [:entities :player :body :hp] #(+ % 3))
           (consume-item item-id)
           (log-msg "You feel stronger!"))
+
+      :life
+      (let [new-max (+ (get-in world [:entities :player :body :max-hp] 30) 5)]
+        (-> world
+            (assoc-in [:entities :player :body :max-hp] new-max)
+            (assoc-in [:entities :player :body :hp] new-max)
+            (consume-item item-id)
+            (log-msg "You feel more vigorous! Max HP increased.")))
 
       :enchant
       (-> world
@@ -942,13 +1003,16 @@
                      (ent/remove-entity (:id item))
                      (log-msg "You pick up gold."))
                  (rest items))
+          (if (= :runestone (:template item))
+            (recur (consume-runestone w item)
+                   (rest items))
           (let [result (ent/pickup-item w (:id item) :player)]
             (if result
               (recur (log-msg result (str "You pick up the " iname "."))
                      (rest items))
               (-> w
                   (log-msg "Your inventory is full.")
-                  (assoc :inventory-full true)))))))))
+                  (assoc :inventory-full true))))))))))
 
 ;; --- Ranged Player Action ---
 

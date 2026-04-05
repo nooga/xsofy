@@ -6,8 +6,8 @@
 
 (defcreature player
   (visual "@" [255 220 80])
-  (body {:hp 50 :max-hp 50 :strength 5})
-  (melee 5))
+  (body {:hp 30 :max-hp 30 :strength 2})
+  (melee 2))
 
 ;; --- Traits ---
 
@@ -18,9 +18,9 @@
 
 (defcreature rat
   (visual "r" [140 100 60])
-  (body {:hp 3 :strength 1})
+  (body {:hp 6 :strength 1})
   (ai :pack)
-  (melee 1)
+  (melee 2)
   (sounds {:death {:near "The rat squeals and dies!"
                    :mid  "You hear a squeal."
                    :far  nil}
@@ -31,9 +31,9 @@
 
 (defcreature goblin
   (visual "g" [60 160 60])
-  (body {:hp 8 :strength 2})
+  (body {:hp 15 :strength 2})
   (ai :hunter)
-  (melee 2)
+  (melee 3)
   (drops :gold)
   (sounds {:death {:near "The goblin crumples with a grunt!"
                    :mid  "You hear a grunt."
@@ -48,7 +48,7 @@
 
 (defcreature kobold
   (visual "k" [120 80 160])
-  (body {:hp 5 :strength 1})
+  (body {:hp 8 :strength 1})
   (ai :pack {:speed 2})
   (melee 2)
   (sounds {:death {:near "The kobold yelps and collapses!"
@@ -63,9 +63,9 @@
 
 (defcreature archer
   (visual "a" [60 140 100])
-  (body {:hp 6 :strength 1})
+  (body {:hp 10 :strength 1})
   (ai :ranged {:preferred-range 5})
-  (melee 1)
+  (melee 2)
   (spell :ranged {:damage 2 :range 6})
   (drops :gold)
   (sounds {:death {:near "The archer gasps and collapses!"
@@ -74,9 +74,9 @@
 
 (defcreature spider
   (visual "S" [80 60 40])
-  (body {:hp 7 :strength 2})
+  (body {:hp 12 :strength 2})
   (ai :ranged {:preferred-range 3 :speed 2})
-  (melee 2)
+  (melee 3)
   ;; spider shoots webs at range, casts cone web on hit (30% chance per turn)
   (spell :ranged {:damage 1 :range 4 :fire-chance 30 :glyph "*" :color [220 220 230]})
   {:spell-runes [:web]
@@ -91,9 +91,9 @@
 
 (defcreature slime
   (visual "s" [100 200 100])
-  (body {:hp 12 :strength 1})
+  (body {:hp 18 :strength 1})
   (ai :hunter {:speed 2})
-  (melee 1)
+  (melee 2)
   {:properties {:splits-on-hit true}}
   (sounds {:death {:near "The slime dissolves with a hiss."
                    :mid  "You hear a wet hiss."
@@ -107,7 +107,7 @@
 
 (defcreature goblin-shaman
   (visual "G" [30 200 80])
-  (body {:hp 10 :strength 2})
+  (body {:hp 18 :strength 2})
   (ai :ranged {:preferred-range 4})
   (melee 1)
   ;; casts ice bolt at range
@@ -124,9 +124,9 @@
 
 (defcreature fire-imp
   (visual "i" [255 120 30])
-  (body {:hp 5 :strength 1})
+  (body {:hp 10 :strength 1})
   (ai :ranged {:preferred-range 3 :speed 2})
-  (melee 2)
+  (melee 3)
   (spell :ranged {:damage 3 :range 5})
   {:spell-runes [:fire]}
   (immune :fire)
@@ -142,9 +142,9 @@
 
 (defcreature ogre
   (visual "O" [160 130 80])
-  (body {:hp 25 :strength 5 :armor 2})
+  (body {:hp 55 :strength 4 :armor 1})
   (ai :hunter)
-  (melee 5)
+  (melee 7)
   (drops :gold :gold :gold)
   (sounds {:death {:near "The ogre crashes to the ground!"
                    :mid  "You hear a thunderous crash."
@@ -162,9 +162,9 @@
 (defcreature troll
   (trait :regenerating)
   (visual "T" [60 120 60])
-  (body {:hp 20 :strength 4 :armor 1})
+  (body {:hp 45 :strength 4 :armor 1})
   (ai :hunter)
-  (melee 4)
+  (melee 6)
   (drops :gold :gold)
   (sounds {:death {:near "The troll roars and topples!"
                    :mid  "You hear a thunderous crash."
@@ -182,9 +182,9 @@
 
 (defcreature wraith
   (visual "W" [180 160 220])
-  (body {:hp 15 :strength 3})
+  (body {:hp 35 :strength 3})
   (ai :hunter {:speed 2})
-  (melee 3)
+  (melee 5)
   ;; drains life on hit; floats over hazards
   {:runes [:apply :damage 2 :self :apply :heal 1]
    :properties {:flying true}}
@@ -197,9 +197,9 @@
 
 (defcreature ice-elemental
   (visual "E" [100 160 255])
-  (body {:hp 18 :strength 3 :armor 2})
+  (body {:hp 40 :strength 3 :armor 2})
   (ai :ranged {:preferred-range 3})
-  (melee 3)
+  (melee 4)
   (spell :ranged {:damage 4 :range 5})
   {:spell-runes [:apply :area 1 :ice]}
   (immune :ice)
@@ -215,9 +215,9 @@
 
 (defcreature dragon
   (visual "D" [255 60 30])
-  (body {:hp 40 :strength 6 :armor 3})
+  (body {:hp 80 :strength 6 :armor 3})
   (ai :ranged {:preferred-range 4})
-  (melee 6)
+  (melee 8)
   (spell :ranged {:damage 5 :range 7})
   {:spell-runes [:apply :area 2 :fire]}
   (immune :fire)
