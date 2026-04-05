@@ -89,6 +89,31 @@
                (vals (:entities world)))))
 
 ;; ==========================================================
+;; Text Layout
+;; ==========================================================
+
+(defn center-pad
+  "Pad a string to width, centered. Returns the padded string."
+  [s width]
+  (let [len (count s)
+        pad (max 0 (- width len))
+        left (quot pad 2)
+        right (- pad left)]
+    (str (apply str (repeat left " ")) s (apply str (repeat right " ")))))
+
+(defn right-pad
+  "Pad a string to width with trailing spaces."
+  [s width]
+  (let [pad (max 0 (- width (count s)))]
+    (str s (apply str (repeat pad " ")))))
+
+(defn left-pad
+  "Pad a string to width with leading spaces."
+  [s width]
+  (let [pad (max 0 (- width (count s)))]
+    (str (apply str (repeat pad " ")) s)))
+
+;; ==========================================================
 ;; Color Math
 ;; All colors are [r g b] integer triples, 0-255.
 ;; ==========================================================

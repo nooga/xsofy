@@ -280,9 +280,14 @@
                      (recur w w (term/size))))))
 
          :death
-         (do (render/render-death-screen world)
-             (term/read-key)
-             (assoc world :running false))
+         (loop [scroll 0]
+           (render/render-death-screen world scroll)
+           (let [k (term/read-key)]
+             (cond
+               (= k "\u001b") (assoc world :running false)
+               (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)))
+               (or (= k "k") (= k "\u001b[A")) (recur (inc scroll))
+               :else (recur scroll))))
 
          :confirm-hazard
          (do

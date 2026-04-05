@@ -906,8 +906,11 @@
                             s (when e (snd/creature-idle (:pos e) ename (:sounds e)))]
                         (if s (snd/deliver-sound w s) w))
                       w)
-                  w (ai/ai-act w creature-id melee-attack ranged-attack)]
-              (add-ticks w creature-id move-cost))))))))
+                  w (ai/ai-act w creature-id melee-attack ranged-attack)
+                  ;; faster creatures spend fewer ticks per action
+                  speed (or (get-in w [:entities creature-id :ai :speed]) 1)
+                  cost (quot move-cost speed)]
+              (add-ticks w creature-id cost))))))))
 
 (defn run-until-player-turn [world]
   "Process creature turns until it's the player's turn (or player dies)."
@@ -1071,29 +1074,36 @@
   "Items on deep water drift in a random direction each turn."
   (let [{:keys [terrain width height]} world
         items (->> (vals (:entities world))
-                   (filter (fn [e] (and (= :item (:entity-type e)) (:pos e)))))]
+                   (filter (fn [e] (and (some? e) (map? e)
+                                         (= :item (:entity-type e)) (:pos e))))
+                   (vec))]
     (reduce (fn [w item]
-              (let [[x y] (:pos item)
-                    tile (terrain/tget terrain width x y)]
-                (if (= tile 4)
-                  (let [[dx dy] (nth [[1 0] [-1 0] [0 1] [0 -1]] (rand-int 4))
-                        nx (+ x dx) ny (+ y dy)
-                        ntile (terrain/tget terrain width nx ny)]
-                    (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
-                             (or (= ntile 4) (= ntile 3)
-                                 (contains? terrain/walkable-tiles ntile)))
-                      (assoc-in w [:entities (:id item) :pos] [nx ny])
-                      w))
-                  w)))
+              (let [cur (get-in w [:entities (:id item)])]
+                (if (or (nil? cur) (nil? (:pos cur)))
+                  w
+                  (let [[x y] (:pos cur)
+                        tile (terrain/tget terrain width x y)]
+                    (if (= tile 4)
+                      (let [[dx dy] (nth [[1 0] [-1 0] [0 1] [0 -1]] (rand-int 4))
+                            nx (+ x dx) ny (+ y dy)
+                            ntile (terrain/tget terrain width nx ny)]
+                        (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                                 (or (= ntile 4) (= ntile 3)
+                                     (contains? terrain/walkable-tiles ntile)))
+                          (assoc-in w [:entities (:id item) :pos] [nx ny])
+                          w))
+                      w)))))
             world items)))
 
 (defn player-move [world dx dy]
-  (let [{:keys [terrain width height]} world
-        [px py] (get-in world [:entities :player :pos])
-        nx (+ px dx)
-        ny (+ py dy)
-        tile (terrain/tget terrain width nx ny)
-        webbed (status/has-status? world :player :webbed)]
+  (if-not (get-in world [:entities :player :pos])
+    world  ;; player is dead
+    (let [{:keys [terrain width height]} world
+          [px py] (get-in world [:entities :player :pos])
+          nx (+ px dx)
+          ny (+ py dy)
+          tile (terrain/tget terrain width nx ny)
+          webbed (status/has-status? world :player :webbed)]
     ;; webbed: struggle to break free instead of moving
     (if webbed
       (let [ttl (get-in world [:entities :player :statuses :webbed :ttl] 1)
@@ -1166,16 +1176,35 @@
                             ;; couldn't push — bonus damage
                             (ent/damage-entity w primary-id 2)))))
                     w)
-                ;; generate VFX for multi-target or reach attacks
-                w (if (or (> (count targets) 1) (contains? #{:reach :lunge :skip} pattern))
-                    (let [vfx-cells (mapv :pos targets)
-                          glyph (combat/attack-direction-glyph dx dy)
-                          flash-events (mapv (fn [pos]
-                                               {:type :flash :pos pos
+                ;; generate VFX for attack patterns
+                w (cond
+                    ;; reach (whip): bolt line from player to target
+                    (= pattern :reach)
+                    (let [tgt-pos (:pos (first targets))
+                          bolt {:type :bolt
+                                :from [px py] :to tgt-pos
+                                :color [160 120 80] :decay 3}
+                          flash {:type :flash :pos tgt-pos
+                                 :color [255 220 150] :decay 3}]
+                      (update w :vfx #(vec (concat (or % []) [bolt flash]))))
+
+                    ;; lunge (spear): bolt along attack line
+                    (= pattern :lunge)
+                    (let [end-pos (:pos (last targets))
+                          bolt {:type :bolt
+                                :from [px py] :to end-pos
+                                :color [180 160 120] :decay 2}]
+                      (update w :vfx #(vec (concat (or % []) [bolt]))))
+
+                    ;; cleave, skip, impact: flash on all hit tiles
+                    (or (> (count targets) 1) (contains? #{:skip :impact :cleave} pattern))
+                    (let [flash-events (mapv (fn [tgt]
+                                               {:type :flash :pos (:pos tgt)
                                                 :color [255 255 255] :decay 3})
-                                             vfx-cells)]
+                                             targets)]
                       (update w :vfx #(vec (concat (or % []) flash-events))))
-                    w)]
+
+                    :else w)]
             (-> w
                 (add-ticks :player speed)
                 (update :turn inc)
@@ -1234,7 +1263,7 @@
 
       ;; wall
       :else
-      (log-msg world "Blocked.")))))
+      (log-msg world "Blocked."))))))
 
 (defn confirm-hazard-step [world]
   "Execute the pending hazard step after player confirms."
@@ -1315,8 +1344,10 @@
                   (update-fov w3)
                   w3))
               w)]
-      ;; check for player death
-      (if (nil? (get-in w [:entities :player]))
+      ;; check for player death (entity missing or no HP)
+      (if (or (nil? (get-in w [:entities :player]))
+              (nil? (get-in w [:entities :player :body :hp]))
+              (<= (get-in w [:entities :player :body :hp] 0) 0))
         (-> w
             (log-msg "You die...")
             (assoc :screen :death))

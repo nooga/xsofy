@@ -351,10 +351,13 @@
                                             (= clone-pos (:pos (get-in w [:entities k])))))
                                      (keys (:entities w))))]
           (when clone-id
-            (-> w
-                (assoc-in [:entities id :body :hp] remain-hp)
-                (assoc-in [:entities clone-id :body :hp] half-hp)
-                (assoc-in [:entities clone-id :body :max-hp] half-hp)))))
+            (let [parent-ticks (or (:ticks entity) 0)]
+              (-> w
+                  (assoc-in [:entities id :body :hp] remain-hp)
+                  (assoc-in [:entities clone-id :body :hp] half-hp)
+                  (assoc-in [:entities clone-id :body :max-hp] half-hp)
+                  (assoc-in [:entities clone-id :ticks] parent-ticks)
+                  (assoc-in [:entities clone-id :ai :state] :hunt))))))
       nil)))
 
 (defn damage-entity [world id amount]

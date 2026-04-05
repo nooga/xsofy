@@ -74,9 +74,11 @@
                                                          (get-in e [:body :hp])))
                                             (vals (:entities w))))]
                           (reduce (fn [w e]
-                                    (-> w
-                                        (ent/damage-entity (:id e) fire-damage)
-                                        (status/apply-status (:id e) :burning 10)))
+                                    (let [w (ent/damage-entity w (:id e) fire-damage)]
+                                      ;; only apply burning if still alive
+                                      (if (get-in w [:entities (:id e)])
+                                        (status/apply-status w (:id e) :burning 10)
+                                        w)))
                                   w targets)))
                       w @new-ttl)]
         ;; update fire ttl, recompute lights since fire changed

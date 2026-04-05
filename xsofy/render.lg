@@ -1,7 +1,7 @@
 (ns xsofy.render
   (:require [term]
             [math]
-            [async]
+            [async :refer [timeout <!!]]
             [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
             [xsofy.util :as u]
@@ -9,10 +9,11 @@
             [xsofy.effects :as fx]
             [xsofy.status :as status]
             [xsofy.runes :as runes]
+            [xsofy.title :as title]
             [xsofy.ui :as ui]))
 
 (defn pause! [ms]
-  (async/<!! (async/timeout (if *in-wasm* (max ms 30) ms))))
+  (<!! (timeout (if *in-wasm* (max ms 30) ms))))
 
 ;; --- Color Helpers ---
 
@@ -198,7 +199,7 @@
   "Render status effect bars starting at row. Returns next row."
   [r row entity]
   (let [statuses (status/entity-active-statuses entity)]
-    (reduce (fn [row s]
+    (core/reduce (fn [row s]
               (if (>= row (:h r)) row
                 (let [colors (get status-bar-colors (:stype s)
                                {:fill [120 120 120] :empty [30 30 30]})
@@ -241,47 +242,50 @@
           dmg-str (if wep
                     (str (get-in wep [:item :min-dmg] 1) "-" (get-in wep [:item :max-dmg] 2))
                     "1-2")
-          def-val (if arm (or (get-in arm [:item :defense]) 0) 0)]
+          def-val (if arm (or (get-in arm [:item :defense]) 0) 0)
+          row (atom 0)]
       ;; player header + HP bar
-      (ui/write-line r 0 " @ You" [255 220 80] ui/bg)
-      (ui/bar r 1 (str " HP " hp "/" max-hp)
+      (ui/write-line r @row " @ You" [255 220 80] ui/bg)
+      (swap! row inc)
+      (ui/bar r @row (str " HP " hp "/" max-hp)
               hp max-hp
               [140 30 30] [40 12 12] [220 180 160])
+      (swap! row inc)
       ;; player status bars
-      (let [row (render-status-bars r 2 player)]
-        ;; stats
-        (ui/write-line r row (str " Str " str_ "  Def " def-val)
-                       [140 130 110] ui/bg)
-        (ui/write-line r (+ row 1) (str " " wep-name " (" dmg-str ")") [160 160 180] ui/bg)
-        (ui/write-line r (+ row 2) (str " " arm-name) [140 130 110] ui/bg)
-        (let [row (+ row 3)
-              gold (or (:gold world) 0)
-              row (if (> gold 0)
-                    (do (ui/write-line r row (str " Gold " gold) [255 220 50] ui/bg)
-                        (inc row))
-                    row)]
-          (ui/write-line r row (str " Depth " (:depth world)) [100 100 100] ui/bg)
-          ;; separator
-          (let [sep-row (inc row)]
-            (ui/write-line r sep-row (apply str (repeat (:w r) "-")) [40 40 40] ui/bg)
-            ;; visible creatures
-            (let [fov (or (:fov world) #{})
-                  ents (vec (vals (:entities world)))
-                  creatures (vec (filter
-                                   (fn [e]
-                                     (and (some? e)
-                                          (some? (:id e))
+      (reset! row (render-status-bars r @row player))
+      ;; stats
+      (ui/write-line r @row (str " Str " str_ "  Def " def-val) [140 130 110] ui/bg)
+      (swap! row inc)
+      (ui/write-line r @row (str " " wep-name " (" dmg-str ")") [160 160 180] ui/bg)
+      (swap! row inc)
+      (ui/write-line r @row (str " " arm-name) [140 130 110] ui/bg)
+      (swap! row inc)
+      ;; gold
+      (let [gold (or (:gold world) 0)]
+        (when (> gold 0)
+          (ui/write-line r @row (str " Gold " gold) [255 220 50] ui/bg)
+          (swap! row inc)))
+      ;; depth
+      (ui/write-line r @row (str " Depth " (:depth world)) [100 100 100] ui/bg)
+      (swap! row inc)
+      ;; separator
+      (ui/write-line r @row (apply str (repeat (:w r) "-")) [40 40 40] ui/bg)
+      (swap! row inc)
+      ;; visible creatures
+      (let [fov (or (:fov world) #{})
+            creatures (->> (vals (:entities world))
+                           (filter (fn [e]
+                                     (and (some? e) (map? e) (:id e)
                                           (not= :player (:id e))
-                                          (some? (:pos e))
+                                          (:pos e)
                                           (some? (get-in e [:body :hp]))
-                                          (contains? fov (:pos e))))
-                                   ents))
-                  creatures (vec (sort-by (fn [e] (or (get-in e [:body :hp]) 0)) creatures))]
-              (loop [i 0 row (inc sep-row)]
-                (when (and (< i (count creatures)) (< row (:h r)))
-                  (let [c (nth creatures i)
-                        next-row (render-creature-entry r row c)]
-                    (recur (inc i) (or next-row (+ row 2))))))))))))
+                                          (contains? fov (:pos e)))))
+                           (vec)
+                           (sort-by (fn [e] (or (get-in e [:body :hp]) 0))))]
+        (doseq [c creatures]
+          (when (< @row (:h r))
+            (let [next-row (render-creature-entry r @row c)]
+              (reset! row (or next-row (+ @row 2))))))))))
 
 ;; --- Log Panel ---
 
@@ -746,55 +750,152 @@
 
 ;; --- Death Screen ---
 
-(defn render-death-screen [world]
+(def death-messages
+  ["The darkness takes you." "Your story ends here."
+   "Silence falls." "The dungeon claims another soul."
+   "You will not be remembered." "The torches dim."
+   "Your light goes out." "Nothing remains."
+   "The abyss stares back." "All is lost."])
+
+(def tombstone-epitaphs
+  ["Here lies a"       "Rest in pieces"    "Gone but not"
+   "They died as"      "Here rots the"     "Farewell to"
+   "Alas, poor"        "So long and"       "No refunds for"])
+
+(def tombstone-epitaphs2
+  ["brave soul"         "forgotten hero"    "foolish adventurer"
+   "they lived"         "erstwhile hero"    "the reckless"
+   "soul most vexed"    "thanks for the fish" "the deceased"])
+
+(defn render-death-screen [world scroll-offset]
   (let [[tw th] (term/size)
-        r (ui/rect 1 1 tw th)]
-    (ui/clear-rect r)
-    (let [cx (quot tw 2)
-          cy (quot th 2)
-          tombstone ["        ___________"
-                     "       /           \\"
-                     "      /    R.I.P.   \\"
-                     "     /               \\"
-                     "    |                 |"
-                     "    |   Here lies a   |"
-                     "    |    brave soul   |"
-                     "    |   who delved    |"
-                     "    |    too deep     |"
-                     "    |                 |"
-                     "    |_________________|"
-                     "   /                   \\"
-                     "  /_____________________|"]
-          th-height (count tombstone)
-          th-width 25
-          start-y (- cy (quot th-height 2) 2)
-          start-x (- cx (quot th-width 2))]
-      ;; draw tombstone
-      (dotimes [i th-height]
-        (ui/write-at r (max 0 start-x) (+ start-y i)
-                     (nth tombstone i)
-                     [120 100 80] ui/bg))
-      ;; stats
+        cx (quot tw 2)
+        cy (quot th 2)
+        scheme [200 50 30]  ;; crimson runes
+        runes (title/scatter-runes tw th 30 scheme)
+        seed (or (:turn world) 0)]
+    ;; clear to black
+    (title/clear-screen tw th)
+    ;; draw runes in background
+    (doseq [r runes]
+      (let [b (/ (float (+ 15 (rem (:phase r) 30))) 45.0)
+            [cr cg cb] (:color r)]
+        (term/move-cursor (:x r) (:y r))
+        (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))
+        (term/set-bg (int (* cr b 0.08)) (int (* cg b 0.08)) (int (* cb b 0.08)))
+        (term/write (:glyph r))))
+    ;; tombstone
+    (let [game-title (or (:title world) "")
+          epi1 (nth tombstone-epitaphs (rem seed (count tombstone-epitaphs)))
+          epi2 (nth tombstone-epitaphs2 (rem (+ seed 3) (count tombstone-epitaphs2)))
+          ;; tombstone geometry
+          inner-w 21
+          slab-h 11
+          title-y (max 1 (- (quot cy 2) (quot slab-h 2) 2))
+          start-y (+ title-y 2)
+          slab-x (- cx (quot (+ inner-w 2) 2))
+          ;; helper to write centered text inside the slab
+          write-slab-line (fn [y text fg]
+                            (let [padded (u/center-pad text inner-w)]
+                              (term/move-cursor (inc slab-x) y)
+                              (let [[fr fgg fb] fg]
+                                (term/set-fg fr fgg fb))
+                              (term/set-bg 10 10 10)
+                              (term/write padded)))]
+      ;; game title above
+      (when (seq game-title)
+        (term/move-cursor (max 1 (- cx (quot (count game-title) 2))) title-y)
+        (term/set-fg 230 200 100)
+        (term/set-bg 10 10 10)
+        (term/write game-title))
+      ;; draw slab frame
+      (let [top-bar (str "╭" (apply str (repeat inner-w "─")) "╮")
+            bot-bar (str "╰" (apply str (repeat inner-w "─")) "╯")
+            side-line (str "│" (apply str (repeat inner-w " ")) "│")
+            stone-fg [130 115 90]]
+        ;; top edge
+        (term/move-cursor slab-x start-y)
+        (term/set-fg 150 135 110) (term/set-bg 10 10 10)
+        (term/write top-bar)
+        ;; body rows
+        (dotimes [row (- slab-h 2)]
+          (let [y (+ start-y 1 row)
+                ;; gradient: lighter at top, darker at bottom
+                bright (- 135 (* row 4))
+                fg [bright (- bright 15) (- bright 40)]]
+            (term/move-cursor slab-x y)
+            (let [[fr fgg fb] fg] (term/set-fg fr fgg fb))
+            (term/set-bg 10 10 10)
+            (term/write side-line)))
+        ;; bottom edge
+        (term/move-cursor slab-x (+ start-y slab-h -1))
+        (term/set-fg 100 85 65) (term/set-bg 10 10 10)
+        (term/write bot-bar))
+      ;; text content centered inside slab
+      (let [y0 (+ start-y 1)]
+        (write-slab-line (+ y0 0) "" [0 0 0])
+        (write-slab-line (+ y0 1) "R . I . P" [160 140 110])
+        (write-slab-line (+ y0 2) "" [0 0 0])
+        (write-slab-line (+ y0 3) epi1 [120 105 85])
+        (write-slab-line (+ y0 4) epi2 [120 105 85])
+        (write-slab-line (+ y0 5) "" [0 0 0])
+        (write-slab-line (+ y0 6) "---  +  ---" [100 85 70])
+        (write-slab-line (+ y0 7) "" [0 0 0]))
+      ;; foliage at base
+      (let [ground-y (+ start-y slab-h)
+            ground-w (+ inner-w 6)
+            ground-x (- cx (quot ground-w 2))
+            weeds ".:;,.:  \"  .;,.\" .; ,.:;. \""]
+        (term/move-cursor ground-x ground-y)
+        (term/set-fg 40 75 30) (term/set-bg 10 10 10)
+        (term/write (subs weeds 0 (min ground-w (count weeds)))))
+      ;; stats line
       (let [depth (or (:depth world) 1)
             turn (or (:turn world) 0)
             gold (or (:gold world) 0)
-            stats-y (+ start-y th-height 2)]
-        (ui/write-at r (- cx 14) stats-y
-                     (str "Depth " depth "  Turns " turn "  Gold " gold)
-                     [160 140 110] ui/bg)
-        ;; recent log
-        (let [log (or (:log world) [])
-              recent (take-last 5 log)
-              log-y (+ stats-y 2)]
-          (dotimes [i (count recent)]
-            (let [msg (format-log-entry (nth recent i))]
-              (ui/write-at r (- cx 20) (+ log-y i)
-                           msg
-                           [140 120 90] ui/bg))))
-        ;; prompt
-        (ui/write-at r (- cx 12) (- th 3)
-                     "[press any key to exit]"
-                     [80 80 80] ui/bg)))
+            stats-y (+ start-y slab-h 2)
+            stats (str "Depth " depth "  Turns " turn "  Gold " gold)]
+        (term/move-cursor (max 1 (- cx (quot (count stats) 2))) stats-y)
+        (term/set-fg 140 120 90)
+        (term/set-bg 10 10 10)
+        (term/write stats)
+        ;; death message
+        (let [dmsg (nth death-messages (rem seed (count death-messages)))
+              msg-y (+ stats-y 2)]
+          (term/move-cursor (max 1 (- cx (quot (count dmsg) 2))) msg-y)
+          (term/set-fg 200 60 40)
+          (term/set-bg 10 10 10)
+          (term/write dmsg))))
+    ;; message log — scrollable
+    (let [log (or (:log world) [])
+          log-count (count log)
+          log-top (+ cy 3)
+          log-height (max 1 (- th log-top 2))
+          max-offset (max 0 (- log-count log-height))
+          offset (min scroll-offset max-offset)
+          start-idx (max 0 (- log-count log-height offset))
+          visible (subvec (vec log) start-idx (min log-count (+ start-idx log-height)))]
+      ;; header
+      (term/move-cursor 2 log-top)
+      (term/set-fg 90 80 65)
+      (term/set-bg 10 10 10)
+      (term/write (str "─── Messages " (if (> max-offset 0) (str "(" (- log-count offset) "/" log-count ") ") "") "───"))
+      ;; messages
+      (dotimes [i (count visible)]
+        (let [msg (format-log-entry (nth visible i))
+              age (- (count visible) i)
+              bright (max 50 (- 170 (* age 6)))]
+          (term/move-cursor 3 (+ log-top 1 i))
+          (term/set-fg bright (max 40 (- bright 25)) (max 30 (- bright 50)))
+          (term/set-bg 10 10 10)
+          (term/write (if (> (count msg) (- tw 4))
+                        (subs msg 0 (- tw 4))
+                        msg)))))
+    ;; prompt
+    (term/move-cursor (max 1 (- cx 12)) (dec th))
+    (term/set-fg 80 70 60)
+    (term/set-bg 10 10 10)
+    (term/write "[esc] to exit    [j/k] scroll")
     (term/flush)))
 
 ;; --- Rune Codex Screen ---
