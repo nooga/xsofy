@@ -301,8 +301,9 @@
             w)
           w))
 
-      ;; in range and has LOS — shoot
-      (and (<= dist max-range) los)
+      ;; in range and has LOS — shoot (with fire-chance if set)
+      (and (<= dist max-range) los
+           (< (rand-int 100) (or (:fire-chance spell-data) 100)))
       (ranged-attack-fn world entity-id :player)
 
       ;; in range but no LOS — approach to get angle

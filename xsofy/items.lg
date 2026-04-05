@@ -202,22 +202,22 @@
 
 (def loot-table
   [;; weapons — peak early to late, overlapping
-   {:template :dagger       :category :weapon  :peak 1  :spread 1.5  :weight 10  :cost 2}
-   {:template :short-sword  :category :weapon  :peak 2  :spread 2.0  :weight 9   :cost 2}
-   {:template :rapier       :category :weapon  :peak 2  :spread 2.0  :weight 6   :cost 3}
-   {:template :spear        :category :weapon  :peak 3  :spread 2.5  :weight 7   :cost 2}
-   {:template :long-sword   :category :weapon  :peak 4  :spread 2.0  :weight 7   :cost 3}
-   {:template :axe          :category :weapon  :peak 4  :spread 2.0  :weight 5   :cost 3}
-   {:template :war-hammer   :category :weapon  :peak 6  :spread 2.5  :weight 4   :cost 4}
-   {:template :whip         :category :weapon  :peak 2  :spread 2.5  :weight 6   :cost 2}
-   {:template :flail        :category :weapon  :peak 5  :spread 2.0  :weight 4   :cost 3}
+   {:template :dagger       :category :weapon  :peak 1  :spread 1.2  :weight 10  :cost 2}
+   {:template :short-sword  :category :weapon  :peak 2  :spread 1.5  :weight 9   :cost 2}
+   {:template :whip         :category :weapon  :peak 2  :spread 1.5  :weight 6   :cost 2}
+   {:template :rapier       :category :weapon  :peak 3  :spread 1.5  :weight 6   :cost 3}
+   {:template :spear        :category :weapon  :peak 3  :spread 1.5  :weight 7   :cost 2}
+   {:template :long-sword   :category :weapon  :peak 4  :spread 1.5  :weight 7   :cost 3}
+   {:template :axe          :category :weapon  :peak 5  :spread 1.5  :weight 5   :cost 3}
+   {:template :flail        :category :weapon  :peak 5  :spread 1.5  :weight 4   :cost 3}
+   {:template :war-hammer   :category :weapon  :peak 7  :spread 2.0  :weight 4   :cost 4}
    ;; ranged
-   {:template :short-bow    :category :weapon  :peak 1  :spread 2.0  :weight 5   :cost 2}
-   {:template :long-bow     :category :weapon  :peak 4  :spread 2.5  :weight 4   :cost 3}
-   ;; armor
-   {:template :leather-armor :category :armor  :peak 1  :spread 2.0  :weight 8   :cost 3}
-   {:template :chain-mail    :category :armor  :peak 3  :spread 2.0  :weight 6   :cost 4}
-   {:template :plate-armor   :category :armor  :peak 6  :spread 2.5  :weight 3   :cost 5}
+   {:template :short-bow    :category :weapon  :peak 1  :spread 1.5  :weight 5   :cost 2}
+   {:template :long-bow     :category :weapon  :peak 4  :spread 1.5  :weight 4   :cost 3}
+   ;; armor — tight curves, heavy armor is rare early
+   {:template :leather-armor :category :armor  :peak 1  :spread 1.2  :weight 8   :cost 3}
+   {:template :chain-mail    :category :armor  :peak 4  :spread 1.5  :weight 6   :cost 4}
+   {:template :plate-armor   :category :armor  :peak 7  :spread 2.0  :weight 3   :cost 5}
    ;; potions — always available
    {:template :health-potion    :category :potion  :peak 1  :spread 99.0  :weight 15  :cost 1}
    {:template :strength-potion  :category :potion  :peak 3  :spread 99.0  :weight 5   :cost 2}
@@ -252,8 +252,12 @@
 ;; --- Enchantment ---
 
 (defn roll-enchant [depth]
-  (let [roll (- (rand-int 4) 1)
-        depth-bonus (quot depth 3)
+  (let [;; base roll: heavily weighted toward 0
+        ;; roll two dice and take the one closer to 0
+        r1 (- (rand-int 3) 1)   ;; -1, 0, +1
+        r2 (- (rand-int 3) 1)
+        roll (if (<= (math/abs r1) (math/abs r2)) r1 r2)
+        depth-bonus (quot depth 4)
         result (+ roll depth-bonus)]
     (max -3 (min 5 result))))
 
@@ -337,6 +341,7 @@
 
 (defn runic-chance [depth]
   (cond
+    (<= depth 1) 0.08
     (<= depth 2) 0.15
     (<= depth 4) 0.25
     :else         0.35))

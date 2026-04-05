@@ -29,24 +29,24 @@
 
 (def creature-table
   [;; early dungeon
-   {:species :rat            :peak 1  :spread 1.2  :weight 14}
-   {:species :kobold         :peak 1  :spread 1.5  :weight 8}
-   {:species :goblin         :peak 2  :spread 1.5  :weight 10}
+   {:species :rat            :peak 1  :spread 1.0  :weight 15}
+   {:species :kobold         :peak 1  :spread 1.2  :weight 8}
+   {:species :goblin         :peak 2  :spread 1.2  :weight 10}
    ;; getting dangerous
-   {:species :archer         :peak 2  :spread 1.5  :weight 6}
-   {:species :spider         :peak 3  :spread 1.5  :weight 7}
-   {:species :slime          :peak 3  :spread 2.0  :weight 5}
+   {:species :archer         :peak 2  :spread 1.2  :weight 6}
+   {:species :spider         :peak 3  :spread 1.2  :weight 7}
+   {:species :slime          :peak 3  :spread 1.5  :weight 5}
    ;; mid dungeon
-   {:species :goblin-shaman  :peak 4  :spread 1.5  :weight 5}
-   {:species :fire-imp       :peak 4  :spread 1.5  :weight 5}
+   {:species :goblin-shaman  :peak 4  :spread 1.2  :weight 5}
+   {:species :fire-imp       :peak 4  :spread 1.2  :weight 5}
    ;; dangerous
-   {:species :ogre           :peak 5  :spread 1.5  :weight 4}
-   {:species :troll          :peak 5  :spread 2.0  :weight 3}
+   {:species :ogre           :peak 5  :spread 1.2  :weight 4}
+   {:species :troll          :peak 6  :spread 1.5  :weight 3}
    ;; late dungeon
-   {:species :wraith         :peak 6  :spread 1.5  :weight 4}
-   {:species :ice-elemental  :peak 6  :spread 1.5  :weight 3}
+   {:species :wraith         :peak 7  :spread 1.2  :weight 4}
+   {:species :ice-elemental  :peak 7  :spread 1.2  :weight 3}
    ;; deep dungeon
-   {:species :dragon         :peak 8  :spread 2.0  :weight 2}])
+   {:species :dragon         :peak 9  :spread 1.5  :weight 2}])
 
 (defn pick-creature [depth]
   "Pick a creature using depth-weighted random selection."
@@ -718,9 +718,12 @@
       (let [spell-data (get-in attacker [:spells :ranged])
             dmg (or (:damage spell-data) 2)
             atk-name (entity-name attacker)
-            spell-runes (:spell-runes attacker)]
+            spell-runes (:spell-runes attacker)
+            proj-opts (merge {:damage dmg}
+                             (when (:glyph spell-data) {:glyph (:glyph spell-data)})
+                             (when (:color spell-data) {:color (:color spell-data)}))]
         (let [result (launch-projectile world (:pos attacker) (:pos target)
-                                        attacker-id {:damage dmg})
+                                        attacker-id proj-opts)
               w (:world result)
               hit (:hit result)
               hit-pos (:hit-pos result)]

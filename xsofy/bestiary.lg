@@ -77,8 +77,8 @@
   (body {:hp 7 :strength 2})
   (ai :ranged {:preferred-range 3 :speed 2})
   (melee 2)
-  ;; spider shoots webs at range, casts cone web on hit
-  (spell :ranged {:damage 1 :range 4})
+  ;; spider shoots webs at range, casts cone web on hit (30% chance per turn)
+  (spell :ranged {:damage 1 :range 4 :fire-chance 30 :glyph "*" :color [220 220 230]})
   {:spell-runes [:web]
    :properties {:web-immune true}}
   (sounds {:death {:near "The spider curls up and dies."
