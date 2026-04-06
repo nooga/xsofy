@@ -66,7 +66,7 @@
   (body {:hp 10 :strength 1})
   (ai :ranged {:preferred-range 5})
   (melee 2)
-  (spell :ranged {:damage 2 :range 6})
+  (spell :ranged {:damage 2 :range 6 :accuracy 70})
   (drops :gold)
   (sounds {:death {:near "The archer gasps and collapses!"
                    :mid  "You hear a gasp."
@@ -78,7 +78,7 @@
   (ai :ranged {:preferred-range 3 :speed 2})
   (melee 3)
   ;; spider shoots webs at range, casts cone web on hit (30% chance per turn)
-  (spell :ranged {:damage 1 :range 4 :fire-chance 30 :glyph "*" :color [220 220 230]})
+  (spell :ranged {:damage 1 :range 4 :fire-chance 15 :glyph "*" :color [220 220 230]})
   {:spell-runes [:web]
    :properties {:web-immune true}}
   (sounds {:death {:near "The spider curls up and dies."

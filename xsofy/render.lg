@@ -96,8 +96,8 @@
                     bg0)
               fg1 (if gas (fx/gas-tint fg1 gas) fg1)
               bg2 (if gas (fx/gas-tint bg1 gas) bg1)]
-          (let [[fr fg fb] (if light-val (light/apply-light fg1 light-val) fg1)
-                [br bgg bb] (if light-val (light/apply-light bg2 light-val) bg2)]
+          (let [[fr fg fb] (light/apply-light fg1 (or light-val [0 0 0]))
+                [br bgg bb] (light/apply-light bg2 (or light-val [0 0 0]))]
             (term/set-fg fr fg fb)
             (term/set-bg br bgg bb)
             (term/write ch))))

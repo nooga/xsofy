@@ -675,7 +675,8 @@
 
 (defn launch-projectile [world origin target-pos launcher-id opts]
   "Fire a projectile from origin toward target-pos.
-   Hits first entity in path. Returns result map."
+   Hits first entity in path. Accuracy check determines hit/miss.
+   opts: :damage, :glyph, :color, :flash-color, :accuracy (0-100, default 80)"
   (let [ax (first origin) ay (second origin)
         tx (first target-pos) ty (second target-pos)
         full-path (line-cells ax ay tx ty)
@@ -683,18 +684,21 @@
         glyph (or (:glyph opts) (projectile-glyph ax ay tx ty))
         color (or (:color opts) [200 180 120])
         flash-color (or (:flash-color opts) [255 220 150])
-        dmg (or (:damage opts) 0)]
+        dmg (or (:damage opts) 0)
+        accuracy (or (:accuracy opts) 80)]
     (let [hit-result (first-entity-on-path world flight-path launcher-id)
           hit-entity (when hit-result (first hit-result))
+          ;; accuracy roll — can miss even if projectile reaches target
+          did-hit (and hit-entity (< (rand-int 100) accuracy))
           actual-path (if hit-result (second hit-result) flight-path)
           landed-pos (last actual-path)
           hit-pos (if hit-entity (:pos hit-entity) landed-pos)]
       (let [vfx {:type :projectile :path actual-path
                  :step 0 :glyph glyph :color color}
             flash {:type :flash :pos hit-pos
-                   :color flash-color :decay 2}
+                   :color (if did-hit flash-color [80 80 80]) :decay 2}
             w (update world :vfx #(into (or % []) [vfx flash]))]
-        (let [w (if (and hit-entity (> dmg 0))
+        (let [w (if (and did-hit (> dmg 0))
                   (let [hp-before (get-in hit-entity [:body :hp] 0)
                         w2 (ent/damage-entity w (:id hit-entity) dmg)
                         killed (nil? (get-in w2 [:entities (:id hit-entity)]))]
@@ -704,7 +708,7 @@
                       w2))
                   w)]
           {:world w
-           :hit hit-entity
+           :hit (when did-hit hit-entity)
            :hit-pos hit-pos
            :landed-pos landed-pos})))))
 
@@ -721,7 +725,8 @@
             dmg (or (:damage spell-data) 2)
             atk-name (entity-name attacker)
             spell-runes (:spell-runes attacker)
-            proj-opts (merge {:damage dmg}
+            proj-opts (merge {:damage dmg
+                              :accuracy (or (:accuracy spell-data) 75)}
                              (when (:glyph spell-data) {:glyph (:glyph spell-data)})
                              (when (:color spell-data) {:color (:color spell-data)}))]
         (let [result (launch-projectile world (:pos attacker) (:pos target)

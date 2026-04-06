@@ -28,8 +28,8 @@
   {0  {:fg [30 30 30]    :bg [10 10 10]}
    1  {:fg [80 70 55]    :bg [22 20 18]}       ; floor-stone
    2  {:fg [40 90 30]    :bg [18 28 14]}       ; grass/fungus: green on dark green
-   3  {:fg [50 80 140]   :bg [15 25 50]}       ; water-shallow: blue ripples
-   4  {:fg [30 50 120]   :bg [10 15 40]}       ; water-deep: dark blue
+   3  {:fg [60 120 140]  :bg [15 35 45]}       ; water-shallow: cyan ripples
+   4  {:fg [25 45 120]   :bg [8 12 38]}        ; water-deep: dark blue
    5  {:fg [120 20 20]   :bg [35 10 10]}       ; blood: dark red
    6  {:fg [15 10 25]    :bg [4 2 8]}          ; chasm: deep void
    7  {:fg [255 120 20]  :bg [140 40 10]}      ; lava: hot orange

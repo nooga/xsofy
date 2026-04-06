@@ -45,7 +45,7 @@
 ;; Higher values brighten and tint, lower values dim.
 ;; Ambient is ~60% — unlighted tiles are dimmer, torches boost to full.
 
-(def ambient 60)
+(def ambient 80)
 
 (defn apply-light [base-rgb light-rgb]
   (let [[br bg bb] base-rgb
