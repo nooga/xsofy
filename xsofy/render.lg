@@ -764,14 +764,15 @@
    "The abyss stares back." "All is lost."])
 
 (def tombstone-epitaphs
-  ["Here lies a"       "Rest in pieces"    "Gone but not"
-   "They died as"      "Here rots the"     "Farewell to"
-   "Alas, poor"        "So long and"       "No refunds for"])
-
-(def tombstone-epitaphs2
-  ["brave soul"         "forgotten hero"    "foolish adventurer"
-   "they lived"         "erstwhile hero"    "the reckless"
-   "soul most vexed"    "thanks for the fish" "the deceased"])
+  [["Here lies a"    "brave soul"]
+   ["Rest in"        "pieces"]
+   ["Gone but not"   "forgotten"]
+   ["They died as"   "they lived"]
+   ["Here rots the"  "erstwhile hero"]
+   ["Farewell to"    "the reckless"]
+   ["Alas, poor"     "soul most vexed"]
+   ["So long and"    "thanks for"      "the fish"]
+   ["No refunds"     "for the deceased"]])
 
 (defn render-death-screen [world scroll-offset]
   (let [[tw th] (term/size)
@@ -792,11 +793,10 @@
         (term/write (:glyph r))))
     ;; tombstone
     (let [game-title (or (:title world) "")
-          epi1 (nth tombstone-epitaphs (rem seed (count tombstone-epitaphs)))
-          epi2 (nth tombstone-epitaphs2 (rem (+ seed 3) (count tombstone-epitaphs2)))
+          epitaph (nth tombstone-epitaphs (rem seed (count tombstone-epitaphs)))
           ;; tombstone geometry
           inner-w 21
-          slab-h 11
+          slab-h 12
           title-y (max 1 (- (quot cy 2) (quot slab-h 2) 2))
           start-y (+ title-y 2)
           slab-x (- cx (quot (+ inner-w 2) 2))
@@ -838,15 +838,20 @@
         (term/set-fg 100 85 65) (term/set-bg 10 10 10)
         (term/write bot-bar))
       ;; text content centered inside slab
-      (let [y0 (+ start-y 1)]
+      (let [y0 (+ start-y 1)
+            epi-lines (count epitaph)]
         (write-slab-line (+ y0 0) "" [0 0 0])
         (write-slab-line (+ y0 1) "R . I . P" [160 140 110])
         (write-slab-line (+ y0 2) "" [0 0 0])
-        (write-slab-line (+ y0 3) epi1 [120 105 85])
-        (write-slab-line (+ y0 4) epi2 [120 105 85])
-        (write-slab-line (+ y0 5) "" [0 0 0])
-        (write-slab-line (+ y0 6) "---  +  ---" [100 85 70])
-        (write-slab-line (+ y0 7) "" [0 0 0]))
+        ;; epitaph lines (2 or 3)
+        (dotimes [i epi-lines]
+          (write-slab-line (+ y0 3 i) (nth epitaph i) [120 105 85]))
+        ;; fill blank if only 2 lines
+        (when (< epi-lines 3)
+          (write-slab-line (+ y0 5) "" [0 0 0]))
+        (write-slab-line (+ y0 6) "" [0 0 0])
+        (write-slab-line (+ y0 7) "---  +  ---" [100 85 70])
+        (write-slab-line (+ y0 8) "" [0 0 0]))
       ;; foliage at base
       (let [ground-y (+ start-y slab-h)
             ground-w (+ inner-w 6)
