@@ -7,6 +7,7 @@
             [xsofy.input :as input]
             [xsofy.render :as render]
             [xsofy.ui :as ui]
+            [xsofy.runes :as runes]
             [xsofy.title :as title]
             [xsofy.debug :as dbg]))
 
@@ -108,6 +109,74 @@
         (assoc world :screen :inventory)))
     (assoc world :screen :inventory)))
 
+(defn inv-inscribe [world]
+  (if-let [item-id (sel-item-id world)]
+    (let [item (get-in world [:entities item-id])
+          slot (get-in item [:item :slot])]
+      (if (or (= slot :weapon) (= slot :armor))
+        (-> world
+            (assoc :screen :inscribe
+                   :inscribe-item-id item-id
+                   :inscribe-runes (vec (or (:runes item) []))
+                   :inscribe-sel 0))
+        (-> world
+            (world/log-msg "You can only inscribe weapons and armor.")
+            (assoc :screen :inventory))))
+    (assoc world :screen :inventory)))
+
+(defn inscribe-input [world k]
+  (let [rune-table (or (:rune-table world) {})
+        available (runes/inscribable-runes rune-table)
+        sel (or (:inscribe-sel world) 0)
+        runes (or (:inscribe-runes world) [])
+        max-runes 12
+        cnt (count available)]
+    (cond
+      ;; cancel
+      (= k "\u001b")
+      (-> world (dissoc :screen :inscribe-item-id :inscribe-runes :inscribe-sel))
+
+      ;; navigate down
+      (or (= k "j") (= k "\u001b[B"))
+      (assoc world :inscribe-sel (min (dec cnt) (inc sel)))
+
+      ;; navigate up
+      (or (= k "k") (= k "\u001b[A"))
+      (assoc world :inscribe-sel (max 0 (dec sel)))
+
+      ;; navigate right (next column)
+      (or (= k "l") (= k "\u001b[C"))
+      (let [[tw th] (term/size)
+            max-rows (- th 14)
+            new-sel (min (dec cnt) (+ sel max-rows))]
+        (assoc world :inscribe-sel new-sel))
+
+      ;; navigate left (prev column)
+      (or (= k "h") (= k "\u001b[D"))
+      (let [[tw th] (term/size)
+            max-rows (- th 14)
+            new-sel (max 0 (- sel max-rows))]
+        (assoc world :inscribe-sel new-sel))
+
+      ;; add selected rune
+      (and (= k " ") (< (count runes) max-runes) (> cnt 0) (< sel cnt))
+      (let [rn (nth available sel)]
+        (assoc world :inscribe-runes (conj runes (:rune rn))))
+
+      ;; remove last rune
+      (and (= k "x") (seq runes))
+      (assoc world :inscribe-runes (vec (butlast runes)))
+
+      ;; confirm inscription
+      (= k "\r")
+      (if (seq runes)
+        (let [item-id (:inscribe-item-id world)
+              w (world/inscribe-runes-on-item world item-id runes)]
+          (-> w (dissoc :screen :inscribe-item-id :inscribe-runes :inscribe-sel)))
+        (-> world (dissoc :screen :inscribe-item-id :inscribe-runes :inscribe-sel)))
+
+      :else world)))
+
 (defn inventory-input [world k]
   (let [sel (inv-sel world)
         cnt (inv-count world)]
@@ -135,6 +204,7 @@
       (and (>= sel 0) (= k "u")) (inv-unequip world)
       (and (>= sel 0) (= k "d")) (inv-drop world)
       (and (>= sel 0) (= k "a")) (inv-use world)
+      (and (>= sel 0) (= k "s")) (inv-inscribe world)
 
       ;; letter select
       (and (= 1 (count k)) (some? (letter-to-index k)))
@@ -265,6 +335,15 @@
          (do (render/render-inventory-screen world)
              (let [k (term/read-key)
                    w (inventory-input world k)]
+               (if (:screen w)
+                 (recur w w prev-size)
+                 (do (render/render-full w)
+                     (recur w w (term/size))))))
+
+         :inscribe
+         (do (render/render-inscribe-screen world)
+             (let [k (term/read-key)
+                   w (inscribe-input world k)]
                (if (:screen w)
                  (recur w w prev-size)
                  (do (render/render-full w)

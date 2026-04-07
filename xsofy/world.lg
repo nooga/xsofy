@@ -917,6 +917,33 @@
             (log-msg msg)))
       (log-msg world "You can't enchant that."))))
 
+;; --- Inscription ---
+
+(defn inscribe-runes-on-item [world item-id rune-seq]
+  "Write a rune sequence onto a weapon or armor. Overwrites any existing runes."
+  (let [item (get-in world [:entities item-id])
+        slot (get-in item [:item :slot])
+        iname (or (:item-name item) (name (or (:template item) (:id item))))]
+    (if (or (= slot :weapon) (= slot :armor))
+      (let [;; strip old runic prefix from name if present
+            base-name (let [tpl (:template item)]
+                        (if tpl
+                          (let [tpl-name (name tpl)]
+                            ;; use template name as base
+                            tpl-name)
+                          iname))
+            ;; generate a runic name from primary effect
+            primary (first (filter keyword? rune-seq))
+            prefix (when primary (name primary))
+            new-name (if prefix
+                       (str prefix " " base-name)
+                       base-name)]
+        (-> world
+            (assoc-in [:entities item-id :runes] (vec rune-seq))
+            (assoc-in [:entities item-id :item-name] new-name)
+            (log-msg (str "You inscribe runes onto the " base-name ". It is now a " new-name "!"))))
+      (log-msg world "You can only inscribe weapons and armor."))))
+
 ;; --- Tick System ---
 ;; Every entity with :ai has :ticks. Lowest ticks acts next.
 ;; Player has :ticks too. Actions cost ticks (move=100, attack=weapon speed).

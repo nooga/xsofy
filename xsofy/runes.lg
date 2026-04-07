@@ -151,6 +151,19 @@
       (format-sexp-step rune-table (first steps))
       (str "(magic-> " (apply str (interpose " " (mapv #(format-sexp-step rune-table %) steps))) ")"))))
 
+;; --- Inscribable Runes ---
+
+(defn inscribable-runes [rune-table]
+  "Return all identified runes + numerals 1-5 as a vec of {:rune :glyph :name}."
+  (let [identified (vec (filter some?
+                    (mapv (fn [[k v]]
+                            (when (:identified v)
+                              {:rune k :glyph (:glyph v) :name (name k)}))
+                          rune-table)))
+        nums (mapv (fn [[n g]] {:rune n :glyph g :name (str n)})
+                   numeral-glyphs)]
+    (into identified nums)))
+
 ;; --- Discovery Table ---
 
 (defn discovered-runes [rune-table]

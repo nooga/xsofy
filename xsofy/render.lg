@@ -689,8 +689,8 @@
           ;; available commands
           (let [cmds (cond
                        (= slot :consumable) " [a] use  [d] drop"
-                       equipped             " [u] unequip  [d] drop"
-                       (and slot (not= slot :consumable)) " [e] equip  [d] drop"
+                       equipped             " [u] unequip  [s] inscribe  [d] drop"
+                       (and slot (not= slot :consumable)) " [e] equip  [s] inscribe  [d] drop"
                        :else                " [d] drop")]
             (ui/write-line r (inc @rune-row) cmds [120 120 100] ui/bg)))))))
 
@@ -933,6 +933,65 @@
                            [100 80 140] ui/bg)))))
     (ui/write-line inner (dec (:h inner))
                    " [press any key to close]"
+                   [80 80 80] ui/bg)
+    (term/flush)))
+
+;; --- Inscription Screen ---
+
+(defn render-inscribe-screen [world]
+  (let [[tw th] (term/size)
+        r (ui/rect 1 1 tw th)
+        inner (ui/box r "Inscribe Runes" [200 160 240] ui/bg)
+        rune-table (or (:rune-table world) {})
+        item-id (:inscribe-item-id world)
+        item (get-in world [:entities item-id])
+        iname (or (:item-name item) (name (or (:template item) :unknown)))
+        current-runes (or (:inscribe-runes world) [])
+        available (runes/inscribable-runes rune-table)
+        sel (or (:inscribe-sel world) 0)
+        ;; layout: top = item info + current runes, bottom = rune picker
+        [top-r bottom-r] (ui/rect-split-v inner (min 8 (quot (:h inner) 3)))]
+    (ui/clear-rect inner)
+    ;; item info
+    (ui/write-line top-r 0 (str " Item: " iname) [220 200 160] ui/bg)
+    ;; current inscription
+    (if (seq current-runes)
+      (do
+        (ui/write-line top-r 2
+                       (str " Glyphs: " (runes/format-glyphs rune-table current-runes))
+                       [160 140 220] ui/bg)
+        (ui/write-line top-r 3
+                       (str " Spell:  " (runes/format-sexp rune-table current-runes))
+                       [180 160 240] ui/bg))
+      (ui/write-line top-r 2 " (no runes inscribed yet)" [80 80 80] ui/bg))
+    ;; existing runes on item
+    (when-let [old-runes (:runes item)]
+      (when (seq old-runes)
+        (ui/write-line top-r 5
+                       (str " Current: " (runes/format-glyphs rune-table old-runes)
+                            " " (runes/format-sexp rune-table old-runes))
+                       [100 90 140] ui/bg)))
+    ;; rune picker
+    (ui/write-line bottom-r 0 " Available runes:" [200 180 240] ui/bg)
+    (if (empty? available)
+      (ui/write-line bottom-r 1 "  (no runes discovered yet)" [80 80 80] ui/bg)
+      (let [cols 4
+            col-w (quot (:w bottom-r) cols)
+            max-rows (- (:h bottom-r) 3)]
+        (dotimes [i (min (count available) (* cols max-rows))]
+          (let [rn (nth available i)
+                row (rem i max-rows)
+                col (quot i max-rows)
+                x (* col col-w)
+                selected (= i sel)
+                fg (if selected [255 255 220] [160 140 220])
+                bg-c (if selected [40 30 60] ui/bg)]
+            (ui/write-at bottom-r (+ x 1) (+ row 1)
+                         (str (:glyph rn) " " (:name rn))
+                         fg bg-c)))))
+    ;; controls
+    (ui/write-line inner (- (:h inner) 1)
+                   " [jk] select  [space] add  [x] remove last  [enter] confirm  [esc] cancel"
                    [80 80 80] ui/bg)
     (term/flush)))
 
