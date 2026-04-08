@@ -949,16 +949,17 @@
 ;; Player has :ticks too. Actions cost ticks (move=100, attack=weapon speed).
 
 (def move-cost 100)
-(def regen-rate 100000) ;; ticks to fully heal (~1000 normal actions)
+(def default-regen-rate 30000) ;; ticks to full heal (300 turns, a la Brogue)
 
 (defn add-ticks [world entity-id cost]
   (if-let [entity (get-in world [:entities entity-id])]
     (let [hp (get-in entity [:body :hp] 0)
           max-hp (get-in entity [:body :max-hp] 0)
-          ;; accumulate regen ticks, heal 1 hp per (regen-rate / max-hp) ticks
+          regen-rate (get-in entity [:body :regen] default-regen-rate)
+          ;; threshold = ticks per 1 hp, derived from ticks-to-full / max-hp
+          threshold (if (> max-hp 0) (quot regen-rate max-hp) 0)
           old-regen (or (:regen-ticks entity) 0)
           new-regen (+ old-regen cost)
-          threshold (if (> max-hp 0) (quot regen-rate max-hp) regen-rate)
           healed (if (> threshold 0) (quot new-regen threshold) 0)
           remainder (if (> threshold 0) (rem new-regen threshold) 0)
           new-hp (min max-hp (+ hp healed))]

@@ -91,7 +91,7 @@
 
 (defcreature slime
   (visual "s" [100 200 100])
-  (body {:hp 18 :strength 1})
+  (body {:hp 50 :strength 1 :regen 0})
   (ai :hunter {:speed 2})
   (melee 2)
   {:properties {:splits-on-hit true}}
@@ -162,7 +162,7 @@
 (defcreature troll
   (trait :regenerating)
   (visual "T" [60 120 60])
-  (body {:hp 45 :strength 4 :armor 1})
+  (body {:hp 45 :strength 4 :armor 1 :regen 4500})
   (ai :hunter)
   (melee 6)
   (drops :gold :gold)
@@ -182,7 +182,7 @@
 
 (defcreature wraith
   (visual "W" [180 160 220])
-  (body {:hp 35 :strength 3})
+  (body {:hp 35 :strength 3 :regen 17500})
   (ai :hunter {:speed 2})
   (melee 5)
   ;; drains life on hit; floats over hazards
