@@ -170,18 +170,22 @@
         (assoc-in [:body :max-hp] (get-in template [:body :hp])))))
 
 (defn give-item [world item-type owner-id]
-  "Spawn an item and put it in owner's inventory (with stacking)."
+  "Spawn an item and put it in owner's inventory. Returns [world item-id]."
   (let [id (ent/next-id item-type)
         template (get @ent/templates item-type)
         item (assoc template :id id :template item-type :pos [0 0])
-        w (assoc-in world [:entities id] item)]
-    (or (ent/pickup-item w id owner-id) w)))
+        w (assoc-in world [:entities id] item)
+        picked (ent/pickup-item w id owner-id)]
+    [(or picked w) (when picked id)]))
 
 (defn give-starting-items [world]
-  (reduce (fn [w item-type] (give-item w item-type :player))
-          world
-          [:dagger :leather-armor
-           :health-potion :health-potion]))
+  (let [[w dagger-id] (give-item world :dagger :player)
+        w (if dagger-id (or (ent/equip-item w dagger-id :player) w) w)
+        [w armor-id] (give-item w :leather-armor :player)
+        w (if armor-id (or (ent/equip-item w armor-id :player) w) w)
+        [w _] (give-item w :health-potion :player)
+        [w _] (give-item w :health-potion :player)]
+    w))
 
 (defn make-world [w h]
   (let [world (generate-floor w h 1 (make-player))]
