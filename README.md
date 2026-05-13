@@ -1,6 +1,6 @@
 # Xs of Y
 
-A roguelike written in a lisp, where the magic system is lisp. 
+A roguelike written in my [lisp](https://github.com/nooga/let-go), where the magic system is a lisp. 
 
 > Note: This is not finished! It's playable but mild peril and uscheduled explosions are to be expected.
 
