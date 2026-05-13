@@ -16,7 +16,7 @@ Meanwhile the dungeon is trying to kill you through more conventional means. Spi
 
 Written in ~6900 lines of [let-go](https://github.com/nooga/let-go) - a Clojure dialect on a Go bytecode VM. Persistent data structures all the way down. No dependencies. 6ms startup. Runs natively or [in the browser](https://nooga.github.io/xsofy/) via WASM.
 
-If you like how this game looks check out [Brogue](https://sites.google.com/site/broguegame/) - my main inspiration:
+If you like how this game looks check out [Brogue](https://sites.google.com/site/broguegame/) - my main inspiration.
 
 ## Running
 
