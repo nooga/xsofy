@@ -981,8 +981,14 @@
                     (filter #(some? (:pos %)))
                     (vec))]
     (when (seq actors)
-      (let [sorted (sort-by #(or (:ticks %) 0) actors)]
-        (:id (first sorted))))))
+      (:id (reduce (fn [best e]
+                     (if (or (< (or (:ticks e) 0) (or (:ticks best) 0))
+                             (and (= (or (:ticks e) 0) (or (:ticks best) 0))
+                                  (= :player (:id e))))
+                       e
+                       best))
+                   (first actors)
+                   (rest actors))))))
 
 (defn creature-turn [world creature-id]
   (let [entity (get-in world [:entities creature-id])]
