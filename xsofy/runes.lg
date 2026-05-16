@@ -116,10 +116,14 @@
                       [fn-tok arg-tok]))
                   (= tok :mul)
                   (let [a (parse-one) b (parse-one)]
-                    (* (or a 0) (or b 0)))
+                    (if (and (number? a) (number? b))
+                      (* a b)
+                      {:error :bad-argument :rune :mul :args [a b]}))
                   (= tok :add)
                   (let [a (parse-one) b (parse-one)]
-                    (+ (or a 0) (or b 0)))
+                    (if (and (number? a) (number? b))
+                      (+ a b)
+                      {:error :bad-argument :rune :add :args [a b]}))
                   :else tok)))]
       (loop []
         (when (< @pos (count tokens))

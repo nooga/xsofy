@@ -162,7 +162,7 @@
 (defn update-ai-state [world entity-id]
   (let [entity (get-in world [:entities entity-id])
         player (get-in world [:entities :player])]
-    (if (or (nil? entity) (nil? player))
+    (if (or (nil? entity) (nil? player) (nil? (:pos entity)) (nil? (:pos player)))
       world
       (let [ai (:ai entity)
             state (get ai :state :sleep)
