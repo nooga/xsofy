@@ -308,6 +308,16 @@
 
       :else world)))
 
+(defn new-game []
+  (let [{:keys [title scheme]} (title/show-title-screen)
+        quest (title/generate-quest)
+        _ (title/show-descending-screen 1 scheme)]
+    (-> (world/make-world 79 30)
+        (assoc :title title
+               :scheme scheme
+               :quest-item (:item quest))
+        (#(reduce world/log-msg % (:messages quest))))))
+
 (defn game-loop
   ([world]
    (render/render-full world)
@@ -384,10 +394,15 @@
          :confirm-quit
          (do
            (render/render-full world)
-           (let [k (do (render/render-hazard-prompt world "Are you sure you want to quit?")
+           (let [prompt (if *in-wasm*
+                          "Are you sure you want to restart?"
+                          "Are you sure you want to quit?")
+                 k (do (render/render-hazard-prompt world prompt)
                        (term/read-key))
                  w (if (= k "y")
-                     (assoc world :running false)
+                     (if *in-wasm*
+                       (new-game)
+                       (assoc world :running false))
                      (dissoc world :screen))]
              (if (:running w)
                (do
@@ -458,15 +473,7 @@
 (defn -main []
   (init-terminal)
   (try
-    (let [{:keys [title scheme]} (title/show-title-screen)
-          quest (title/generate-quest)
-          _ (title/show-descending-screen 1 scheme)
-          world (-> (world/make-world 79 30)
-                    (assoc :title title
-                           :scheme scheme
-                           :quest-item (:item quest))
-                    (#(reduce world/log-msg % (:messages quest))))]
-      (game-loop world))
+    (game-loop (new-game))
     (catch e
            (dbg/log "FATAL ERROR:" e)
       (shutdown-terminal)
