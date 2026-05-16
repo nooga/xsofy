@@ -496,6 +496,31 @@
         tile (terrain/tget terrain width x y)]
     (apply-water-effects world entity-id tile)))
 
+(defn spell-source-name [attacker wep]
+  (if wep
+    (or (:item-name wep) (name (or (:template wep) (:id wep) :item)))
+    (entity-name attacker)))
+
+(defn spell-error-rune [world err]
+  (let [rune (:rune err)]
+    (if (keyword? rune)
+      (runes/rune-glyph (:rune-table world) rune)
+      (str rune))))
+
+(defn apply-spell-result [world attacker-id source-name result]
+  "Merge spell effects and convert rune programming errors into in-world backfire."
+  (let [w (-> (:world result)
+              (update :vfx #(vec (concat (or % []) (or (:vfx result) [])))))
+        err (:error result)]
+    (if err
+      (let [rune (spell-error-rune w err)]
+        (if (= attacker-id :player)
+          (-> w
+              (ent/damage-entity :player 1)
+              (log-msg (str "Rune " rune " on the " source-name " glows crimson and zaps you.")))
+          (log-msg w (str "Rune " rune " on the " source-name " glows crimson and rings unpleasantly."))))
+      w)))
+
 (def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
 
 (defn push-entity [world entity-id dx dy]
@@ -555,8 +580,7 @@
                                   (:runes attacker))
                     w (if (and hit-runes target-pos)
                         (let [result (spell/eval-spell w attacker-id target-pos hit-runes)]
-                          (-> (:world result)
-                              (update :vfx #(vec (concat (or % []) (or (:vfx result) []))))))
+                          (apply-spell-result w attacker-id (spell-source-name attacker wep) result))
                         w)
                     sneak-txt (if sneak " (sneak attack!)" "")]
                 (let [target-sounds (:sounds target)
@@ -746,8 +770,7 @@
                   ;; trigger spell runes at impact if creature has them
                   w (if (and spell-runes hit-pos (seq spell-runes))
                       (let [sr (spell/eval-spell w attacker-id hit-pos spell-runes)]
-                        (-> (:world sr)
-                            (update :vfx #(vec (concat (or % []) (or (:vfx sr) []))))))
+                        (apply-spell-result w attacker-id atk-name sr))
                       w)]
               (cond
                 (= hit-id :player)
@@ -1138,8 +1161,7 @@
                             w (if (and hit (:runes wep) (:hit-pos proj))
                                 (let [sr (spell/eval-spell w :player (:hit-pos proj)
                                                            (:runes wep))]
-                                  (-> (:world sr)
-                                      (update :vfx #(into (or % []) (:vfx sr)))))
+                                  (apply-spell-result w :player (spell-source-name (get-in w [:entities :player]) wep) sr))
                                 w)
                             w (consume-item w arrow-id)]
                         (-> w

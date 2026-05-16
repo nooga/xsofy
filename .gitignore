@@ -2,6 +2,7 @@
 .clj-kondo
 .lsp
 CLAUDE.md
+AGENTS.md
 debug.log
 *.lgb
 xoy

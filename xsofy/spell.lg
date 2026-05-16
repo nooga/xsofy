@@ -131,29 +131,38 @@
             (:cursors ctx))]
     (assoc ctx :world w :result amount)))
 
-(defn r-fire [ctx]
-  (let [w (reduce
-            (fn [world pos]
-              (let [[x y] pos
-                    world (fire/ignite-forced world x y 4)
-                    targets (u/targets-at world pos nil)]
-                (reduce (fn [w e] (status/apply-status w (:id e) :burning 12))
-                        world targets)))
-            (:world ctx)
-            (:cursors ctx))]
-    (assoc ctx :world w)))
+(defn r-fire
+  ([ctx] (r-fire ctx 1))
+  ([ctx power]
+   (let [power (if (number? power) (max 1 power) 1)
+         ttl (+ 3 power)
+         burn-ttl (* 12 power)
+         w (reduce
+             (fn [world pos]
+               (let [[x y] pos
+                     world (fire/ignite-forced world x y ttl)
+                     targets (u/targets-at world pos nil)]
+                 (reduce (fn [w e] (status/apply-status w (:id e) :burning burn-ttl))
+                         world targets)))
+             (:world ctx)
+             (:cursors ctx))]
+     (assoc ctx :world w))))
 
-(defn r-ice [ctx]
-  (let [w (reduce
-            (fn [world pos]
-              (let [[x y] pos
-                    world (fx/add-stain world x y :water 2)
-                    targets (u/targets-at world pos nil)]
-                (reduce (fn [w e] (status/apply-status w (:id e) :frozen 8))
-                        world targets)))
-            (:world ctx)
-            (:cursors ctx))]
-    (assoc ctx :world w)))
+(defn r-ice
+  ([ctx] (r-ice ctx 1))
+  ([ctx power]
+   (let [power (if (number? power) (max 1 power) 1)
+         ttl (* 8 power)
+         w (reduce
+             (fn [world pos]
+               (let [[x y] pos
+                     world (fx/add-stain world x y :water 2)
+                     targets (u/targets-at world pos nil)]
+                 (reduce (fn [w e] (status/apply-status w (:id e) :frozen ttl))
+                         world targets)))
+             (:world ctx)
+             (:cursors ctx))]
+     (assoc ctx :world w))))
 
 ;; Tiles you can be pushed into (walkable + hazards)
 (def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
@@ -252,27 +261,53 @@
 (def rune-defaults
   {:area 1 :spread 2 :damage 1 :heal 1})
 
+(def rune-arg-kinds
+  {:area :number
+   :spread :number
+   :damage :number
+   :heal :number
+   :fire :number
+   :ice :number})
+
 ;; --- Spell Evaluation ---
+
+(defn spell-error [ctx rune reason args]
+  (assoc ctx :error {:rune rune :reason reason :args (vec args)}))
+
+(defn valid-rune-args? [rune-key args]
+  (let [arg-kind (get rune-arg-kinds rune-key)]
+    (cond
+      (nil? arg-kind) (empty? args)
+      (= arg-kind :number) (and (= 1 (count args)) (number? (first args)))
+      :else false)))
 
 (defn eval-step [ctx step]
   (cond
+    (:error ctx) ctx
+    (and (map? step) (:error step))
+    (assoc ctx :error step)
     ;; bare keyword: call with default or no args
     (keyword? step)
     (let [f (get rune-primitives step)]
       (if f
         (let [default (get rune-defaults step)]
           (if default (f ctx default) (f ctx)))
-        ctx))
+        (spell-error ctx step :unknown-rune [])))
     ;; applied: [rune arg1 arg2 ...]
     (vector? step)
     (let [rune-key (first step)
           args (rest step)
           f (get rune-primitives rune-key)]
-      (if f
+      (cond
+        (nil? f)
+        (spell-error ctx rune-key :unknown-rune args)
+        (not (valid-rune-args? rune-key args))
+        (spell-error ctx rune-key :bad-argument args)
+        :else
         (apply f ctx args)
-        ctx))
-    ;; ignore numbers or other literals as bare steps
-    :else ctx))
+        ))
+    ;; numbers or other literals are invalid as bare pipeline steps
+    :else (spell-error ctx step :bad-step [])))
 
 (defn eval-spell [world caster-id target-pos raw-tokens]
   "Parse flat rune tokens and evaluate. Returns {:world w :vfx [events]}."
@@ -280,4 +315,5 @@
         ctx (make-context world caster-id target-pos)
         result (reduce eval-step ctx steps)]
     {:world (:world result)
-     :vfx (or (:vfx result) [])}))
+     :vfx (or (:vfx result) [])
+     :error (:error result)}))

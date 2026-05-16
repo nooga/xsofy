@@ -71,6 +71,7 @@ Every rune is one of:
    - `M 2 3` → 6 (product)
    - `A 3 2` → 5 (sum)
    - Nest with apply: `a F M 2 3` → `(fire (mul 2 3))` → `(fire 6)`
+   - Non-numeric math operands are spell programming errors.
 
 ### Parser Algorithm
 
@@ -85,16 +86,46 @@ parse(tokens) → steps:
     elif token is 'mul':
       a = parse_one(tokens)
       b = parse_one(tokens)
-      emit (* a b)
+      emit (* a b) or error if a/b are not numbers
     elif token is 'add':
       a = parse_one(tokens)
       b = parse_one(tokens)
-      emit (+ a b)
+      emit (+ a b) or error if a/b are not numbers
     else:
       emit (token)  ;; bare primitive, no args
 ```
 
 This is a trivial recursive descent parser. No ambiguity. No lookahead beyond one token.
+
+## Programming Errors and Backfire
+
+Rune programs can be malformed. That is part of the magic system: misunderstood reality calls should misfire in-world, not crash the engine.
+
+Evaluation is left-to-right. If a step has already changed the world, that change remains. When the evaluator reaches an invalid step, it stops the spell and returns a structured error with the offending rune, reason, and arguments.
+
+Examples:
+
+```clojure
+[:apply :fire 2]
+;; valid: fire with power 2
+
+[:apply :fire :ice]
+;; error: fire expects a number argument, but got the ice rune
+;; no fire is applied
+
+[:fire :apply :damage :ice]
+;; fire is applied first
+;; then damage errors because ice is not a number
+```
+
+Current runtime backfire rule:
+
+| Source             | Result |
+|--------------------|--------|
+| Player item rune   | Prior effects remain, then the offending rune glows crimson and zaps the player for 1 damage. |
+| Creature rune      | Prior effects remain, then the offending rune glows crimson and rings unpleasantly. |
+
+The message should expose that a rune failed without explaining the full API contract. The player sees a crimson warning tied to the item or creature source, and can infer which program shape is unsafe through experimentation.
 
 ## Context
 
