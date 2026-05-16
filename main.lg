@@ -201,7 +201,7 @@
 
       ;; actions on selected item (check before letter select)
       (and (>= sel 0) (= k "e")) (inv-equip world)
-      (and (>= sel 0) (= k "u")) (inv-unequip world)
+      (and (>= sel 0) (= k "U")) (inv-unequip world)
       (and (>= sel 0) (= k "d")) (inv-drop world)
       (and (>= sel 0) (= k "a")) (inv-use world)
       (and (>= sel 0) (= k "s")) (inv-inscribe world)
@@ -286,8 +286,8 @@
       (or (= k "k") (= k "\u001b[A"))
       (assoc world :menu-sel (max 0 (dec sel)))
 
-      ;; space to confirm selection
-      (and (= k " ") (>= sel 0) (< sel (count items)))
+      ;; space/enter to confirm selection
+      (and (or (= k " ") (= k "\r") (= k "\n")) (>= sel 0) (< sel (count items)))
       (let [[inv-idx item-id] (nth items sel)
             result (execute-menu-action world action inv-idx)]
         (if (:screen result)
@@ -380,6 +380,20 @@
                      (world/cancel-hazard-step world))]
              (render/render-full w)
              (recur w w (term/size))))
+
+         :confirm-quit
+         (do
+           (render/render-full world)
+           (let [k (do (render/render-hazard-prompt world "Are you sure you want to quit?")
+                       (term/read-key))
+                 w (if (= k "y")
+                     (assoc world :running false)
+                     (dissoc world :screen))]
+             (if (:running w)
+               (do
+                 (render/render-full w)
+                 (recur w w (term/size)))
+               w)))
 
          ;; default: game screen
          (let [;; determine auto-action or wait for input

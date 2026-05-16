@@ -10,6 +10,10 @@
     "j"        :down
     "k"        :up
     "l"        :right
+    "y"        :up-left
+    "u"        :up-right
+    "b"        :down-left
+    "n"        :down-right
     ;; shift+arrow = run
     "\u001b[1;2A" :run-up
     "\u001b[1;2B" :run-down
@@ -29,13 +33,12 @@
     "g"        :pickup
     ","        :pickup
     "e"        :equip-menu
-    "u"        :unequip-menu
+    "U"        :unequip-menu
     "d"        :drop-menu
     "a"        :use-menu
     "f"        :fire
     "i"        :inventory
     "r"        :rune-codex
     "m"        :messages
-    "q"        :quit
-    "\u001b"   :escape
+    "\u001b"   :quit
     :unknown))

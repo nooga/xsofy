@@ -532,7 +532,7 @@
 ;; --- Status Panel ---
 
 (defn render-status [world r]
-  (ui/write-line r 0 " hjkl:move  .:wait  euda:item  i:inv  <>:stairs  m:log  q:quit"
+  (ui/write-line r 0 " yuhjklbn:move  .:wait  eUda:item  i:inv  <>:stairs  m:log  esc:quit"
                  [60 60 60] ui/bg))
 
 ;; --- Quick Menu Overlay ---
@@ -606,7 +606,7 @@
                          (str " " letter ") " gch " " iname stats-txt)
                          fg bg))))
     (ui/write-line inner (dec (:h inner))
-                   " [a-z] select  [esc] cancel"
+                   " [a-z] select  [enter] confirm  [esc] cancel"
                    [60 60 60] [20 18 16])
     (term/flush)))
 
@@ -689,7 +689,7 @@
           ;; available commands
           (let [cmds (cond
                        (= slot :consumable) " [a] use  [d] drop"
-                       equipped             " [u] unequip  [s] inscribe  [d] drop"
+                       equipped             " [U] unequip  [s] inscribe  [d] drop"
                        (and slot (not= slot :consumable)) " [e] equip  [s] inscribe  [d] drop"
                        :else                " [d] drop")]
             (ui/write-line r (inc @rune-row) cmds [120 120 100] ui/bg)))))))
