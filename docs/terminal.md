@@ -100,8 +100,7 @@ Every terminal app follows the same pattern: enter raw mode, use alternate scree
     "\u001b[C" :right
     "\u001b[D" :left
     "\r"       :enter
-    "\u001b"   :escape
-    "q"        :quit
+    "\u001b"   :quit
     ;; default: return the key itself as a keyword if single char
     (if (= 1 (count k))
       (keyword k)
