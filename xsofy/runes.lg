@@ -118,12 +118,12 @@
                   (let [a (parse-one) b (parse-one)]
                     (if (and (number? a) (number? b))
                       (* a b)
-                      {:error :bad-argument :rune :mul :args [a b]}))
+                      {:error true :rune :mul :reason :bad-argument :args [a b]}))
                   (= tok :add)
                   (let [a (parse-one) b (parse-one)]
                     (if (and (number? a) (number? b))
                       (+ a b)
-                      {:error :bad-argument :rune :add :args [a b]}))
+                      {:error true :rune :add :reason :bad-argument :args [a b]}))
                   :else tok)))]
       (loop []
         (when (< @pos (count tokens))

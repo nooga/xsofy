@@ -1018,10 +1018,12 @@
                    (rest actors))))))
 
 (defn creature-turn [world creature-id]
+  (dbg/snapshot! world "creature-turn:enter " creature-id)
   (let [entity (get-in world [:entities creature-id])]
     (if (nil? entity) world
       (let [;; tick status effects (burning damage, poison, etc.)
-            w (status/tick-entity-statuses world creature-id)]
+            w (status/tick-entity-statuses world creature-id)
+            _ (dbg/snapshot! w "creature-turn:after-status-tick " creature-id)]
         (if (nil? (get-in w [:entities creature-id]))
           w  ;; died from status damage
           (if (not (status/can-act? w creature-id))
@@ -1347,21 +1349,25 @@
                         (trample-grass nx ny)
                         (assoc-in [:entities :player :pos] [nx ny])
                         (add-ticks :player move-cost)
-                        (update :turn inc)
-                        update-fov)
-                  w (do-pickup w [nx ny])
-                  ;; check if stepped on web
-                  w (if (and (fire/on-web? w nx ny)
-                             (not (fire/web-immune? w :player)))
-                      (-> w
-                          (status/apply-status :player :webbed 3)
-                          (log-msg "You walk into a web!"))
-                      w)
-                  ;; tile effects (water extinguishes fire, etc.)
-                  w (apply-tile-effects w :player nx ny)
-                  ;; check if leaving water
-                  w (check-leave-water w)]
-              w)
+                        (update :turn inc))]
+              (if (nil? (get-in w [:entities :player]))
+                ;; status tick (e.g. burning) killed the player during this step;
+                ;; skip post-move effects and let update-world handle death.
+                w
+                (let [w (update-fov w)
+                      w (do-pickup w [nx ny])
+                      ;; check if stepped on web
+                      w (if (and (fire/on-web? w nx ny)
+                                 (not (fire/web-immune? w :player)))
+                          (-> w
+                              (status/apply-status :player :webbed 3)
+                              (log-msg "You walk into a web!"))
+                          w)
+                      ;; tile effects (water extinguishes fire, etc.)
+                      w (apply-tile-effects w :player nx ny)
+                      ;; check if leaving water
+                      w (check-leave-water w)]
+                  w)))
             (log-msg world "Blocked."))))
 
       ;; hazard tile — flying creatures pass freely, others get confirmation
@@ -1422,6 +1428,7 @@
 ;; --- Turn Processing ---
 
 (defn update-world [world action]
+  (dbg/snapshot! world "update-world:enter " action)
   (case action
     :descend (descend world)
     :ascend (ascend world)
@@ -1471,9 +1478,11 @@
                          (log-msg "You rest."))
               :quit  (assoc world :screen :confirm-quit)
               world)
+          _ (dbg/snapshot! w "update-world:after-player-action " action)
           acted (> (:turn w) (:turn world))
           w (if acted
               (let [w2 (run-until-player-turn w)
+                    _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
                     ;; fire simulation + burning entities ignite terrain + water drift
                     w3 (-> w2 fire/step-fire fire/burning-entities-ignite drift-water-items)]
                 (if (get-in w3 [:entities :player])

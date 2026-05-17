@@ -2,6 +2,8 @@
   (:require [io :refer [open write! flush! close!]]))
 
 (def log-file (atom nil))
+(def latest-world (atom nil))
+(def last-checkpoint (atom (fn [] "<none>")))
 
 (defn ensure-log []
   (when (nil? @log-file)
@@ -18,3 +20,61 @@
   (when @log-file
     (close! @log-file)
     (reset! log-file nil)))
+
+;; --- Invariants ---
+
+(defn verify-world! [world checkpoint-fn]
+  "Assert player invariants. Throws if violated; checkpoint-fn is only
+   called to name the failure site."
+  (let [player (get-in world [:entities :player])]
+    (when player
+      (when (nil? (:pos player))
+        (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
+                    ": :player exists but :pos is nil. player keys = "
+                    (keys player))))
+      (let [[x y] (:pos player)]
+        (when (or (nil? x) (nil? y))
+          (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
+                      ": :player :pos contains nil coord: " (:pos player)))))
+      (when (nil? (get-in player [:body :hp]))
+        (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
+                    ": :player :body :hp is nil"))))))
+
+(defmacro snapshot! [world & checkpoint-parts]
+  "Stash world for crash dumping and run invariants. The checkpoint
+   string is only constructed if an invariant fails or a crash dump
+   is later written — every-turn overhead is just two atom resets."
+  `(let [w# ~world
+         ckpt# (fn [] (str ~@checkpoint-parts))]
+     (reset! xsofy.debug/latest-world w#)
+     (reset! xsofy.debug/last-checkpoint ckpt#)
+     (xsofy.debug/verify-world! w# ckpt#)
+     w#))
+
+;; --- Crash Dump ---
+
+(def redacted-keys
+  ;; large/noisy fields excluded to keep the dump readable
+  #{:terrain :memory :floors :lights :fov :log})
+
+(defn redact-world [world]
+  (when world
+    (reduce (fn [m k]
+              (if (contains? redacted-keys k)
+                (assoc m k (str "<redacted " (name k) ">"))
+                (assoc m k (get world k))))
+            {} (keys world))))
+
+(defn dump-crash! [error]
+  "Write the most recent world (redacted) and error to crash-dump.edn."
+  (when-not *in-wasm*
+    (let [f (open "crash-dump.edn" :write)
+          w (redact-world @latest-world)]
+      (write! f (str ";; xsofy crash dump\n"
+                     ";; last checkpoint: " (@last-checkpoint) "\n"
+                     ";; error:\n"
+                     (str error) "\n\n"
+                     ";; world (terrain/floors/memory/etc redacted):\n"
+                     (str w) "\n"))
+      (flush! f)
+      (close! f))))

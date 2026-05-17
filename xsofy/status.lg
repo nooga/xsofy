@@ -21,14 +21,21 @@
 ;; --- Apply / Remove ---
 
 (defn apply-status [world entity-id stype ttl]
-  (let [current (get-in world [:entities entity-id :statuses stype])
-        ;; refresh: take the longer duration
-        new-ttl (if current (max ttl (or (:ttl current) 0)) ttl)]
-    (assoc-in world [:entities entity-id :statuses stype]
-              {:ttl new-ttl :max-ttl new-ttl})))
+  ;; No-op if the entity doesn't exist — assoc-in would otherwise resurrect
+  ;; it as a {:statuses {...}} shell.
+  (if (nil? (get-in world [:entities entity-id]))
+    world
+    (let [current (get-in world [:entities entity-id :statuses stype])
+          new-ttl (if current (max ttl (or (:ttl current) 0)) ttl)]
+      (assoc-in world [:entities entity-id :statuses stype]
+                {:ttl new-ttl :max-ttl new-ttl}))))
 
 (defn remove-status [world entity-id stype]
-  (update-in world [:entities entity-id :statuses] dissoc stype))
+  ;; Same guard as apply-status. update-in on a missing path would otherwise
+  ;; create {:entities {entity-id {:statuses nil}}}.
+  (if (nil? (get-in world [:entities entity-id]))
+    world
+    (update-in world [:entities entity-id :statuses] dissoc stype)))
 
 (defn has-status? [world entity-id stype]
   (some? (get-in world [:entities entity-id :statuses stype])))
@@ -44,19 +51,20 @@
       world
       (reduce
         (fn [w [stype sdata]]
-          (let [def_ (get status-defs stype)
-                ttl (dec (or (:ttl sdata) 1))
-                dmg (or (:dmg def_) 0)]
-            (if (<= ttl 0)
-              ;; expired — remove
-              (remove-status w entity-id stype)
-              ;; tick — apply damage if any, update ttl
-              (let [w (if (and (> dmg 0) (get-in w [:entities entity-id]))
-                        (ent/damage-entity w entity-id dmg)
-                        w)]
-                (if (get-in w [:entities entity-id])
-                  (assoc-in w [:entities entity-id :statuses stype :ttl] ttl)
-                  w)))))
+          ;; Bail out if a prior tick (or external code) removed the entity.
+          (if (nil? (get-in w [:entities entity-id]))
+            w
+            (let [def_ (get status-defs stype)
+                  ttl (dec (or (:ttl sdata) 1))
+                  dmg (or (:dmg def_) 0)]
+              (if (<= ttl 0)
+                (remove-status w entity-id stype)
+                (let [w (if (> dmg 0)
+                          (ent/damage-entity w entity-id dmg)
+                          w)]
+                  (if (get-in w [:entities entity-id])
+                    (assoc-in w [:entities entity-id :statuses stype :ttl] ttl)
+                    w))))))
         world
         statuses))))
 

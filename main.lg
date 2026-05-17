@@ -476,9 +476,11 @@
     (game-loop (new-game))
     (catch e
            (dbg/log "FATAL ERROR:" e)
+           (dbg/dump-crash! e)
       (shutdown-terminal)
       (println "FATAL ERROR:")
-      (println e))
+      (println e)
+      (println "World state dumped to crash-dump.edn"))
     (finally
       (shutdown-terminal))))
 

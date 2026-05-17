@@ -229,29 +229,32 @@
 
 (defn pickup-item [world item-id owner-id]
   (let [item (get-in world [:entities item-id])
+        owner (get-in world [:entities owner-id])
         slot (get-in item [:item :slot])
         template (:template item)]
-    ;; stackable consumables
-    (if (and (= slot :consumable) template)
-      (if-let [existing (find-stack world owner-id template)]
-        ;; stack: add incoming count to existing, remove picked-up entity
-        (let [old-count (or (get-in world [:entities existing :item :count]) 1)
-              add-count (or (get-in item [:item :count]) 1)]
-          (-> world
-              (assoc-in [:entities existing :item :count] (+ old-count add-count))
-              (update :entities dissoc item-id)))
-        ;; no stack exists, add normally
+    ;; no owner = no pickup (avoid resurrecting a dead entity as {:inventory ...})
+    (when owner
+      ;; stackable consumables
+      (if (and (= slot :consumable) template)
+        (if-let [existing (find-stack world owner-id template)]
+          ;; stack: add incoming count to existing, remove picked-up entity
+          (let [old-count (or (get-in world [:entities existing :item :count]) 1)
+                add-count (or (get-in item [:item :count]) 1)]
+            (-> world
+                (assoc-in [:entities existing :item :count] (+ old-count add-count))
+                (update :entities dissoc item-id)))
+          ;; no stack exists, add normally
+          (if (inventory-full? world owner-id)
+            nil
+            (-> world
+                (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
+                (assoc-in [:entities item-id :pos] nil))))
+        ;; non-stackable
         (if (inventory-full? world owner-id)
           nil
           (-> world
               (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
-              (assoc-in [:entities item-id :pos] nil))))
-      ;; non-stackable
-      (if (inventory-full? world owner-id)
-        nil
-        (-> world
-            (update-in [:entities owner-id :inventory] #(conj (or % []) item-id))
-            (assoc-in [:entities item-id :pos] nil))))))
+              (assoc-in [:entities item-id :pos] nil)))))))
 
 (defn drop-item [world item-id owner-id]
   (let [owner-pos (get-in world [:entities owner-id :pos])]

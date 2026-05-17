@@ -86,17 +86,31 @@
 (defn r-spread [ctx n]
   (let [w (:world ctx)
         hits (:hits ctx)
-        current-positions (:cursors ctx)
-        candidates (->> (vals (:entities w))
-                        (filter (fn [e] (and (some? e) (map? e) (:pos e)
-                                              (not= (:caster ctx) (:id e))
-                                              (not (contains? hits (:id e)))
-                                              (not (contains? current-positions (:pos e))))))
-                        (sort-by (fn [e]
-                                   (apply min (map (fn [p] (distance p (:pos e)))
-                                                   current-positions))))
-                        (take n))]
-    (assoc ctx :cursors (set (map :pos candidates)))))
+        current-positions (:cursors ctx)]
+    ;; No source points → nothing to spread from. Also avoids (apply min ())
+    ;; in the sort comparator below.
+    (if (empty? current-positions)
+      ctx
+      (let [;; Force eager realization — let-go's lazy sort-by on a lazy filter
+            ;; result can nil-pointer when the filter is empty.
+            matching (vec (filter (fn [e]
+                                    (and (some? e) (map? e) (:pos e)
+                                         (not= (:caster ctx) (:id e))
+                                         (not (contains? hits (:id e)))
+                                         (not (contains? current-positions (:pos e)))))
+                                  (vals (:entities w))))
+            sorted (sort-by (fn [e]
+                              (apply min (map (fn [p] (distance p (:pos e)))
+                                              current-positions)))
+                            matching)
+            ;; vec to defeat a let-go quirk where (map f (take n lazy-seq))
+            ;; can return spurious nils on empty input.
+            candidates (vec (take n sorted))
+            ;; vec-then-set: in let-go, (set (filter some? (map ...))) over an
+            ;; empty input wrongly produces #{nil}. Forcing through vec first
+            ;; sidesteps it.
+            positions (vec (filter some? (map :pos candidates)))]
+        (assoc ctx :cursors (set positions))))))
 
 ;; --- Effect Primitives (do things at cursors) ---
 
