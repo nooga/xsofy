@@ -238,4 +238,29 @@
         (assoc-in [:entities :player] player)
         (spawn-creatures creature-spawns)
         (spawn-items item-spawns)
-        (assoc :fire-ttl fire-ttls))))
+        ;; depth + floors map needed by save/restore code paths
+        (assoc :depth 1 :floors {} :fire-ttl fire-ttls))))
+
+;; --- Picking two distinct entities from a world (for combat properties) ---
+;; A combat property needs an attacker-id and a target-id. We pick the
+;; player as attacker by default and a random creature as target, falling
+;; back gracefully if no creatures exist.
+
+(def gen-rich-world-with-creature
+  ;; Generate worlds until we get one with at least one non-player creature.
+  ;; In practice this is ~90% of worlds, so a small retry budget suffices.
+  (c/gen-let [world gen-rich-world]
+    (let [has-creature? (some (fn [e] (and (:ai e) (not= :player (:id e))))
+                              (vals (:entities world)))]
+      (if has-creature?
+        world
+        ;; force-add a goblin so the combat properties have a target
+        (ent/spawn world :goblin [5 5])))))
+
+(defn creature-ids
+  "All non-player ids that have a :body."
+  [world]
+  (->> (vals (:entities world))
+       (filter (fn [e] (and (:body e) (not= :player (:id e)))))
+       (map :id)
+       vec))

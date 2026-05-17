@@ -1,0 +1,175 @@
+(ns xsofy.test.combat-prop
+  "Property tests for combat, push/spell interactions, save/restore, equipment,
+   and AI."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.check-gen :as g]
+            [xsofy.world :as w]
+            [xsofy.entities :as ent]
+            [xsofy.spell :as spell]
+            [xsofy.ai :as ai]
+            [xsofy.runes :as runes]))
+
+;; ============================================================================
+;; Combat: melee-attack
+;; ============================================================================
+
+(c/defprop melee-attack-doesnt-throw
+  [world g/gen-rich-world-with-creature]
+  (let [targets (g/creature-ids world)]
+    (if (empty? targets)
+      true
+      (do (w/melee-attack world :player (first targets)) true))))
+
+(c/defprop melee-attack-preserves-invariants
+  [world g/gen-rich-world-with-creature]
+  (let [targets (g/creature-ids world)]
+    (if (empty? targets)
+      true
+      (g/world-invariants? (w/melee-attack world :player (first targets))))))
+
+;; ============================================================================
+;; Combat: ranged-attack
+;; ============================================================================
+
+(c/defprop ranged-attack-doesnt-throw
+  [world g/gen-rich-world-with-creature]
+  (let [targets (g/creature-ids world)]
+    (if (empty? targets)
+      true
+      (do (w/ranged-attack world :player (first targets)) true))))
+
+(c/defprop ranged-attack-preserves-invariants
+  [world g/gen-rich-world-with-creature]
+  (let [targets (g/creature-ids world)]
+    (if (empty? targets)
+      true
+      (g/world-invariants? (w/ranged-attack world :player (first targets))))))
+
+;; ============================================================================
+;; Push: r-push as a spell
+;; ============================================================================
+
+(c/defprop push-spell-doesnt-throw
+  [world g/gen-rich-world
+   target-pos g/gen-pos]
+  (do (spell/eval-spell world :player target-pos [:push]) true))
+
+(c/defprop push-spell-preserves-invariants
+  [world g/gen-rich-world
+   target-pos g/gen-pos]
+  (let [r (spell/eval-spell world :player target-pos [:push])]
+    (g/world-invariants? (:world r))))
+
+(c/defprop push-spell-respects-bounds
+  [world g/gen-rich-world
+   target-pos g/gen-pos]
+  (let [r (spell/eval-spell world :player target-pos [:push])
+        w' (:world r)
+        {:keys [width height]} w']
+    (every? (fn [e]
+              (if-let [[x y] (:pos e)]
+                (and (>= x 0) (< x width) (>= y 0) (< y height))
+                true))
+            (vals (:entities w')))))
+
+;; ============================================================================
+;; Equipment: equip / unequip / drop
+;; ============================================================================
+
+(defn make-test-item
+  "Build a synthetic weapon item id with deterministic stats."
+  [id]
+  {:id id :template :dagger :entity-type :item
+   :pos nil
+   :item {:slot :weapon :min-dmg 1 :max-dmg 2 :speed 100 :accuracy 100
+          :enchant 0 :str-req 0}})
+
+(deftest equip-puts-item-in-equipment-slot
+  (let [w {:entities {:player {:id :player :template :player
+                               :pos [1 1] :inventory [:test-dagger]
+                               :equipment {}}
+                      :test-dagger (make-test-item :test-dagger)}}
+        w' (ent/equip-item w :test-dagger :player)]
+    (is (= :test-dagger (get-in w' [:entities :player :equipment :weapon])))))
+
+(deftest unequip-removes-from-equipment
+  (let [w {:entities {:player {:id :player :template :player
+                               :pos [1 1] :inventory [:test-dagger]
+                               :equipment {:weapon :test-dagger}}
+                      :test-dagger (make-test-item :test-dagger)}}
+        w' (ent/unequip-item w :player :weapon)]
+    (is (nil? (get-in w' [:entities :player :equipment :weapon])))))
+
+(deftest drop-item-sets-pos-and-removes-from-inventory
+  (let [w {:entities {:player {:id :player :template :player
+                               :pos [3 4] :inventory [:test-dagger]}
+                      :test-dagger (make-test-item :test-dagger)}}
+        w' (ent/drop-item w :test-dagger :player)]
+    (is (= [3 4] (get-in w' [:entities :test-dagger :pos])))
+    (is (not (contains? (set (get-in w' [:entities :player :inventory]))
+                        :test-dagger)))))
+
+;; ============================================================================
+;; Save / restore round-trip
+;; ============================================================================
+
+(c/defprop extract-then-inject-preserves-player-and-items
+  [world g/gen-rich-world]
+  (let [[player items] (w/extract-player-items world)
+        ;; inject into a fresh empty world at original pos
+        fresh {:entities {} :turn 0 :width (:width world) :height (:height world)
+               :terrain (:terrain world) :gold 0 :rune-table {}}
+        restored (w/inject-player fresh player items (:pos player))
+        rp (get-in restored [:entities :player])]
+    (and (some? rp)
+         (= (:id rp) (:id player))
+         (= (:template rp) (:template player))
+         (= (:pos rp) (:pos player))
+         (every? (fn [iid] (some? (get-in restored [:entities iid])))
+                 (keys items)))))
+
+(c/defprop save-floor-removes-player
+  [world g/gen-rich-world]
+  (let [saved (w/save-current-floor world)
+        floor (get-in saved [:floors (:depth saved)])]
+    (and (not (contains? (:entities floor) :player))
+         ;; inventory items should also be removed from floor entities
+         (let [inv (or (get-in world [:entities :player :inventory]) [])]
+           (every? (fn [iid] (not (contains? (:entities floor) iid)))
+                   inv)))))
+
+;; ============================================================================
+;; AI in isolation
+;; ============================================================================
+
+(c/defprop ai-act-doesnt-throw
+  [world g/gen-rich-world-with-creature]
+  (let [creatures (g/creature-ids world)]
+    (if (empty? creatures)
+      true
+      (do (ai/ai-act world (first creatures)
+                     w/melee-attack w/ranged-attack)
+          true))))
+
+(c/defprop ai-act-preserves-invariants
+  [world g/gen-rich-world-with-creature]
+  (let [creatures (g/creature-ids world)]
+    (if (empty? creatures)
+      true
+      (g/world-invariants?
+        (ai/ai-act world (first creatures)
+                   w/melee-attack w/ranged-attack)))))
+
+;; ============================================================================
+;; creature-turn through process-creatures
+;; ============================================================================
+
+(c/defprop process-creatures-doesnt-throw
+  [world g/gen-rich-world]
+  (do (ai/process-creatures world w/melee-attack w/ranged-attack) true))
+
+(c/defprop process-creatures-preserves-invariants
+  [world g/gen-rich-world]
+  (g/world-invariants?
+    (ai/process-creatures world w/melee-attack w/ranged-attack)))
