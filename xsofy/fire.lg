@@ -15,6 +15,7 @@
 (def fire-damage 3)
 (def fire-spread-chance 30)  ;; percent per adjacent flammable per tick
 (def fire-default-ttl 5)
+(def protected-tiles #{13 14})  ;; stairs must survive dragon fire and rune fire
 
 (defn ignite [world x y]
   "Set a tile on fire. Only works on flammable tiles or if forced."
@@ -29,9 +30,12 @@
   "Force fire at a position regardless of terrain."
   (let [{:keys [terrain width]} world
         tile (terrain/tget terrain width x y)]
-    (when (and (not= tile 0) (not= tile 8) (not= tile 7))  ;; not void, wall, lava
+    (when (and (not= tile 0) (not= tile 8) (not= tile 7)
+               (not (contains? protected-tiles tile)))  ;; not void, wall, lava, stairs
       (terrain/tset! terrain width x y fire-tile))
-    (assoc-in world [:fire-ttl [x y]] ttl)))
+    (if (contains? protected-tiles tile)
+      world
+      (assoc-in world [:fire-ttl [x y]] ttl))))
 
 (defn step-fire [world]
   "One tick of fire simulation. Spread, damage, burn out."

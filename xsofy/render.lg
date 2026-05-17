@@ -10,6 +10,7 @@
             [xsofy.effects :as fx]
             [xsofy.status :as status]
             [xsofy.runes :as runes]
+            [xsofy.input :as input]
             [xsofy.title :as title]
             [xsofy.ui :as ui]))
 
@@ -532,7 +533,8 @@
 ;; --- Status Panel ---
 
 (defn render-status [world r]
-  (ui/write-line r 0 " yuhjklbn:move  .:wait  eUda:item  i:inv  <>:stairs  m:log  esc:quit"
+  (ui/write-line r 0 (str " yuhjklbn/1-9:move  .:wait  5/Z:rest  eUda:item  i:inv  <>:stairs  m:log  "
+                          (input/action-key-labels :help) ":help  esc:quit")
                  [60 60 60] ui/bg))
 
 ;; --- Quick Menu Overlay ---
@@ -630,6 +632,45 @@
                         (max 60 (- brightness 20))
                         (max 40 (- brightness 80))]
                        ui/bg)))
+    (ui/write-line inner (dec (:h inner))
+                   " [press any key to close]"
+                   [80 80 80] ui/bg)
+    (term/flush)))
+
+;; --- Help Screen (modal) ---
+
+(def help-categories
+  [[:movement "Movement"]
+   [:actions "Actions"]
+   [:items "Items"]
+   [:information "Information"]
+   [:system "System"]])
+
+(defn render-help-row [r y binding]
+  (ui/write-line r y (str " " (input/binding-key-labels binding)) [180 170 130] ui/bg)
+  (ui/write-at r 24 y (:label binding) [170 170 170] ui/bg))
+
+(defn render-help-column [r categories]
+  (let [row (atom 0)]
+    (doseq [[category title] categories]
+      (when (< @row (:h r))
+        (ui/write-line r @row (str " " title) [220 200 160] ui/bg)
+        (swap! row inc)
+        (let [bindings (vec (filter (fn [binding] (= category (:category binding)))
+                                    input/key-bindings))]
+          (dotimes [i (min (count bindings) (- (:h r) @row))]
+            (render-help-row r @row (nth bindings i))
+            (swap! row inc)))
+        (swap! row inc)))))
+
+(defn render-help-screen [world]
+  (let [[tw th] (or (term/size) [ui/game-width ui/game-height])
+        r (ui/rect 1 1 tw th)
+        inner (ui/box r "Keybindings" [180 170 140] ui/bg)
+        [left right] (ui/rect-split-h inner (quot (:w inner) 2))]
+    (ui/clear-rect inner)
+    (render-help-column left (subvec help-categories 0 2))
+    (render-help-column right (subvec help-categories 2))
     (ui/write-line inner (dec (:h inner))
                    " [press any key to close]"
                    [80 80 80] ui/bg)

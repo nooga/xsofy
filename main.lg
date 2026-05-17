@@ -331,6 +331,13 @@
                (render/render-full w)
                (recur w w (term/size))))
 
+         :help
+         (do (render/render-help-screen world)
+             (term/read-key)
+             (let [w (dissoc world :screen)]
+               (render/render-full w)
+               (recur w w (term/size))))
+
          :inventory
          (do (render/render-inventory-screen world)
              (let [k (term/read-key)

@@ -170,9 +170,16 @@
       ;; war hammer impact: just the target (knockback handled separately)
       :impact [[tx ty]]
 
-      ;; whip reach: scan straight line up to 5 tiles for first creature
-      :reach (vec (map (fn [i] [(+ px (* dx (inc i))) (+ py (* dy (inc i)))])
-                       (range 5)))
+      ;; whip reach: scan straight line up to 5 tiles, stopping at blockers
+      :reach (let [{:keys [terrain width height]} world]
+               (loop [i 1 positions []]
+                 (if (> i 5)
+                   positions
+                   (let [x (+ px (* dx i))
+                         y (+ py (* dy i))]
+                     (if (terrain/transparent? terrain width height x y)
+                       (recur (inc i) (conj positions [x y]))
+                       positions)))))
 
       ;; flail skip: tile at range 2, fallback to range 1
       :skip [[(+ px (* dx 2)) (+ py (* dy 2))] [tx ty]]

@@ -1,44 +1,53 @@
 (ns xsofy.input)
 
+(def key-bindings
+  [{:action :up          :category :movement   :label "Move up"          :keys ["\u001b[A" "k" "8"] :help-keys ["k" "8" "Up"]}
+   {:action :down        :category :movement   :label "Move down"        :keys ["\u001b[B" "j" "2"] :help-keys ["j" "2" "Down"]}
+   {:action :left        :category :movement   :label "Move left"        :keys ["\u001b[D" "h" "4"] :help-keys ["h" "4" "Left"]}
+   {:action :right       :category :movement   :label "Move right"       :keys ["\u001b[C" "l" "6"] :help-keys ["l" "6" "Right"]}
+   {:action :up-left     :category :movement   :label "Move up-left"     :keys ["y" "7"] :help-keys ["y" "7"]}
+   {:action :up-right    :category :movement   :label "Move up-right"    :keys ["u" "9"] :help-keys ["u" "9"]}
+   {:action :down-left   :category :movement   :label "Move down-left"   :keys ["b" "1"] :help-keys ["b" "1"]}
+   {:action :down-right  :category :movement   :label "Move down-right"  :keys ["n" "3"] :help-keys ["n" "3"]}
+   {:action :run-up      :category :movement   :label "Run up"           :keys ["\u001b[1;2A" "K"] :help-keys ["K" "Shift-Up"]}
+   {:action :run-down    :category :movement   :label "Run down"         :keys ["\u001b[1;2B" "J"] :help-keys ["J" "Shift-Down"]}
+   {:action :run-left    :category :movement   :label "Run left"         :keys ["\u001b[1;2D" "H"] :help-keys ["H" "Shift-Left"]}
+   {:action :run-right   :category :movement   :label "Run right"        :keys ["\u001b[1;2C" "L"] :help-keys ["L" "Shift-Right"]}
+   {:action :wait        :category :actions    :label "Wait one turn"     :keys ["." "z"] :help-keys ["." "z"]}
+   {:action :rest        :category :actions    :label "Rest until interrupted" :keys ["5" "Z"] :help-keys ["5" "Z"]}
+   {:action :autoexplore :category :actions    :label "Autoexplore"       :keys ["x"] :help-keys ["x"]}
+   {:action :descend     :category :actions    :label "Descend stairs"    :keys [">"] :help-keys [">"]}
+   {:action :ascend      :category :actions    :label "Ascend stairs"     :keys ["<"] :help-keys ["<"]}
+   {:action :pickup      :category :items      :label "Pick up item"      :keys ["g" ","] :help-keys ["g" ","]}
+   {:action :equip-menu  :category :items      :label "Equip item"        :keys ["e"] :help-keys ["e"]}
+   {:action :unequip-menu :category :items     :label "Unequip item"      :keys ["U"] :help-keys ["U"]}
+   {:action :drop-menu   :category :items      :label "Drop item"         :keys ["d"] :help-keys ["d"]}
+   {:action :use-menu    :category :items      :label "Use item"          :keys ["a"] :help-keys ["a"]}
+   {:action :fire        :category :actions    :label "Fire bow"          :keys ["f"] :help-keys ["f"]}
+   {:action :inventory   :category :items      :label "Open inventory"    :keys ["i"] :help-keys ["i"]}
+   {:action :rune-codex  :category :information :label "Open rune codex"  :keys ["r"] :help-keys ["r"]}
+   {:action :messages    :category :information :label "Open message log" :keys ["m"] :help-keys ["m"]}
+   {:action :help        :category :information :label "Open keybindings" :keys ["?"] :help-keys ["?"]}
+   {:action :quit        :category :system     :label "Quit"              :keys ["\u001b"] :help-keys ["Esc"]}])
+
+(defn key-matches? [k binding]
+  (some (fn [key] (= k key)) (:keys binding)))
+
+(defn binding-for-key [k]
+  (first (filter (fn [binding] (key-matches? k binding)) key-bindings)))
+
+(defn binding-for-action [action]
+  (first (filter (fn [binding] (= action (:action binding))) key-bindings)))
+
+(defn binding-key-labels [binding]
+  (apply str (interpose ", " (or (:help-keys binding) (:keys binding)))))
+
+(defn action-key-labels [action]
+  (if-let [binding (binding-for-action action)]
+    (binding-key-labels binding)
+    "?"))
+
 (defn parse-key [k]
-  (case k
-    "\u001b[A" :up
-    "\u001b[B" :down
-    "\u001b[C" :right
-    "\u001b[D" :left
-    "h"        :left
-    "j"        :down
-    "k"        :up
-    "l"        :right
-    "y"        :up-left
-    "u"        :up-right
-    "b"        :down-left
-    "n"        :down-right
-    ;; shift+arrow = run
-    "\u001b[1;2A" :run-up
-    "\u001b[1;2B" :run-down
-    "\u001b[1;2C" :run-right
-    "\u001b[1;2D" :run-left
-    ;; uppercase HJKL = run
-    "H"        :run-left
-    "J"        :run-down
-    "K"        :run-up
-    "L"        :run-right
-    "."        :wait
-    "z"        :wait
-    "Z"        :rest
-    "x"        :autoexplore
-    ">"        :descend
-    "<"        :ascend
-    "g"        :pickup
-    ","        :pickup
-    "e"        :equip-menu
-    "U"        :unequip-menu
-    "d"        :drop-menu
-    "a"        :use-menu
-    "f"        :fire
-    "i"        :inventory
-    "r"        :rune-codex
-    "m"        :messages
-    "\u001b"   :quit
+  (if-let [binding (binding-for-key k)]
+    (:action binding)
     :unknown))

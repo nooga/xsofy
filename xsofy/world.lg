@@ -1426,6 +1426,7 @@
     :descend (descend world)
     :ascend (ascend world)
     :messages (assoc world :screen :messages)
+    :help (assoc world :screen :help)
     :pickup (pickup world)
     :inventory (assoc world :screen :inventory)
     :rune-codex (assoc world :screen :rune-codex)
