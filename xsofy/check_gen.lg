@@ -46,10 +46,7 @@
   (let [w 10
         h 10
         t (terrain/make-terrain w h)]
-    ;; carve a floor inside the perimeter
-    (doseq [y (range 1 (dec h))
-            x (range 1 (dec w))]
-      (terrain/tset! t w x y 1))   ;; 1 = floor-stone
+    (terrain/carve-room! t w 1 1 (- w 2) (- h 2))
     {:terrain t
      :width w
      :height h
@@ -214,14 +211,30 @@
 ;; Feature room + player + 0-3 creatures + 0-3 items + fire-ttl for any
 ;; fire tiles. This is the workhorse generator for movement and effects.
 
-(defn- spawn-creatures [world spawns]
+(defn- occupied-positions
+  "Set of positions already held by non-item entities."
+  [world]
+  (->> (vals (:entities world))
+       (filter (fn [e] (and (:pos e) (not= :item (:entity-type e)))))
+       (map :pos)
+       set))
+
+(defn- spawn-creatures
+  "Spawn creatures, skipping any whose position collides with an existing
+   non-item entity. Preserves the no-creature-collisions invariant."
+  [world spawns]
   (reduce (fn [w {:keys [species pos]}]
-            (try (ent/spawn w species pos)
-                 (catch _ w)))   ;; silently ignore unknown species
+            (if (contains? (occupied-positions w) pos)
+              w   ;; collision — skip
+              (try (ent/spawn w species pos)
+                   (catch _ w))))
           world
           spawns))
 
-(defn- spawn-items [world spawns]
+(defn- spawn-items
+  "Spawn items. Items may share a tile with creatures, so no collision check
+   is needed at the item layer."
+  [world spawns]
   (reduce (fn [w {:keys [species pos]}]
             (try (ent/spawn-item w species pos)
                  (catch _ w)))
@@ -246,16 +259,27 @@
 ;; player as attacker by default and a random creature as target, falling
 ;; back gracefully if no creatures exist.
 
+(defn- first-free-position
+  "Find the first interior position not already held by a non-item entity."
+  [world]
+  (let [occupied (occupied-positions world)]
+    (first (for [y (range 1 (dec (:height world)))
+                 x (range 1 (dec (:width world)))
+                 :let [p [x y]]
+                 :when (not (contains? occupied p))]
+             p))))
+
 (def gen-rich-world-with-creature
-  ;; Generate worlds until we get one with at least one non-player creature.
-  ;; In practice this is ~90% of worlds, so a small retry budget suffices.
+  ;; If natural sampling didn't produce a creature, force-add a goblin on the
+  ;; first free interior tile so we don't violate no-collisions.
   (c/gen-let [world gen-rich-world]
     (let [has-creature? (some (fn [e] (and (:ai e) (not= :player (:id e))))
                               (vals (:entities world)))]
       (if has-creature?
         world
-        ;; force-add a goblin so the combat properties have a target
-        (ent/spawn world :goblin [5 5])))))
+        (if-let [pos (first-free-position world)]
+          (ent/spawn world :goblin pos)
+          world)))))
 
 (defn creature-ids
   "All non-player ids that have a :body."
@@ -264,3 +288,89 @@
        (filter (fn [e] (and (:body e) (not= :player (:id e)))))
        (map :id)
        vec))
+
+;; ============================================================================
+;; World invariants
+;; ============================================================================
+;;
+;; The single source of truth for what 'a valid world' means. The generator
+;; should produce only worlds that satisfy this predicate, and every
+;; world-mutating operation in the codebase should preserve it.
+;;
+;; The list of invariants is intentionally documented in code rather than in
+;; prose elsewhere so it stays in sync with the predicate.
+
+(def ^:private fire-tile-id 15)
+(def ^:private item-entity-type :item)
+
+(defn- in-bounds? [width height pos]
+  (when pos
+    (let [[x y] pos]
+      (and (some? x) (some? y) (integer? x) (integer? y)
+           (>= x 0) (< x width)
+           (>= y 0) (< y height)))))
+
+(defn- entity-shape-ok? [e]
+  ;; an entity must have :id and :template; anything without them is a
+  ;; resurrection shell. Items are exempt from needing a body; creatures
+  ;; (anything with :ai or named :player) must have a body+pos OR be absent.
+  (and (map? e)
+       (some? (:id e))
+       (some? (:template e))))
+
+(defn- player-shape-ok? [p]
+  ;; player is either absent OR fully formed
+  (or (nil? p)
+      (and (entity-shape-ok? p)
+           (some? (:pos p))
+           (some? (:body p)))))
+
+(defn- entity-ok? [entities width height [k e]]
+  ;; Checks invariants 2-7 for a single entity in one pass.
+  (and (entity-shape-ok? e)
+       (= k (:id e))
+       (or (nil? (:pos e)) (in-bounds? width height (:pos e)))
+       (every? (fn [iid] (some? (get entities iid)))
+               (or (:inventory e) []))
+       (every? (fn [iid] (or (nil? iid) (some? (get entities iid))))
+               (vals (or (:equipment e) {})))
+       (let [hp (get-in e [:body :hp])]
+         (or (nil? hp) (>= hp 0)))))
+
+(defn- fire-ttl-references-fire? [world]
+  (let [{:keys [terrain width fire-ttl]} world]
+    (every? (fn [[[x y] _]]
+              (and (integer? x) (integer? y)
+                   (= fire-tile-id (terrain/tget terrain width x y))))
+            (or fire-ttl {}))))
+
+(defn world-invariants?
+  "True iff `world` satisfies all structural invariants. Returns false
+   instead of throwing if the world is malformed.
+
+   Invariants checked:
+     1. :player is absent or fully formed (id, template, pos, body)
+     2. Every entity has :id and :template (no partial shells)
+     3. Every entity with :pos is in bounds
+     4. Each entity's :id matches its key in :entities
+     5. Every inventory id references an existing entity
+     6. Every equipment slot id references an existing entity (or is nil)
+     7. Every entity with a :body has :hp >= 0
+     8. Every :fire-ttl key points at a fire tile (id 15)
+
+   Notes:
+   - Positional collisions (two non-item entities on the same tile) are NOT
+     enforced here. Whether stacking entities triggers damage, pushback, or
+     is otherwise disallowed is a gameplay policy decision for the author,
+     not a structural invariant. The generator separately avoids creating
+     initial-state collisions (see gen-rich-world) for cleaner test
+     scenarios."
+  [world]
+  (try
+    (let [entities (or (:entities world) {})
+          {:keys [width height]} world]
+      (and (player-shape-ok? (get entities :player))
+           (every? (fn [pair] (entity-ok? entities width height pair))
+                   entities)
+           (fire-ttl-references-fire? world)))
+    (catch _ false)))

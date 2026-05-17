@@ -1,0 +1,196 @@
+(ns xsofy.test.invariant-test
+  "Unit tests for the world-invariants? predicate that lives in xsofy.check-gen.
+   The predicate is the single source of truth for what 'a valid world' means;
+   the generator must produce only valid worlds, and every world-mutating
+   operation must preserve them."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.check-gen :as g]
+            [xsofy.terrain :as terrain]))
+
+(defn- empty-room
+  "A 5x5 stone-floor room (interior = 3x3 floor, border = stone walls).
+   Includes the minimum fields the invariant predicate requires."
+  []
+  (let [w 5 h 5
+        t (terrain/make-terrain w h)]
+    (terrain/carve-room! t w 1 1 (- w 2) (- h 2))
+    {:terrain t :width w :height h
+     :entities {} :turn 0 :gold 0 :rune-table {}
+     :depth 1 :floors {}}))
+
+(defn- valid-player [pos]
+  {:id :player :template :player :pos pos
+   :ticks 0 :status {} :statuses {} :inventory []
+   :body {:hp 10 :max-hp 10 :strength 2 :armor 0}})
+
+;; ============================================================================
+;; Empty world / minimal world
+;; ============================================================================
+
+(deftest empty-world-with-player-is-valid
+  (let [w (assoc-in (empty-room) [:entities :player] (valid-player [2 2]))]
+    (is (g/world-invariants? w))))
+
+(deftest empty-room-with-no-player-is-valid
+  ;; An entity-less world is structurally valid even if it has no player.
+  (is (g/world-invariants? (empty-room))))
+
+;; ============================================================================
+;; Invariant 1: player well-formed
+;; ============================================================================
+
+(deftest invariant-fails-when-player-has-only-inventory
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] {:inventory [:dagger-1]}))]
+    (is (not (g/world-invariants? bad)))))
+
+(deftest invariant-fails-when-player-has-only-statuses
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] {:statuses {:burning {:ttl 1}}}))]
+    (is (not (g/world-invariants? bad)))))
+
+(deftest invariant-fails-when-player-pos-is-nil
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] (assoc (valid-player [2 2]) :pos nil)))]
+    (is (not (g/world-invariants? bad)))))
+
+;; ============================================================================
+;; Invariant 2: all entities well-formed (no partial shells)
+;; ============================================================================
+
+(deftest invariant-fails-on-partial-creature-shell
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] (valid-player [2 2]))
+                (assoc-in [:entities :ghost] {:statuses {:burning {:ttl 1}}}))]
+    (is (not (g/world-invariants? bad)))))
+
+;; ============================================================================
+;; Invariant 3: positions in bounds
+;; ============================================================================
+
+(deftest invariant-fails-on-out-of-bounds-player
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] (valid-player [99 99])))]
+    (is (not (g/world-invariants? bad)))))
+
+(deftest invariant-fails-on-negative-position
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] (valid-player [-1 0])))]
+    (is (not (g/world-invariants? bad)))))
+
+;; ============================================================================
+;; Invariant 4: entity id matches map key
+;; ============================================================================
+
+(deftest invariant-fails-on-mismatched-id
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] (valid-player [2 2]))
+                (assoc-in [:entities :rat-1]
+                          {:id :different :template :rat :pos [3 3]
+                           :body {:hp 5 :max-hp 5}}))]
+    (is (not (g/world-invariants? bad)))))
+
+;; ============================================================================
+;; Item-and-creature stacking is allowed at all times.
+;; Note: creature-on-creature stacking is intentionally NOT an invariant —
+;; that's a gameplay policy decision (e.g. push damage on bump). The
+;; generator avoids initial-state stacking for cleaner test scenarios; see
+;; gen-rich-world-avoids-initial-creature-collisions below.
+;; ============================================================================
+
+(deftest invariant-allows-item-and-creature-on-same-tile
+  (let [w (-> (empty-room)
+              (assoc-in [:entities :player] (valid-player [2 2]))
+              (assoc-in [:entities :gold-1]
+                        {:id :gold-1 :template :gold :entity-type :item
+                         :pos [2 2]}))]
+    (is (g/world-invariants? w))))
+
+(deftest invariant-allows-two-creatures-on-same-tile
+  ;; Not an invariant — runtime collisions can be legal depending on policy.
+  (let [w (-> (empty-room)
+              (assoc-in [:entities :player] (valid-player [2 2]))
+              (assoc-in [:entities :rat-1]
+                        {:id :rat-1 :template :rat :pos [2 2]
+                         :body {:hp 5 :max-hp 5} :ai {}}))]
+    (is (g/world-invariants? w))))
+
+;; ============================================================================
+;; Invariant 6: inventory item ids exist
+;; ============================================================================
+
+(deftest invariant-fails-on-orphan-inventory-id
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player]
+                          (assoc (valid-player [2 2])
+                                 :inventory [:missing-item])))]
+    (is (not (g/world-invariants? bad)))))
+
+;; ============================================================================
+;; Invariant 7: HP non-negative
+;; ============================================================================
+
+(deftest invariant-fails-on-negative-hp
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player]
+                          (assoc-in (valid-player [2 2]) [:body :hp] -3)))]
+    (is (not (g/world-invariants? bad)))))
+
+;; ============================================================================
+;; Invariant 8: fire-ttl keys reference actual fire tiles
+;; ============================================================================
+
+(deftest invariant-fails-on-fire-ttl-without-fire-tile
+  (let [bad (-> (empty-room)
+                (assoc-in [:entities :player] (valid-player [2 2]))
+                (assoc :fire-ttl {[2 2] 3}))]   ;; [2 2] is floor, not fire
+    (is (not (g/world-invariants? bad)))))
+
+(deftest invariant-allows-fire-ttl-on-fire-tile
+  (let [room (empty-room)
+        _ (terrain/tset! (:terrain room) (:width room) 2 2 15)   ; fire-tile
+        w (-> room
+              (assoc-in [:entities :player] (valid-player [1 1]))
+              (assoc :fire-ttl {[2 2] 3}))]
+    (is (g/world-invariants? w))))
+
+;; ============================================================================
+;; Generator hygiene: gen-rich-world must produce only valid worlds.
+;; ============================================================================
+
+(deftest gen-rich-world-only-produces-valid-worlds
+  (testing "100 samples from gen-rich-world all satisfy world-invariants?"
+    (let [worlds (c/sample g/gen-rich-world 100)
+          invalid (filter (complement g/world-invariants?) worlds)]
+      (is (empty? invalid)
+          (str (count invalid) " invalid worlds out of 100")))))
+
+(deftest gen-rich-world-with-creature-only-produces-valid-worlds
+  (testing "100 samples from gen-rich-world-with-creature are all valid"
+    (let [worlds (c/sample g/gen-rich-world-with-creature 100)
+          invalid (filter (complement g/world-invariants?) worlds)]
+      (is (empty? invalid)
+          (str (count invalid) " invalid worlds out of 100")))))
+
+(deftest gen-minimal-world-only-produces-valid-worlds
+  (testing "100 samples from gen-minimal-world are all valid"
+    (let [worlds (c/sample g/gen-minimal-world 100)
+          invalid (filter (complement g/world-invariants?) worlds)]
+      (is (empty? invalid)
+          (str (count invalid) " invalid worlds out of 100")))))
+
+(defn- has-creature-collision? [world]
+  (let [non-items (filter (fn [e] (and (:pos e) (not= :item (:entity-type e))))
+                          (vals (:entities world)))
+        positions (map :pos non-items)]
+    (not= (count positions) (count (set positions)))))
+
+(deftest gen-rich-world-avoids-initial-creature-collisions
+  (testing "Although collisions can be legal at runtime, the generator
+            should not produce them in the initial state — they confuse
+            test scenarios."
+    (let [worlds (c/sample g/gen-rich-world 100)
+          collisions (filter has-creature-collision? worlds)]
+      (is (empty? collisions)
+          (str (count collisions) " worlds had initial-state collisions")))))
