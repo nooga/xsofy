@@ -27,7 +27,12 @@
      (c/sample gen-creature)
      (c/sample gen-creature 3)"
   (:require [xsofy.check :as c]
-            [xsofy.terrain :as terrain]))
+            [xsofy.terrain :as terrain]
+            [xsofy.entities :as ent]
+            ;; Load template registries (defcreature / defitem populate
+            ;; the shared @ent/templates atom).
+            [xsofy.bestiary]
+            [xsofy.items]))
 
 ;; --- Position ---
 (def gen-pos
@@ -101,3 +106,136 @@
 
 (def gen-action-seq
   (c/gen-vector gen-action 0 10))
+
+;; ============================================================================
+;; Terrain features, hazards, fire, webs, creatures, items
+;; ============================================================================
+
+;; --- Tile feature generator ---
+;; Pick from a curated set of tile types that the movement/effects code has
+;; to handle. Includes hazards (water, lava, chasm), flammable (grass), web,
+;; and the friendly default (floor-stone).
+;;
+;; Tile numbers come from terrain.lg:
+;;   1 floor-stone, 2 grass, 3 shallow-water, 4 deep-water,
+;;   6 chasm, 7 lava, 15 fire, 17 walkway, 18 trampled-grass, 19 web
+
+(def gen-feature-tile
+  (c/gen-frequency [[6 (c/return 1)]    ; floor-stone — default
+                    [2 (c/return 2)]    ; grass (flammable)
+                    [1 (c/return 3)]    ; shallow water
+                    [1 (c/return 4)]    ; deep water (hazard)
+                    [1 (c/return 6)]    ; chasm (hazard)
+                    [1 (c/return 7)]    ; lava (hazard)
+                    [1 (c/return 15)]   ; fire
+                    [1 (c/return 19)]]))   ; web
+
+;; --- Feature room ---
+;; Like minimal-stone-room but the interior tiles are random feature tiles.
+;; Returns [world fire-cells] — fire-cells is a vec of [x y] needing fire-ttl.
+
+(defn- carve-feature-row [t w x y tile fire-acc]
+  (terrain/tset! t w x y tile)
+  (if (= tile 15)            ; track fire tiles so we can build fire-ttl
+    (conj fire-acc [x y])
+    fire-acc))
+
+(defn build-feature-room
+  "Given a vector of (width-2)*(height-2) tile ints (one per interior cell),
+   build a world map. Returns {:world ... :fire-cells [[x y] ...]}."
+  [tile-vec]
+  (let [w 10
+        h 10
+        t (terrain/make-terrain w h)
+        inner-w (- w 2)
+        inner-h (- h 2)]
+    (loop [i 0
+           fires []]
+      (if (= i (* inner-w inner-h))
+        {:world {:terrain t :width w :height h
+                 :entities {} :turn 0 :gold 0 :rune-table {}}
+         :fire-cells fires}
+        (let [x (+ 1 (mod i inner-w))
+              y (+ 1 (quot i inner-w))
+              tile (nth tile-vec i 1)
+              fires' (carve-feature-row t w x y tile fires)]
+          (recur (inc i) fires'))))))
+
+;; (width-2)*(height-2) = 64 interior tiles for a 10x10 room
+(def gen-feature-room
+  (c/gen-let [tiles (c/gen-vector gen-feature-tile 64 64)]
+    (build-feature-room tiles)))
+
+;; --- Fire-ttl map ---
+;; For any fire tiles in the room, give them random TTLs.
+
+(def gen-fire-ttl-for-cells
+  ;; Returns a map {[x y] ttl}. Takes cells via fmap composition.
+  (fn [cells]
+    (c/gen-let [ttls (c/gen-vector (c/gen-int 1 5) (count cells) (count cells))]
+      (zipmap cells ttls))))
+
+;; --- Creature spawning ---
+
+(def creature-species
+  ;; A subset of the bestiary — the ones that exist and don't depend on a
+  ;; specific encounter context.
+  [:rat :goblin :kobold :archer :spider :slime
+   :goblin-shaman :fire-imp :ogre :troll :wraith])
+
+(def gen-creature-species (c/gen-elements creature-species))
+
+(def gen-creature-spawn
+  ;; {:species k :pos [x y]}
+  (c/gen-let [species gen-creature-species
+              pos     gen-pos]
+    {:species species :pos pos}))
+
+(def gen-creature-spawns
+  (c/gen-vector gen-creature-spawn 0 3))
+
+;; --- Item spawning ---
+
+(def item-species
+  [:dagger :short-sword :leather-armor :health-potion
+   :scroll-enchant :arrow :gold])
+
+(def gen-item-species (c/gen-elements item-species))
+
+(def gen-item-spawn
+  (c/gen-let [species gen-item-species
+              pos     gen-pos]
+    {:species species :pos pos}))
+
+(def gen-item-spawns
+  (c/gen-vector gen-item-spawn 0 3))
+
+;; --- Rich world ---
+;; Feature room + player + 0-3 creatures + 0-3 items + fire-ttl for any
+;; fire tiles. This is the workhorse generator for movement and effects.
+
+(defn- spawn-creatures [world spawns]
+  (reduce (fn [w {:keys [species pos]}]
+            (try (ent/spawn w species pos)
+                 (catch _ w)))   ;; silently ignore unknown species
+          world
+          spawns))
+
+(defn- spawn-items [world spawns]
+  (reduce (fn [w {:keys [species pos]}]
+            (try (ent/spawn-item w species pos)
+                 (catch _ w)))
+          world
+          spawns))
+
+(def gen-rich-world
+  (c/gen-let [room-data        gen-feature-room
+              player           gen-player
+              creature-spawns  gen-creature-spawns
+              item-spawns      gen-item-spawns
+              fire-ttls        (gen-fire-ttl-for-cells (:fire-cells room-data))]
+    (-> (:world room-data)
+        (assoc-in [:entities :player] player)
+        (spawn-creatures creature-spawns)
+        (spawn-items item-spawns)
+        (assoc :fire-ttl fire-ttls))))
