@@ -139,11 +139,26 @@
   "Format raw rune tokens as glyphs (player-facing, obfuscated)."
   (apply str (interpose "" (mapv #(rune-glyph rune-table %) tokens))))
 
+(defn- dissonant-glyphs
+  "Pick 2-3 random rune glyphs to render in place of a parser error
+   sentinel. The glyphs shift each render call, suggesting the runes
+   haven't settled into a coherent form. Not decodable — no rune-table
+   entry binds these glyphs in this context."
+  []
+  (let [n (+ 2 (rand-int 2))]
+    (apply str (repeatedly n #(nth rune-glyphs (rand-int (count rune-glyphs)))))))
+
 (defn format-sexp-step [rune-table step]
-  "Format one parsed step as s-expression with identification."
+  "Format one parsed step as s-expression with identification.
+   Parser error sentinels are rendered as shifting random glyphs so
+   internal shape never leaks into player-facing inscription text."
   (cond
     (number? step) (str step)
     (keyword? step) (rune-display rune-table step)
+    ;; Parser error sentinel (e.g. (:mul) or (:add) with missing args).
+    ;; The runes failed to bind into a coherent step; show as garbled
+    ;; glyph noise that shifts on each look.
+    (and (map? step) (:error step)) (dissonant-glyphs)
     (vector? step)
     (str "(" (apply str (interpose " " (mapv #(format-sexp-step rune-table %) step))) ")")
     :else (str step)))

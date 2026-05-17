@@ -2,6 +2,7 @@
   "Property tests for the spell DSL. eval-spell must never throw on any
    sequence of raw tokens, well-formed or not."
   (:require [test :refer [deftest is testing]]
+            [string :as str]
             [xsofy.check :as c]
             [xsofy.check-gen :as g]
             [xsofy.runes :as runes]
@@ -125,6 +126,38 @@
          (= [r n] (first steps)))))
 
 ;; ============================================================================
+;; Player-facing display must never leak internal error-map shape.
+;; The spell DSL is meant to be discovered by the player; surfacing a Clojure
+;; map like {:reason :bad-argument :rune :add :args [nil nil] :error true}
+;; in the inscription UI breaks the discovery aesthetic and the fourth wall.
+;; ============================================================================
+
+(defn- looks-like-internal-map? [s]
+  ;; Heuristic: any of these tokens signal that an error-map's internal keys
+  ;; or sentinel values have leaked into the player-facing string.
+  (or (str/includes? s ":reason")
+      (str/includes? s ":error")
+      (str/includes? s ":bad-argument")
+      (str/includes? s ":unknown-rune")
+      (str/includes? s ":bad-step")
+      ;; Bare maps in inscriptions are also a leak — the formatter should
+      ;; never emit `{`/`}` in player-facing output (sets and vectors render
+      ;; differently in the Glyphs/Spell UI).
+      (str/includes? s "{")))
+
+(c/defprop format-sexp-doesnt-leak-internal-shape
+  [tokens gen-raw-program]
+  (let [tbl (runes/generate-rune-table)
+        s (runes/format-sexp tbl tokens)]
+    (not (looks-like-internal-map? s))))
+
+(c/defprop format-glyphs-doesnt-leak-internal-shape
+  [tokens gen-raw-program]
+  (let [tbl (runes/generate-rune-table)
+        s (runes/format-glyphs tbl tokens)]
+    (not (looks-like-internal-map? s))))
+
+;; ============================================================================
 ;; Targeted regression tests (from property-discovered failures)
 ;; ============================================================================
 
@@ -147,3 +180,14 @@
                            :body {:hp 30 :max-hp 30 :strength 2}
                            :status {}})]
       (is (some? (spell/eval-spell world :player [1 1] [:spread]))))))
+
+(deftest add-with-no-args-doesnt-leak-error-map-into-display
+  (testing "Inscribing :add (which needs two numeric args) with no args
+            produces a parser error. The player-facing format-sexp output
+            must not include the internal {:reason ... :error true} map."
+    (let [tbl (runes/generate-rune-table)
+          ;; Same shape as the player's screenshot: a selector then a
+          ;; math rune that consumes nothing.
+          s (runes/format-sexp tbl [:nearest :add])]
+      (is (not (looks-like-internal-map? s))
+          (str "format-sexp leaked internal map: " s)))))
