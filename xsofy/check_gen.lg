@@ -1,0 +1,103 @@
+(ns xsofy.check-gen
+  "xsofy domain generators built on xsofy.check.
+
+   How to add a new generator:
+
+     ;; 1. Wrap a constant
+     (def gen-zero (c/return 0))
+
+     ;; 2. A primitive — number, choice, vector
+     (def gen-hp        (c/gen-int 1 30))
+     (def gen-direction (c/gen-elements [:up :down :left :right]))
+     (def gen-path      (c/gen-vector gen-direction 0 10))
+
+     ;; 3. A struct built from other generators (use gen-let, not bind+fmap)
+     (def gen-creature
+       (c/gen-let [pos gen-pos
+                   hp  gen-hp
+                   ai  gen-ai-state]
+         {:pos pos :body {:hp hp} :ai {:state ai}}))
+
+     ;; 4. Weighted alternatives
+     (def gen-weighted-action
+       (c/gen-frequency [[5 gen-direction]   ; 5/7 of the time
+                         [2 (c/return :wait)]]))
+
+     ;; 5. Exploring at the REPL
+     (c/sample gen-creature)
+     (c/sample gen-creature 3)"
+  (:require [xsofy.check :as c]
+            [xsofy.terrain :as terrain]))
+
+;; --- Position ---
+(def gen-pos
+  (c/gen-tuple (c/gen-int 1 8) (c/gen-int 1 8)))
+
+;; --- Minimal world for spell/world properties ---
+
+(defn minimal-stone-room
+  "Build a 10x10 stone-floor room with stone walls. No entities."
+  []
+  (let [w 10
+        h 10
+        t (terrain/make-terrain w h)]
+    ;; carve a floor inside the perimeter
+    (doseq [y (range 1 (dec h))
+            x (range 1 (dec w))]
+      (terrain/tset! t w x y 1))   ;; 1 = floor-stone
+    {:terrain t
+     :width w
+     :height h
+     :entities {}
+     :turn 0
+     :gold 0
+     :rune-table {}}))
+
+;; --- Player ---
+
+(def gen-status-key
+  (c/gen-elements [:burning :poison :frozen :webbed :confused :slowed :haste]))
+
+(def gen-status-pair
+  ;; one status with a ttl
+  (c/gen-tuple gen-status-key (c/gen-int 1 5)))
+
+(def gen-statuses
+  (c/fmap (fn [pairs]
+            (reduce (fn [m [k ttl]]
+                      (assoc m k {:ttl ttl :max-ttl ttl}))
+                    {} pairs))
+          (c/gen-vector gen-status-pair 0 3)))
+
+(def gen-hp
+  ;; bias toward dangerous low HP — that's where status-tick crashes hide
+  (c/gen-frequency [[3 (c/gen-int 1 3)]
+                    [2 (c/gen-int 4 15)]
+                    [1 (c/gen-int 16 30)]]))
+
+(def gen-player
+  (c/gen-let [pos      gen-pos
+              hp       gen-hp
+              statuses gen-statuses]
+    {:id :player
+     :template :player
+     :pos pos
+     :ticks 0
+     :body {:hp hp :max-hp 30 :strength 2 :armor 0}
+     :status {}
+     :statuses statuses
+     :inventory []}))
+
+(def gen-minimal-world
+  (c/gen-let [player gen-player]
+    (assoc-in (minimal-stone-room) [:entities :player] player)))
+
+;; --- Player actions ---
+
+(def gen-action
+  (c/gen-elements [:up :down :left :right
+                   :up-left :up-right :down-left :down-right
+                   :wait :rest]))
+
+(def gen-action-seq
+  (c/gen-vector gen-action 0 10))

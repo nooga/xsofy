@@ -1,0 +1,59 @@
+(ns xsofy.test.world-prop
+  "Property tests for world-state updates. Scoped to the killer cases that
+   would have caught the burning-player resurrection crash."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.check-gen :as g]
+            [xsofy.world :as w]))
+
+(defn player-well-formed?
+  "Player is either absent OR has all required keys."
+  [world]
+  (let [p (get-in world [:entities :player])]
+    (or (nil? p)
+        (and (some? (:pos p))
+             (some? (:body p))
+             (some? (:id p))
+             (some? (:template p))))))
+
+;; ============================================================================
+;; The killer property — catches the burning-player resurrection bug
+;; ============================================================================
+
+(c/defprop player-shape-survives-single-action
+  [world g/gen-minimal-world
+   action g/gen-action]
+  (player-well-formed? (w/update-world world action)))
+
+(c/defprop actions-never-throw
+  [world g/gen-minimal-world
+   actions g/gen-action-seq]
+  (do (reduce w/update-world world actions) true))
+
+(c/defprop turn-never-goes-backward
+  [world g/gen-minimal-world
+   action g/gen-action]
+  (>= (:turn (w/update-world world action)) (:turn world)))
+
+;; ============================================================================
+;; Targeted regression tests (from property-discovered failures)
+;; ============================================================================
+
+(deftest burning-low-hp-player-with-expiring-status-doesnt-resurrect
+  (testing "Player dies from burning AND has a status about to expire on same tick.
+            The remove-status of the expired one must not resurrect a dead player."
+    (let [world (-> (g/minimal-stone-room)
+                    (assoc-in [:entities :player]
+                      {:id :player :template :player :pos [5 3]
+                       :ticks 0
+                       :body {:hp 2 :max-hp 30 :strength 2 :armor 0}
+                       :status {}
+                       :statuses {:burning {:ttl 2 :max-ttl 2}
+                                  :frozen {:ttl 1 :max-ttl 1}}
+                       :inventory []}))
+          w' (w/update-world world :up)
+          p (get-in w' [:entities :player])]
+      ;; Either the player is gone entirely (correct) or fully intact (also
+      ;; acceptable, e.g. didn't die). What we MUST avoid is a partial shell.
+      (is (or (nil? p)
+              (and (some? (:pos p)) (some? (:body p))))))))

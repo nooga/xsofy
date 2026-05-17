@@ -1,0 +1,149 @@
+(ns xsofy.test.spell-prop
+  "Property tests for the spell DSL. eval-spell must never throw on any
+   sequence of raw tokens, well-formed or not."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.check-gen :as g]
+            [xsofy.runes :as runes]
+            [xsofy.spell :as spell]))
+
+;; --- Layer 1: raw token generators (fuzzing) ---
+
+(def gen-rune-key
+  (c/gen-elements [:self :target :nearest :area :spread
+                   :fire :ice :damage :heal :poison :arc :push :web :conjure
+                   :friend :repeat :wait :take :give
+                   :mind :body :essence :life :form
+                   :apply :mul :add]))
+
+(def gen-numeral (c/gen-int 1 5))
+
+(def gen-raw-token
+  (c/gen-frequency [[10 gen-rune-key]
+                    [3  gen-numeral]]))
+
+(def gen-raw-program
+  (c/gen-vector gen-raw-token 0 6))
+
+;; --- Layer 2: well-formed program fragments ---
+
+(def gen-leaf-rune
+  (c/gen-elements [:self :target :nearest :fire :ice :damage :heal
+                   :push :arc :web :poison :friend :wait]))
+
+(def gen-apply-fragment
+  (c/gen-let [r gen-leaf-rune
+              n gen-numeral]
+    [:apply r n]))
+
+(def gen-math-fragment
+  (c/gen-let [op (c/gen-elements [:mul :add])
+              a  gen-numeral
+              b  gen-numeral]
+    [op a b]))
+
+(def gen-well-formed-step
+  (c/gen-frequency [[3 (c/fmap (fn [r] [r]) gen-leaf-rune)]
+                    [2 gen-apply-fragment]
+                    [1 gen-math-fragment]]))
+
+(def gen-well-formed
+  (c/fmap (fn [steps] (vec (apply concat steps)))
+          (c/gen-vector gen-well-formed-step 1 4)))
+
+;; --- Helpers ---
+
+(defn eval-with [ctx tokens]
+  (spell/eval-spell (:world ctx) (:caster ctx) (:target ctx) tokens))
+
+(def gen-spell-context
+  (c/gen-let [cpos g/gen-pos
+              tpos g/gen-pos]
+    {:world  (assoc-in (g/minimal-stone-room)
+                       [:entities :player]
+                       {:id :player :template :player :pos cpos
+                        :body {:hp 30 :max-hp 30 :strength 2}
+                        :status {}})
+     :caster :player
+     :target tpos}))
+
+;; ============================================================================
+;; Core properties: parse and eval must never throw on any input.
+;; ============================================================================
+
+(c/defprop parse-never-throws
+  [tokens gen-raw-program]
+  (do (runes/parse-runes tokens) true))
+
+(c/defprop eval-never-throws-on-raw-tokens
+  [ctx gen-spell-context
+   tokens gen-raw-program]
+  (do (eval-with ctx tokens) true))
+
+(c/defprop eval-never-throws-on-well-formed
+  [ctx gen-spell-context
+   tokens gen-well-formed]
+  (do (eval-with ctx tokens) true))
+
+;; ============================================================================
+;; Structural invariants on eval result
+;; ============================================================================
+
+(c/defprop eval-returns-well-formed-result
+  [ctx gen-spell-context
+   tokens gen-raw-program]
+  (let [r (eval-with ctx tokens)]
+    (and (contains? r :world)
+         (contains? r :vfx)
+         (map? (:world r))
+         (vector? (:vfx r)))))
+
+(c/defprop bad-input-becomes-error-not-throw
+  [ctx gen-spell-context
+   tokens gen-raw-program]
+  (let [r (eval-with ctx tokens)
+        e (:error r)]
+    (or (nil? e)
+        (and (map? e)
+             (contains? e :rune)
+             (contains? e :reason)))))
+
+;; ============================================================================
+;; Parser structural properties
+;; ============================================================================
+
+(c/defprop parse-result-is-seqable
+  [tokens gen-raw-program]
+  (let [r (runes/parse-runes tokens)]
+    (or (vector? r) (seq? r) (nil? r))))
+
+(c/defprop apply-attaches-arg-to-leaf
+  [r gen-leaf-rune
+   n gen-numeral]
+  (let [steps (runes/parse-runes [:apply r n])]
+    (and (= 1 (count steps))
+         (= [r n] (first steps)))))
+
+;; ============================================================================
+;; Targeted regression tests (from property-discovered failures)
+;; ============================================================================
+
+(deftest spread-on-world-without-targets-doesnt-throw
+  (testing "[:spread :self :self :self] in a player-only world should not throw"
+    ;; This is the minimal counterexample QuickCheck found.
+    (let [world (assoc-in (g/minimal-stone-room)
+                          [:entities :player]
+                          {:id :player :template :player :pos [1 1]
+                           :body {:hp 30 :max-hp 30 :strength 2}
+                           :status {}})]
+      (is (some? (spell/eval-spell world :player [1 1]
+                                   [:spread :self :self :self]))))))
+
+(deftest bare-spread-on-empty-world-doesnt-throw
+  (testing "Bare :spread (default n=2) in a player-only world should not throw"
+    (let [world (assoc-in (g/minimal-stone-room)
+                          [:entities :player]
+                          {:id :player :template :player :pos [1 1]
+                           :body {:hp 30 :max-hp 30 :strength 2}
+                           :status {}})]
+      (is (some? (spell/eval-spell world :player [1 1] [:spread]))))))

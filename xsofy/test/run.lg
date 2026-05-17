@@ -1,0 +1,7 @@
+(ns xsofy.test.run
+  (:require [test :refer [run-tests]]
+            [xsofy.test.check-test]
+            [xsofy.test.spell-prop]
+            [xsofy.test.world-prop]))
+
+(run-tests)
