@@ -46,6 +46,11 @@
         fire-ttl (or (:fire-ttl world) {})
         new-fires (atom [])
         new-ttl (atom {})
+        ;; Track whether terrain actually mutated. Used to gate :lights
+        ;; cache invalidation — collect-terrain-lights is O(w*h) and was
+        ;; previously rerun every turn even when no fire ignited or
+        ;; burned out, which is the common case once a floor is settled.
+        terrain-changed (atom false)
         w-ctx (det/with-context world [:fire :step])
         ;; process each fire cell, threading world through spread rolls
         w-after-rolls
@@ -58,6 +63,7 @@
                   (do
                     ;; burn out → ash
                     (terrain/tset! terrain width x y ash-tile)
+                    (reset! terrain-changed true)
                     w)
                   (do
                     ;; keep burning
@@ -87,6 +93,7 @@
                         (if (not= t fire-tile)
                           (do (terrain/tset! (:terrain w) (:width w) x y fire-tile)
                               (swap! new-ttl assoc [x y] fire-default-ttl)
+                              (reset! terrain-changed true)
                               w)
                           w)))
                     w-after-rolls @new-fires)]
@@ -106,8 +113,14 @@
                                         w)))
                                   w targets)))
                       w @new-ttl)]
-        ;; update fire ttl, recompute lights since fire changed
-        (assoc w :fire-ttl @new-ttl :lights nil)))))
+        ;; update fire ttl. Invalidate :lights cache only when terrain
+        ;; actually mutated (a fire ignited or burned out to ash) — those
+        ;; are the only state changes that affect which tiles emit light.
+        ;; Skipping the invalidation on settled turns avoids an O(w*h)
+        ;; terrain scan in collect-terrain-lights on the next update-fov.
+        (if @terrain-changed
+          (assoc w :fire-ttl @new-ttl :lights nil)
+          (assoc w :fire-ttl @new-ttl))))))
 
 ;; --- Web System ---
 ;; Webs are tile 19. Creatures stepping on them get :webbed status.
