@@ -1,0 +1,712 @@
+(ns xsofy.test.hash-test
+  "Tests for xsofy.hash — xxh3-64, salt encoding, macro folding."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.hash :as h]))
+
+;; ============================================================================
+;; u64 helpers
+;; ============================================================================
+
+(deftest u64+-basic
+  (testing "u64+ adds within the safe range"
+    (is (= 5 (h/u64+ 2 3)))
+    (is (= 0 (h/u64+ 0 0)))
+    (is (= -1 (h/u64+ -1 0)))))
+
+(deftest u64+-wraps-modulo-2-to-64
+  (testing "u64+ wraps modular int64 (relies on let-go's unchecked-add)"
+    ;; Long/MAX_VALUE + 1 wraps to Long/MIN_VALUE (the bit pattern
+    ;; (unchecked-long 0x8000000000000000)), which is the correct mod-2^64 result.
+    (is (= -9223372036854775808 (h/u64+ 9223372036854775807 1)))
+    ;; Long/MIN_VALUE + Long/MIN_VALUE wraps to 0 (2^64 mod 2^64).
+    (is (= 0 (h/u64+ -9223372036854775808 -9223372036854775808)))
+    ;; Long/MIN_VALUE + -1 wraps to Long/MAX_VALUE.
+    (is (= 9223372036854775807 (h/u64+ -9223372036854775808 -1)))))
+
+(deftest u64-shr-basic
+  (testing "u64-shr performs logical right shift on small values"
+    (is (= 1 (h/u64-shr 8 3)))
+    (is (= 0 (h/u64-shr 7 3)))
+    (is (= 8 (h/u64-shr 16 1)))
+    (is (= 42 (h/u64-shr 42 0)))))
+
+(deftest u64-shr-zero-fills
+  (testing "u64-shr zero-fills high bits (unlike arithmetic shift)"
+    ;; -1 is (unchecked-long 0xFFFFFFFFFFFFFFFF); logical >> 1 = 0x7FFFFFFFFFFFFFFF.
+    ;; Arithmetic shift would sign-extend back to -1.
+    (is (= 0x7FFFFFFFFFFFFFFF (h/u64-shr -1 1)))
+    ;; -1 >> 63 logically leaves a single low bit set.
+    (is (= 1 (h/u64-shr -1 63)))))
+
+(deftest u64-shl-basic
+  (testing "u64-shl performs modular left shift on small values"
+    (is (= 8 (h/u64-shl 1 3)))
+    ;; Shift 1 into the high bit: signed result is Long/MIN_VALUE
+    ;; (bit pattern (unchecked-long 0x8000000000000000)).
+    (is (= -9223372036854775808 (h/u64-shl 1 63)))
+    ;; n=0 is the identity.
+    (is (= 42 (h/u64-shl 42 0)))))
+
+(deftest u64-shl-wraps-at-2-to-64
+  (testing "u64-shl wraps mod 2^64: bits shifted past the top fall off"
+    ;; Shifting any 64-bit value left by 64 wraps to 0.
+    (is (= 0 (h/u64-shl 1 64)))
+    ;; 3 = 0b11; << 63 keeps only the high bit (the low bit falls off the top).
+    (is (= -9223372036854775808 (h/u64-shl 3 63)))))
+
+(deftest u64-rotl-basic
+  (testing "u64-rotl rotates bits left, wrapping around"
+    (is (= 2 (h/u64-rotl 1 1)))
+    (is (= 4294967296 (h/u64-rotl 1 32)))
+    ;; Rotating 1 left by 63 places the bit at position 63 (the sign bit).
+    (is (= -9223372036854775808 (h/u64-rotl 1 63)))
+    ;; Rotating Long/MIN_VALUE (only high bit set) left by 1 wraps it to bit 0.
+    (is (= 1 (h/u64-rotl -9223372036854775808 1)))))
+
+(deftest u64-rotl-identity-at-0
+  (testing "u64-rotl by 0 is the identity"
+    (is (= 42 (h/u64-rotl 42 0)))))
+
+(deftest u64-rotl-identity-at-64
+  (testing "u64-rotl by 64 is a full cycle and equals the identity"
+    (is (= 42 (h/u64-rotl 42 64)))))
+
+(deftest u64*-basic
+  (testing "u64* multiplies within the safe range"
+    (is (= 6 (h/u64* 2 3)))
+    (is (= 0 (h/u64* 0 12345)))
+    (is (= 12345 (h/u64* 12345 1)))))
+
+(deftest u64*-wraps-at-2-to-64
+  (testing "u64* wraps modular int64 (relies on let-go's unchecked-multiply)"
+    ;; Long/MAX_VALUE * 2 = 2^64 - 2, which wraps to -2 in signed int64.
+    (is (= -2 (h/u64* 9223372036854775807 2)))
+    ;; Long/MIN_VALUE * 2 = 2^64, wraps to 0.
+    (is (= 0 (h/u64* -9223372036854775808 2)))))
+
+(deftest u64*-prime-sanity
+  (testing "u64* round-trips the xxh3 PRIME64_1 constant (negative int64 literal)"
+    ;; PRIME64_1 = (unchecked-long 0x9E3779B185EBCA87), which as signed int64 is -7046029288634856825.
+    ;; This assertion confirms let-go's reader parses the hex literal to the
+    ;; correct two's-complement int64, independent of any multiply.
+    (is (= -7046029288634856825 (unchecked-long 0x9E3779B185EBCA87)))
+    ;; PRIME64_1 * PRIME64_4 mod 2^64 — exact value cross-checked with Python.
+    (is (= (unchecked-long 0xDEF35B010F796CA9) (h/u64* (unchecked-long 0x9E3779B185EBCA87) (unchecked-long 0xC2B2AE3D27D4EB4F))))))
+
+(deftest u64*-128-basic
+  (testing "Multiplication that fits in 64 bits has high = 0"
+    ;; 12345 * 6789 = 83810205, fits comfortably in int64, so hi = 0.
+    (let [r (h/u64*-128 12345 6789)
+          hi (clojure.core/nth r 0)
+          lo (clojure.core/nth r 1)]
+      (is (= 0 hi))
+      (is (= (* 12345 6789) lo)))))
+
+(deftest u64*-128-exact-overflow
+  (testing "2^32 * 2^32 = 2^64 — high = 1, low = 0"
+    ;; Boundary case: the product is exactly 2^64, so the low 64 bits are 0
+    ;; and the high 64 bits carry a single 1. Confirms the high half is
+    ;; computed independently and not just a fallout of low-64 wrap.
+    (let [r (h/u64*-128 0x100000000 0x100000000)
+          hi (clojure.core/nth r 0)
+          lo (clojure.core/nth r 1)]
+      (is (= 1 hi))
+      (is (= 0 lo)))))
+
+(deftest u64*-128-prime-product
+  (testing "PRIME64_1 * PRIME64_2 — verified against Python"
+    ;; Reference values cross-checked with Python's arbitrary-precision int:
+    ;;   p1=(unchecked-long 0x9E3779B185EBCA87), p2=(unchecked-long 0xC2B2AE3D27D4EB4F)
+    ;;   full = p1 * p2
+    ;;   hi = full >> 64 = 0x7854787AA57880A8 (signed int64: 8670687650752528552)
+    ;;   lo = full & ((1<<64)-1) = (unchecked-long 0xDEF35B010F796CA9) (signed int64: -2381459717836149591)
+    ;; The lo value matches u64*-prime-sanity above (which only checked the
+    ;; low half via unchecked-multiply), and confirms u64*-128 produces both
+    ;; halves of a real xxh3-style mul-fold input.
+    (let [r (h/u64*-128 (unchecked-long 0x9E3779B185EBCA87) (unchecked-long 0xC2B2AE3D27D4EB4F))
+          hi (clojure.core/nth r 0)
+          lo (clojure.core/nth r 1)]
+      (is (= 0x7854787AA57880A8 hi))
+      (is (= (unchecked-long 0xDEF35B010F796CA9) lo)))))
+
+(deftest u64*-128-identities
+  (testing "multiply by 1 returns [0 a]"
+    (let [r (h/u64*-128 (unchecked-long 0x9E3779B185EBCA87) 1)]
+      (is (= 0 (clojure.core/nth r 0)))
+      (is (= (unchecked-long 0x9E3779B185EBCA87) (clojure.core/nth r 1)))))
+  (testing "multiply by 0 returns [0 0]"
+    (is (= [0 0] (h/u64*-128 (unchecked-long 0x9E3779B185EBCA87) 0)))))
+
+(deftest u64*-128-all-ones-squared
+  (testing "all-ones squared: (2^64 - 1)^2 = 2^128 - 2^65 + 1; hi=-2 lo=1"
+    (let [r (h/u64*-128 -1 -1)]
+      (is (= -2 (clojure.core/nth r 0)))
+      (is (= 1  (clojure.core/nth r 1))))))
+
+(deftest mul-fold-basic
+  (testing "mul-fold XORs the two halves of a 128-bit product"
+    ;; 2 * 3 = 6, so the 128-bit product is [hi=0 lo=6]; folding XORs the
+    ;; halves to 0 XOR 6 = 6. Small-input sanity that the fold doesn't
+    ;; mask, shift, or otherwise mangle a product that fits in 64 bits.
+    (is (= 6 (h/mul-fold 2 3)))))
+
+(deftest mul-fold-with-overflow
+  (testing "mul-fold of 2^32 * 2^32 = 2^64 → [hi=1 lo=0] → 1 XOR 0 = 1"
+    ;; Boundary case mirrored from u64*-128-exact-overflow. Confirms the
+    ;; fold consumes both halves: a buggy impl that returned only lo would
+    ;; give 0 here, and one that returned only hi would also give 1 — so
+    ;; this pairs with mul-fold-basic to pin down the XOR.
+    (is (= 1 (h/mul-fold 0x100000000 0x100000000)))))
+
+(deftest mul-fold-prime-product
+  (testing "mul-fold of PRIME64_1 * PRIME64_2 = hi XOR lo (Python-verified)"
+    ;; Reference computed in Python with arbitrary-precision int:
+    ;;   p1=(unchecked-long 0x9E3779B185EBCA87), p2=(unchecked-long 0xC2B2AE3D27D4EB4F)
+    ;;   r = p1 * p2
+    ;;   hi = r >> 64                  = 0x7854787AA57880A8
+    ;;   lo = r & ((1<<64)-1)          = (unchecked-long 0xDEF35B010F796CA9)
+    ;;   hi XOR lo                      = (unchecked-long 0xA6A7237BAA01EC01)
+    ;; This exercises the full mul-fold on a real xxh3-style mixer input.
+    (is (= (unchecked-long 0xA6A7237BAA01EC01)
+           (h/mul-fold (unchecked-long 0x9E3779B185EBCA87) (unchecked-long 0xC2B2AE3D27D4EB4F))))))
+
+(deftest read-u64-le-basic
+  (testing "Read 8 little-endian bytes as u64"
+    ;; [0x01 0 0 0 0 0 0 0] little-endian = 1 (low byte first).
+    (is (= 1 (h/read-u64-le [1 0 0 0 0 0 0 0] 0)))
+    ;; [0 0 0 0 0 0 0 1] little-endian = 2^56 = 0x0100000000000000.
+    ;; Confirms the topmost byte lands at shift 56, not at shift 0.
+    (is (= 0x0100000000000000 (h/read-u64-le [0 0 0 0 0 0 0 1] 0)))))
+
+(deftest read-u64-le-with-offset
+  (testing "Reads at a non-zero offset"
+    ;; The u64 value 1 starts at index 2 of this buffer (the leading zeros
+    ;; before the offset must be ignored, not folded in).
+    (is (= 1 (h/read-u64-le [0 0 1 0 0 0 0 0 0 0] 2)))))
+
+(deftest read-u64-le-high-bit
+  (testing "Reads (unchecked-long 0xFFFFFFFFFFFFFFFF) (= -1 as signed int64)"
+    ;; All-ones across all 8 bytes assembles the sign bit. A buggy impl that
+    ;; uses sign-extending shift or that drops the top byte would not produce
+    ;; -1 here. This pins down that the shift family is the u64-shl variant.
+    (is (= -1 (h/read-u64-le [0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF] 0)))))
+
+(deftest read-u32-le-basic
+  (testing "Read 4 little-endian bytes as u32 (stored in u64 cell)"
+    (is (= 1 (h/read-u32-le [1 0 0 0] 0)))
+    ;; All-ones across 4 bytes = 0xFFFFFFFF. Stored in a u64 cell this is
+    ;; positive (2^32 - 1), not -1 — confirms we only assemble 4 bytes,
+    ;; not 8, and that the high 32 bits stay zero.
+    (is (= 0xFFFFFFFF (h/read-u32-le [0xFF 0xFF 0xFF 0xFF] 0)))))
+
+(deftest u64-xor-basic
+  (testing "u64-xor is bit-parallel XOR on int64 cells"
+    ;; XOR with self collapses to 0.
+    (is (= 0 (h/u64-xor 5 5)))
+    ;; 0b101 XOR 0b010 = 0b111.
+    (is (= 7 (h/u64-xor 5 2)))
+    ;; XOR with 0 is the identity.
+    (is (= 5 (h/u64-xor 5 0)))
+    ;; High-bit case: all-1s XOR 0 = all-1s.
+    (is (= -1 (h/u64-xor -1 0)))
+    ;; High-bit case: all-1s XOR itself = 0.
+    (is (= 0 (h/u64-xor -1 -1)))
+    ;; Alternating-bit pattern proves XOR operates on all 64 bits.
+    ;; 0x5555555555555555 XOR (unchecked-long 0xAAAAAAAAAAAAAAAA) = (unchecked-long 0xFFFFFFFFFFFFFFFF) = -1 in int64.
+    ;; A buggy impl that truncates to 32 bits would produce 0xFFFFFFFF = 4294967295.
+    (is (= -1 (h/u64-xor 0x5555555555555555 (unchecked-long 0xAAAAAAAAAAAAAAAA))))))
+
+;; ============================================================================
+;; u64 property tests
+;; ============================================================================
+;;
+;; These complement the fixed-case deftests above by exploring random input
+;; space for compositional properties. Together they catch a class of bugs
+;; (asymmetry, off-by-one shifts, wrong rotation wrap math) that any single
+;; fixed pair would miss.
+;;
+;; Range note: gen-small-int draws from a narrow symmetric span. c/gen-int's
+;; rand-in computes (inc (- hi lo)) and (+ lo (mod n span)) where n < 2^31,
+;; so wide ranges both overflow on (inc ...) and only produce values within
+;; 2^31 of lo. A small symmetric span keeps the arithmetic safe and ensures
+;; samples cover both signs. The extreme-edge bit patterns (Long/MIN_VALUE,
+;; Long/MAX_VALUE, all-ones) are already pinned by the deftests above —
+;; these properties exercise the *compositional* shape of the helpers,
+;; which holds for any int64 cell.
+
+(def gen-small-int (c/gen-int -1000000 1000000))
+
+(c/defprop u64+-is-commutative
+  [a gen-small-int b gen-small-int]
+  (= (h/u64+ a b) (h/u64+ b a)))
+
+(c/defprop u64*-is-commutative
+  [a gen-small-int b gen-small-int]
+  (= (h/u64* a b) (h/u64* b a)))
+
+(c/defprop u64*-128-is-commutative
+  [a gen-small-int b gen-small-int]
+  (= (h/u64*-128 a b) (h/u64*-128 b a)))
+
+(c/defprop u64-shl-then-shr-loses-low-bits
+  [x gen-small-int n (c/gen-int 1 63)]
+  ;; Shifting left by n then right by n loses the high n bits of x.
+  ;; The RHS computes the expected low-(64-n)-bits mask as 2^(64-n) - 1
+  ;; via arithmetic primitives, independent of any right-shift function.
+  ;; unchecked-subtract is needed because (bit-shift-left 1 63) is
+  ;; Long/MIN_VALUE, and the subtraction wraps mod 2^64 to give the mask.
+  (= (h/u64-shr (h/u64-shl x n) n)
+     (bit-and x (unchecked-subtract (bit-shift-left 1 (- 64 n)) 1))))
+
+(c/defprop u64-rotl-by-n-then-64-minus-n-is-identity
+  ;; Rotating left by n then by (64 - n) is one full cycle, so it must equal
+  ;; the original x. Catches any off-by-one in the (- 64 n) wrap math.
+  [x gen-small-int n (c/gen-int 0 64)]
+  (= x (h/u64-rotl (h/u64-rotl x n) (- 64 n))))
+
+;; ============================================================================
+;; xxh3-64 constants
+;; ============================================================================
+
+(deftest xxh3-secret-matches-upstream
+  (testing "xxh3 default secret cells match upstream xxhash.h"
+    ;; Cell 0 = LE u64 of upstream bytes [0..7] = b8 fe 6c 39 23 a4 4b be
+    (is (= (unchecked-long 0xbe4ba423396cfeb8) (h/xxh3-secret-cell 0)))
+    ;; Cell 23 = LE u64 of upstream bytes [184..191] = af d7 fb ca bb 4b 40 7e
+    (is (= 0x7e404bbbcafbd7af (h/xxh3-secret-cell 23)))))
+
+;; ============================================================================
+;; Salt-key encoding (v1)
+;; ============================================================================
+;;
+;; Type-tag prefixes (kw=1, int=2, str=3, vec=4) prevent shape ambiguity:
+;; [:a "b"] and [:a :b] must encode to different bytes. Lengths and element
+;; counts are single bytes (assert < 256 — salt-keys are short by design).
+
+(deftest encode-salt-keyword
+  (testing "Keyword encodes as 0x01 | utf8-len(name) | utf8-of-name"
+    ;; :foo → 0x01, 3, 'f', 'o', 'o' → [1 3 102 111 111]
+    (is (= [1 3 102 111 111] (h/encode-salt :foo)))))
+
+(deftest encode-salt-int
+  (testing "Int encodes as 0x02 | 8 big-endian bytes"
+    ;; 1 → [0x02 0 0 0 0 0 0 0 1]
+    (is (= [2 0 0 0 0 0 0 0 1] (h/encode-salt 1)))
+    ;; 256 → [0x02 0 0 0 0 0 0 1 0] proves the boundary between the low
+    ;; and second-lowest bytes is laid out big-endian, not little-endian.
+    (is (= [2 0 0 0 0 0 0 1 0] (h/encode-salt 256)))
+    ;; -1 = (unchecked-long 0xFFFFFFFFFFFFFFFF) big-endian → [0xFF × 8]
+    (is (= [2 255 255 255 255 255 255 255 255] (h/encode-salt -1)))
+    ;; Long/MIN_VALUE = (unchecked-long 0x8000000000000000) → [128 0 × 7]
+    (is (= [2 128 0 0 0 0 0 0 0] (h/encode-salt -9223372036854775808)))))
+
+(deftest encode-salt-string
+  (testing "String encodes as 0x03 | utf8-len | utf8-bytes"
+    ;; "hi" → [0x03, 2, 'h', 'i'] → [3 2 104 105]
+    (is (= [3 2 104 105] (h/encode-salt "hi")))))
+
+(deftest encode-salt-vector
+  (testing "Vector encodes as 0x04 | element-count | element-bytes..."
+    ;; [:foo 1] → 0x04, 2, [1, 3, 'f', 'o', 'o'], [2, 0, 0, 0, 0, 0, 0, 0, 1]
+    (is (= [4 2  1 3 102 111 111  2 0 0 0 0 0 0 0 1]
+           (h/encode-salt [:foo 1])))))
+
+(deftest encode-salt-distinguishes-shape
+  (testing "[:a \"b\"] and [:a :b] encode to different bytes"
+    ;; This is the whole point of the type-tag prefix: the keyword variant and
+    ;; the string variant must produce different canonical bytes, or the hash
+    ;; would collide on accidentally-equivalent shapes.
+    (is (not= (h/encode-salt [:a "b"])
+              (h/encode-salt [:a :b])))))
+
+(deftest encode-salt-deterministic
+  (testing "Same input always produces same bytes"
+    ;; Repeat calls on the same nested vector must produce identical output —
+    ;; no per-call randomness, no map ordering quirks, no hidden state.
+    (is (= (h/encode-salt [:combat :hit :rat-3 :player])
+           (h/encode-salt [:combat :hit :rat-3 :player])))))
+
+;; ============================================================================
+;; xxh3-64 published vectors
+;; ============================================================================
+;;
+;; Reference values computed with Python's xxhash 3.7.0 (which wraps the
+;; official Cyan4973/xxHash C library), seed=0 unless noted. The fixture
+;; covers every short- and medium-input branch:
+;;
+;;   len  0     : empty-input avalanche of (seed XOR secret-mix)
+;;   len  1-3  : 1to3 path, 32-bit combined byte + LE32 secret diff
+;;   len  4-8  : 4to8 path, rrmxmx finalizer
+;;   len  9-16 : 9to16 path, mul-fold + XXH3_avalanche
+;;   len 17-32 : 17to128 path, 2 mix16B rounds
+;;   len 33-64 : 17to128 path, 4 mix16B rounds
+;;   len 65-96 : 17to128 path, 6 mix16B rounds
+;;   len 97-128: 17to128 path, 8 mix16B rounds
+;;
+;; Each row: [byte-vector seed expected-u64]. Negative literals are the
+;; signed-int64 representation of the upper-half u64.
+
+(defn- str->bytes
+  "Encode a let-go string as a vector of int byte values, ASCII-only, for the
+   purposes of building reference vectors. ASCII-only because the test inputs
+   here are all printable ASCII; we deliberately don't go through utf8-bytes
+   so the encoder under test never feeds itself."
+  [s]
+  (mapv int s))
+
+;; Expected u64 hashes that exceed Long/MAX_VALUE read as BigInt under the
+;; reader-hex-bigint-promote behavior; unchecked-long coerces them to the
+;; equivalent signed-int64 bit pattern so they compare equal to the actual
+;; (int) result of xxh3-64. Wrapped at table-build time so the literal hex
+;; values stay readable.
+(def ^:private xxh3-published-vectors
+  (mapv (fn [row]
+          [(clojure.core/nth row 0)
+           (clojure.core/nth row 1)
+           (unchecked-long (clojure.core/nth row 2))])
+   [;; ---- short input (0-16 bytes) ----
+    [[]                                                  0  0x2d06800538d394c2]
+    [(str->bytes "a")                                    0  (unchecked-long 0xe6c632b61e964e1f)]
+    [(str->bytes "ab")                                   0  (unchecked-long 0xa873719c24d5735c)]
+    [(str->bytes "abc")                                  0  0x78af5f94892f3950]
+    [(str->bytes "abcd")                                 0  0x6497a96f53a89890]
+    [(str->bytes "abcde")                                0  0x55c65158ee9e652d]
+    [(str->bytes "abcdefgh")                             0  0x6f45a76842a96483]
+    [(str->bytes "abcdefghi")                            0  (unchecked-long 0xe0dde4fc174590a0)]
+    [(str->bytes "abcdefghijklmno")                      0  (unchecked-long 0xa8edaf6dc2724d85)]
+    [(str->bytes "abcdefghijklmnop")                     0  0x3d3ccac9af14d8a8]
+    ;; ---- medium input (17-128) ----
+    [(str->bytes "abcdefghijklmnopq")                    0  (unchecked-long 0xca7f3571df47cacf)]    ; 17
+    [(vec (repeat 32 (int \a)))                          0  (unchecked-long 0xdbb6341d93939622)]    ; 32
+    [(vec (repeat 33 (int \a)))                          0  0x2bf5e46a41871e0d]    ; 33  (> 32 branch)
+    [(vec (repeat 64 (int \a)))                          0  0x2dddcef07d26ee8c]    ; 64
+    [(vec (repeat 65 (int \a)))                          0  (unchecked-long 0xfcf352f3db82a064)]    ; 65  (> 64 branch)
+    [(vec (repeat 96 (int \a)))                          0  (unchecked-long 0x8ef986534f394e7f)]    ; 96
+    [(vec (repeat 97 (int \a)))                          0  (unchecked-long 0xfb22fdde75565533)]    ; 97  (> 96 branch)
+    [(vec (repeat 128 (int \a)))                         0  0x7a22200aadc3d36c]    ; 128
+    ;; ---- seeded variants (every path with a non-zero seed) ----
+    [[]                                                  42 (unchecked-long 0xb029411ff43d84d2)]
+    [(str->bytes "a")                                    42 0x4c437dd47f0716f4]
+    [(str->bytes "abc")                                  42 (unchecked-long 0xd8438def21bbdcc3)]
+    [(str->bytes "abcdefgh")                             42 0x5b58c256927cdea8]
+    [(str->bytes "abcdefghijklmnop")                     42 0x13d397cb29911732]
+    [(vec (repeat 21 (int \a)))                          42 0x50c511c2f277526f]
+    [(vec (repeat 128 (int \a)))                         42 (unchecked-long 0xd9081aac2e8df21c)]]))
+
+(deftest xxh3-64-matches-published-vectors
+  (testing "Pure-Lisp xxh3-64 matches the official outputs from Python's xxhash"
+    (doseq [v xxh3-published-vectors]
+      (let [input    (clojure.core/nth v 0)
+            seed     (clojure.core/nth v 1)
+            expected (clojure.core/nth v 2)
+            actual   (h/xxh3-64 input seed)]
+        (is (= expected actual)
+            (str "input-len=" (count input)
+                 " seed="     seed
+                 " expected=" expected
+                 " actual="   actual))))))
+
+(deftest xxh3-64-default-seed-is-zero
+  (testing "Single-arg arity defaults seed=0"
+    (is (= 0x2d06800538d394c2 (h/xxh3-64 [])))
+    (is (= 0x78af5f94892f3950 (h/xxh3-64 (str->bytes "abc"))))))
+
+;; ============================================================================
+;; xxh3-64 long-input published vectors (129+ bytes)
+;; ============================================================================
+;;
+;; PR1b adds the 129-240 midsize mixer and the >=241 stripe accumulator. The
+;; reference values come from Python's xxhash 3.7.0 (which wraps the official
+;; C library), seed=0 for the unseeded rows and seed=42 for the seeded ones.
+;; Sizes are chosen to exercise each branch:
+;;
+;;   129 — boundary into the 129-240 path; nbRounds=8 (no extended loop)
+;;   160 — 129-240 path with 2 extended-loop rounds (nbRounds=10)
+;;   240 — boundary at the top of the 129-240 path; nbRounds=15 (max)
+;;   241 — boundary into the stripe-accumulator path; nb_blocks=0, partial=3
+;;   256 — stripe path, no full blocks; nb_blocks=0, partial=3 stripes
+;;   512 — stripe path, no full blocks; nb_blocks=0, partial=7 stripes
+;;  1024 — stripe path, no full blocks; nb_blocks=0, partial=15 stripes
+;;  1025 — first byte into nb_blocks=1; partial=0 stripes after the scramble
+;;  4096 — three scrambles (nb_blocks=3); exercises the scramble loop
+
+(def ^:private xxh3-published-vectors-long
+  [[(vec (repeat  129 (int \a))) 0  0x1586e7ed07cba75b]
+   [(vec (repeat  160 (int \a))) 0  0x74fbed24a55cc08d]
+   [(vec (repeat  240 (int \a))) 0  (unchecked-long 0x993c46d96a01b5c6)]
+   [(vec (repeat  241 (int \a))) 0  (unchecked-long 0xf6cfef5c5aca1930)]
+   [(vec (repeat  256 (int \a))) 0  0x3fdb4ff1846c90f3]
+   [(vec (repeat  512 (int \a))) 0  0x4659a548a9cc8db1]
+   [(vec (repeat 1024 (int \a))) 0  0x4a5d6b09a9587a1c]
+   [(vec (repeat 1025 (int \a))) 0  (unchecked-long 0xd46a63acfb8da1ea)]
+   [(vec (repeat 4096 (int \a))) 0  (unchecked-long 0x88a30670e919701e)]
+   ;; Seeded variants — the >=241 path constructs a customSecret from the seed.
+   [(vec (repeat  160 (int \a))) 42 (unchecked-long 0xcaef7a6a2e008e5d)]
+   [(vec (repeat  240 (int \a))) 42 (unchecked-long 0xe70703a4f2c5dc56)]
+   [(vec (repeat  256 (int \a))) 42 0x17dcff7ff17e01cf]
+   [(vec (repeat 1024 (int \a))) 42 0x4f582304f1a00fb6]])
+
+(deftest xxh3-64-matches-published-vectors-long
+  (testing "Pure-Lisp xxh3-64 matches the official outputs for inputs >= 129 bytes"
+    (doseq [v xxh3-published-vectors-long]
+      (let [input    (clojure.core/nth v 0)
+            seed     (clojure.core/nth v 1)
+            expected (clojure.core/nth v 2)
+            actual   (h/xxh3-64 input seed)]
+        (is (= expected actual)
+            (str "input-len=" (count input)
+                 " seed="     seed
+                 " expected=" expected
+                 " actual="   actual))))))
+
+;; ============================================================================
+;; hash/combine — the public API for det
+;; ============================================================================
+;;
+;; combine is the single entry point every det/ call passes through. Each test
+;; below pins a different property of the (seed, salt) -> u64 mapping:
+;;
+;;   determinism      — same inputs must always produce the same hash, or
+;;                      replays diverge from live play
+;;   salt sensitivity — different salts must produce different hashes, or
+;;                      every det/ call at the same world tick collides
+;;   seed sensitivity — different seeds must produce different hashes, or
+;;                      different worlds replay identically
+;;   bit-spread       — across 100 distinct salts at one seed, all hashes
+;;                      must be distinct. xxh3-64's published collision rate
+;;                      is far below 100/2^64, so any collision here means
+;;                      the encode-then-hash pipeline has lost entropy (e.g.
+;;                      truncated to a smaller domain) and the dice are
+;;                      effectively biased.
+
+(deftest combine-is-deterministic
+  (testing "Same (seed, salt) → same hash"
+    (is (= (h/combine 42 [:combat :hit :rat-3 :player])
+           (h/combine 42 [:combat :hit :rat-3 :player])))))
+
+(deftest combine-differs-on-salt
+  (testing "Different salts → different hashes"
+    (is (not= (h/combine 42 [:combat :hit])
+              (h/combine 42 [:combat :miss])))))
+
+(deftest combine-differs-on-seed
+  (testing "Different seeds → different hashes"
+    (is (not= (h/combine 1 [:combat :hit])
+              (h/combine 2 [:combat :hit])))))
+
+(c/defprop combine-bit-spread
+  ;; 100 (seed, salt) combinations should produce 100 distinct hashes
+  ;; (collision probability ≈ 100/2^64 ≈ 0).
+  [seed (c/gen-int 1 100000)]
+  (let [salts (mapv (fn [i] [:test i]) (range 100))
+        hashes (map #(h/combine seed %) salts)]
+    (= 100 (count (set hashes)))))
+
+;; ============================================================================
+;; xxh3 streaming API (xxh3-init / xxh3-update / xxh3-digest)
+;; ============================================================================
+;;
+;; PR1b adds a real incremental hashing API matching xxhash.h's
+;; XXH3_64bits_reset_withSeed / XXH3_64bits_update / XXH3_64bits_digest.
+;; The tests pin two contracts:
+;;   1. Streaming a buffer yields the same u64 as the one-shot xxh3-64.
+;;   2. The result is independent of the chunk boundary — feeding the same
+;;      total bytes in any chunk shape gives the same hash.
+
+(deftest xxh3-streaming-matches-one-shot
+  (testing "Streaming xxh3-init/update/digest matches xxh3-64 across input regimes"
+    (doseq [size [0 1 7 16 32 100 128 129 200 240 241 256 257 512 1024 1025 1090 4096]]
+      (let [bytes (vec (repeat size (int \a)))
+            one-shot (h/xxh3-64 bytes 0)
+            streamed (h/xxh3-digest (h/xxh3-update (h/xxh3-init 0) bytes))]
+        (is (= one-shot streamed)
+            (str "size=" size " one-shot=" one-shot " streamed=" streamed))))))
+
+(deftest xxh3-streaming-seeded
+  (testing "Streaming with a non-zero seed matches one-shot xxh3-64 with the same seed"
+    ;; Non-zero seed for the long-input path forces customSecret generation
+    ;; inside xxh3-init; both must produce identical hashes.
+    (doseq [size [128 256 1024 4096]
+            seed [42 0xDEADBEEF]]
+      (let [bytes (vec (repeat size (int \a)))
+            one-shot (h/xxh3-64 bytes seed)
+            streamed (h/xxh3-digest (h/xxh3-update (h/xxh3-init seed) bytes))]
+        (is (= one-shot streamed)
+            (str "size=" size " seed=" seed))))))
+
+(deftest xxh3-streaming-chunk-independence
+  (testing "Chunking the same total bytes any which way yields the same hash"
+    ;; 200 bytes is in the midsize range (one-shot uses the 129-240 path).
+    ;; Each chunking must match the one-shot result regardless of where the
+    ;; chunk boundaries fall.
+    (let [size 200
+          all-a (vec (repeat size (int \a)))
+          one-shot (h/xxh3-64 all-a 0)]
+      (doseq [chunks [[200] [100 100] [50 100 50] [199 1] [1 199]
+                      [64 64 64 8] [1 1 1 197]]]
+        (let [state (reduce (fn [s n] (h/xxh3-update s (vec (repeat n (int \a)))))
+                            (h/xxh3-init 0)
+                            chunks)
+              streamed (h/xxh3-digest state)]
+          (is (= one-shot streamed)
+              (str "chunks=" chunks)))))))
+
+(deftest xxh3-streaming-chunk-independence-long
+  (testing "Chunk-independence holds across the long-input stripe accumulator"
+    ;; 1500 bytes forces the stripe accumulator + a block scramble. Splitting
+    ;; the chunks at different boundaries (1 byte, mid-stripe, mid-block,
+    ;; etc.) must all converge to the same hash.
+    (let [size 1500
+          all-a (vec (repeat size (int \a)))
+          one-shot (h/xxh3-64 all-a 0)]
+      (doseq [chunks [[1500]
+                      [256 256 988]
+                      [1 1499]
+                      [500 500 500]
+                      [1024 476]
+                      [1023 477]
+                      [1025 475]]]
+        (let [state (reduce (fn [s n] (h/xxh3-update s (vec (repeat n (int \a)))))
+                            (h/xxh3-init 0)
+                            chunks)
+              streamed (h/xxh3-digest state)]
+          (is (= one-shot streamed)
+              (str "chunks=" chunks)))))))
+
+(deftest xxh3-streaming-tiny-chunks
+  (testing "Streaming 1500 single-byte updates matches the one-shot"
+    ;; The pathological case: every byte is its own update. This exercises
+    ;; the buffer-fill-and-consume path repeatedly.
+    (let [one-shot (h/xxh3-64 (vec (repeat 1500 (int \a))) 0)
+          streamed (h/xxh3-digest
+                    (reduce (fn [s _] (h/xxh3-update s [(int \a)]))
+                            (h/xxh3-init 0)
+                            (range 1500)))]
+      (is (= one-shot streamed)))))
+
+(deftest xxh3-streaming-empty-update-is-noop
+  (testing "Updating with empty bytes does not change the state's eventual digest"
+    (let [s1 (h/xxh3-update (h/xxh3-init 0) [1 2 3])
+          s2 (h/xxh3-update s1 [])
+          s3 (h/xxh3-update s2 [])]
+      (is (= (h/xxh3-digest s1) (h/xxh3-digest s2)))
+      (is (= (h/xxh3-digest s2) (h/xxh3-digest s3))))))
+
+(deftest xxh3-streaming-digest-is-pure
+  (testing "Calling xxh3-digest twice yields the same hash; state is reusable"
+    (let [s (h/xxh3-update (h/xxh3-init 0) (vec (repeat 500 (int \a))))]
+      (is (= (h/xxh3-digest s) (h/xxh3-digest s)))
+      ;; And we can keep updating after a digest read.
+      (let [s' (h/xxh3-update s [(int \b)])]
+        (is (not= (h/xxh3-digest s) (h/xxh3-digest s')))))))
+
+;; ============================================================================
+;; Streaming reducer (now backed by real incremental hashing)
+;; ============================================================================
+;;
+;; PR1b: from-stream / folder / init-state / digest now compose over the
+;; xxh3-init / xxh3-update / xxh3-digest primitives. External behavior is
+;; unchanged; the tests below continue to pin determinism, order-sensitivity,
+;; and folder/from-stream equivalence.
+
+(deftest from-stream-matches-combine
+  (testing "from-stream produces same hash as combine for a single salt-key element"
+    ;; combine wraps a single salt-key (a vector). from-stream with the same
+    ;; encoder on a stream containing just that salt-key should produce the
+    ;; same bytes, hence the same hash.
+    (let [seed 42
+          salt [:combat :hit :rat-3]
+          via-combine (h/combine seed salt)
+          via-stream  (h/from-stream seed h/encode-salt [salt])]
+      (is (= via-combine via-stream)))))
+
+(deftest from-stream-is-order-sensitive
+  (testing "Different stream orders → different hashes"
+    (let [seed 42
+          a (h/from-stream seed h/encode-salt [:a :b :c])
+          b (h/from-stream seed h/encode-salt [:c :b :a])]
+      (is (not= a b)))))
+
+(deftest from-stream-empty-stream
+  (testing "Empty stream still produces a deterministic hash"
+    ;; Encoding nothing reduces to (xxh3-64 [] seed), which is the empty-input
+    ;; avalanche path. Two empty-stream calls with the same seed must match.
+    (let [h1 (h/from-stream 42 h/encode-salt [])
+          h2 (h/from-stream 42 h/encode-salt [])]
+      (is (= h1 h2)))))
+
+(deftest folder-composes-with-reduce
+  (testing "folder + init-state + digest matches from-stream"
+    (let [seed 42
+          stream [:a :b :c]
+          via-stream (h/from-stream seed h/encode-salt stream)
+          via-reduce (h/digest
+                       (reduce (h/folder h/encode-salt)
+                               (h/init-state seed)
+                               stream))]
+      (is (= via-stream via-reduce)))))
+
+(deftest folder-can-be-built-incrementally
+  (testing "Adding atoms one at a time gives the same result as all-at-once"
+    ;; This is what makes folder useful: a caller can thread state through
+    ;; a pipeline (or across event ticks) and still get a hash that matches
+    ;; the all-at-once reduction.
+    (let [seed 42
+          encode h/encode-salt
+          step (h/folder encode)
+          all (reduce step (h/init-state seed) [:a :b :c])
+          s0 (h/init-state seed)
+          s1 (step s0 :a)
+          s2 (step s1 :b)
+          s3 (step s2 :c)]
+      (is (= (h/digest all) (h/digest s3))))))
+
+;; ============================================================================
+;; Macro Layer 1 — constant-fold salt-key prefix
+;; ============================================================================
+;;
+;; with-folded-salt is a compile-time-folding wrapper around (combine seed
+;; salt-key). When the salt-key is a vector literal with a literal prefix
+;; (keywords, ints, strings), the macro encodes that prefix at expansion time
+;; and emits code that only encodes the variable tail at runtime, prepending
+;; the precomputed bytes before hashing.
+;;
+;; The tests below pin the contract that no matter the input shape — fully
+;; literal, partial literal, no literal prefix, or non-vector — the macro's
+;; output is byte-for-byte equivalent to (combine seed salt-key). Performance
+;; (i.e. that the prefix is actually folded) is verified by a manual
+;; macroexpand spot-check called out in the plan, not via these tests.
+
+(deftest with-folded-salt-equals-combine-fully-literal
+  (testing "Fully literal salt-key: macro output equals combine"
+    (let [via-macro (h/with-folded-salt 42 [:combat :hit])
+          via-combine (h/combine 42 [:combat :hit])]
+      (is (= via-macro via-combine)))))
+
+(deftest with-folded-salt-equals-combine-with-variables
+  (testing "Partial-literal salt-key: macro output equals combine"
+    (let [attacker :rat-3
+          target :player
+          via-macro (h/with-folded-salt 42 [:combat :hit attacker target])
+          via-combine (h/combine 42 [:combat :hit attacker target])]
+      (is (= via-macro via-combine)))))
+
+(deftest with-folded-salt-equals-combine-no-literal-prefix
+  (testing "Vector with no literal prefix (variable at position 0): falls back to combine"
+    (let [first-elem :foo
+          via-macro (h/with-folded-salt 42 [first-elem :bar])
+          via-combine (h/combine 42 [first-elem :bar])]
+      (is (= via-macro via-combine)))))
+
+(deftest with-folded-salt-non-vector-salt-key
+  (testing "Symbol referring to a runtime-built vector: falls back to combine"
+    (let [my-salt [:dynamic :keys :here]
+          via-macro (h/with-folded-salt 42 my-salt)
+          via-combine (h/combine 42 [:dynamic :keys :here])]
+      (is (= via-macro via-combine)))))
+
+(c/defprop with-folded-salt-is-equivalent-to-combine
+  [seed (c/gen-int 1 1000000) id (c/gen-int 1 100)]
+  (= (h/with-folded-salt seed [:combat :hit id])
+     (h/combine seed [:combat :hit id])))

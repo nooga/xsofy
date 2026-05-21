@@ -4,6 +4,7 @@
             [xsofy.test.invariant-test]
             [xsofy.test.spell-prop]
             [xsofy.test.world-prop]
-            [xsofy.test.combat-prop]))
+            [xsofy.test.combat-prop]
+            [xsofy.test.hash-test]))
 
 (run-tests)
