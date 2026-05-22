@@ -1,0 +1,29 @@
+(ns xsofy.test.render-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.render :as render]))
+
+(deftest message-log-window-shows-newest-entries-by-default
+  (testing "newest entries are visible when scroll is zero"
+    (let [window (render/message-log-window ["a" "b" "c" "d"] 2 0)]
+      (is (= ["c" "d"] (:entries window)))
+      (is (= 2 (:start window)))
+      (is (= 4 (:end window)))
+      (is (= 2 (:max-scroll window))))))
+
+(deftest message-log-window-scrolls-to-older-entries
+  (testing "positive scroll offsets move the window toward older entries"
+    (let [window (render/message-log-window ["a" "b" "c" "d"] 2 1)]
+      (is (= ["b" "c"] (:entries window)))
+      (is (= 1 (:scroll window)))))
+
+  (testing "scroll offsets are clamped to the oldest page"
+    (let [window (render/message-log-window ["a" "b" "c" "d"] 2 99)]
+      (is (= ["a" "b"] (:entries window)))
+      (is (= 2 (:scroll window))))))
+
+(deftest message-log-window-handles-empty-log
+  (testing "empty logs produce an empty visible window"
+    (let [window (render/message-log-window [] 2 1)]
+      (is (= [] (:entries window)))
+      (is (= 0 (:count window)))
+      (is (= 0 (:max-scroll window))))))

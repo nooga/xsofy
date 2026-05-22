@@ -301,6 +301,27 @@
     (str (:msg entry) " (x" (:count entry) ")")
     (str entry)))
 
+(defn message-visible-lines [term-height]
+  (max 1 (- term-height 3)))
+
+(defn message-log-window [log visible-lines scroll-offset]
+  (let [log (vec (or log []))
+        log-count (count log)
+        visible-lines (max 1 visible-lines)
+        max-scroll (max 0 (- log-count visible-lines))
+        scroll (min (max 0 (or scroll-offset 0)) max-scroll)
+        end-idx (- log-count scroll)
+        start-idx (max 0 (- end-idx visible-lines))]
+    {:entries (subvec log start-idx end-idx)
+     :start start-idx
+     :end end-idx
+     :count log-count
+     :scroll scroll
+     :max-scroll max-scroll}))
+
+(defn max-message-scroll [world visible-lines]
+  (:max-scroll (message-log-window (:log world) visible-lines (:message-scroll world))))
+
 (defn render-log [world r]
   (ui/clear-rect r)
   (let [log (vec (or (:log world) []))
@@ -618,22 +639,28 @@
   (let [[tw th] (term/size)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Message Log" [180 170 140] ui/bg)
-        log (:log world)
-        visible-lines (- (:h inner) 1)
-        recent (take-last visible-lines log)
-        cnt (count recent)]
+        visible-lines (message-visible-lines th)
+        window (message-log-window (:log world) visible-lines (:message-scroll world))
+        entries (:entries window)
+        cnt (count entries)]
     (ui/clear-rect inner)
-    (dotimes [i cnt]
-      (let [msg (format-log-entry (nth recent i))
-            age (- cnt i 1)
-            brightness (max 60 (- 220 (* age 6)))]
-        (ui/write-line inner i (str " " msg)
-                       [brightness
-                        (max 60 (- brightness 20))
-                        (max 40 (- brightness 80))]
-                       ui/bg)))
+    (if (= cnt 0)
+      (ui/write-line inner 0 " No messages yet." [90 90 90] ui/bg)
+      (dotimes [i cnt]
+        (let [msg (format-log-entry (nth entries i))
+              age (- cnt i 1)
+              brightness (max 60 (- 220 (* age 6)))]
+          (ui/write-line inner i (str " " msg)
+                         [brightness
+                          (max 60 (- brightness 20))
+                          (max 40 (- brightness 80))]
+                         ui/bg))))
     (ui/write-line inner (dec (:h inner))
-                   " [press any key to close]"
+                   (str " "
+                        (if (> (:count window) 0)
+                          (str (inc (:start window)) "-" (:end window) "/" (:count window))
+                          "0/0")
+                        "  [k/up older  j/down newer  PgUp/PgDn  g/G  Esc]")
                    [80 80 80] ui/bg)
     (term/flush)))
 

@@ -297,7 +297,7 @@
 
 ;; --- Message Log ---
 
-(def max-log 50)
+(def max-log 200)
 
 (defn log-msg [world msg]
   (update world :log (fn [log]

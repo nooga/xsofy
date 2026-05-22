@@ -308,6 +308,50 @@
 
       :else world)))
 
+(defn message-page-size []
+  (let [[_tw th] (term/size)]
+    (max 1 (dec (render/message-visible-lines th)))))
+
+(defn clamp-message-scroll [world scroll]
+  (let [[_tw th] (term/size)
+        visible-lines (render/message-visible-lines th)
+        max-scroll (render/max-message-scroll world visible-lines)]
+    (assoc world :message-scroll (max 0 (min max-scroll scroll)))))
+
+(defn scroll-messages [world delta]
+  (clamp-message-scroll world (+ (or (:message-scroll world) 0) delta)))
+
+(defn close-messages-screen [world]
+  (dissoc world :screen :message-scroll))
+
+(defn messages-input [world k]
+  (let [page (message-page-size)]
+    (cond
+      (or (= k "\u001b") (= k "q") (= k "m") (= k "\r"))
+      (close-messages-screen world)
+
+      (or (= k "k") (= k "\u001b[A"))
+      (scroll-messages world 1)
+
+      (or (= k "j") (= k "\u001b[B") (= k " "))
+      (scroll-messages world -1)
+
+      (or (= k "\u001b[5~") (= k "K"))
+      (scroll-messages world page)
+
+      (or (= k "\u001b[6~") (= k "J"))
+      (scroll-messages world (- page))
+
+      (= k "g")
+      (let [[_tw th] (term/size)
+            visible-lines (render/message-visible-lines th)]
+        (clamp-message-scroll world (render/max-message-scroll world visible-lines)))
+
+      (= k "G")
+      (clamp-message-scroll world 0)
+
+      :else world)))
+
 (defn new-game []
   (let [{:keys [title scheme]} (title/show-title-screen)
         quest (title/generate-quest)
@@ -329,10 +373,13 @@
        (case screen
          :messages
          (do (render/render-messages-screen world)
-             (term/read-key)
-             (let [w (dissoc world :screen)]
-               (render/render-full w)
-               (recur w w (term/size))))
+             (let [k (term/read-key)
+                   w (messages-input world k)]
+               (if (:screen w)
+                 (recur w w prev-size)
+                 (do
+                   (render/render-full w)
+                   (recur w w (term/size))))))
 
          :rune-codex
          (do (render/render-rune-codex world)
