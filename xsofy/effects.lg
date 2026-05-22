@@ -1,6 +1,7 @@
 (ns xsofy.effects
   (:require [xsofy.terrain :as terrain]
-            [xsofy.util :as u]))
+            [xsofy.util :as u]
+            [xsofy.det :as det]))
 
 ;; --- Effects Layer ---
 ;; Two sparse persistent maps on the world:
@@ -25,6 +26,16 @@
         dy (- (rand-int 3) 1)]
     (add-stain world (+ cx dx) (+ cy dy) :blood 1)))
 
+(defn blood-drop-det
+  "Deterministic blood drop. Returns world'."
+  [world cx cy]
+  (let [w (det/with-context world [:fx :blood-drop cx cy])
+        [px w] (det/int-in w 0 3)
+        [py w] (det/int-in w 0 3)
+        dx (- px 1)
+        dy (- py 1)]
+    (add-stain w (+ cx dx) (+ cy dy) :blood 1)))
+
 (defn blood-puddle [world cx cy]
   "Big puddle — center + random neighbors."
   (let [w (add-stain world cx cy :blood 4)]
@@ -33,6 +44,20 @@
                 (add-stain w (+ cx dx) (+ cy dy) :blood (+ 1 (rand-int 3)))
                 w))
             w
+            u/dirs8)))
+
+(defn blood-puddle-det
+  "Deterministic blood puddle. Returns world'."
+  [world cx cy]
+  (let [w0 (add-stain world cx cy :blood 4)
+        w-ctx (det/with-context w0 [:fx :blood-puddle cx cy])]
+    (reduce (fn [w [dx dy]]
+              (let [[r1 w] (det/int-in w 0 3)]
+                (if (< r1 2)
+                  (let [[r2 w] (det/int-in w 0 3)]
+                    (add-stain w (+ cx dx) (+ cy dy) :blood (+ 1 r2)))
+                  w)))
+            w-ctx
             u/dirs8)))
 
 (defn splatter [world cx cy stype intensity radius]
@@ -45,6 +70,24 @@
                   (add-stain w nx ny stype (max 1 (dec intensity)))
                   w)))
             w
+            u/dirs8)))
+
+(defn splatter-det
+  "Deterministic splatter. Returns world'."
+  [world cx cy stype intensity radius]
+  (let [w0 (add-stain world cx cy stype intensity)
+        w-ctx (det/with-context w0 [:fx :splatter stype cx cy])]
+    (reduce (fn [w [dx dy]]
+              (let [nx (+ cx dx) ny (+ cy dy)]
+                (if (<= (+ (* dx dx) (* dy dy)) (* radius radius))
+                  (let [pair (det/int-in w 0 3)
+                        keep? (< (first pair) intensity)
+                        w' (second pair)]
+                    (if keep?
+                      (add-stain w' nx ny stype (max 1 (dec intensity)))
+                      w'))
+                  w)))
+            w-ctx
             u/dirs8)))
 
 ;; --- Stain Colors ---

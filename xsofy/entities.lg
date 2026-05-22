@@ -1,4 +1,5 @@
-(ns xsofy.entities)
+(ns xsofy.entities
+  (:require [xsofy.det :as det]))
 
 ;; --- Registry ---
 
@@ -320,47 +321,57 @@
 
 (def split-walkable #{1 2 3 5 10 12 13 14 15 16 17 18})
 
-(defn find-split-pos [world pos]
-  "Find an adjacent walkable empty tile for the split spawn."
+(defn find-split-pos
+  "Find an adjacent walkable empty tile for the split spawn deterministically.
+   Returns [dir-or-nil world'] where dir is [dx dy]."
+  [world pos]
   (let [grid (:terrain world)
         w (:width world)
-        dirs (shuffle [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
-        [px py] pos]
-    (first (filter (fn [[dx dy]]
-                     (let [nx (+ px dx) ny (+ py dy)
-                           tile (aget grid (+ nx (* ny w)))]
-                       (and (contains? split-walkable tile)
-                            (nil? (creature-at world [nx ny])))))
-                   dirs))))
+        [px py] pos
+        w-ctx (det/with-context world [:entities :split-pos px py])
+        pair (det/permute w-ctx [[1 0] [-1 0] [0 1] [0 -1] [1 1] [1 -1] [-1 1] [-1 -1]])
+        dirs (first pair)
+        w' (second pair)
+        chosen (first (filter (fn [[dx dy]]
+                                (let [nx (+ px dx) ny (+ py dy)
+                                      tile (aget grid (+ nx (* ny w)))]
+                                  (and (contains? split-walkable tile)
+                                       (nil? (creature-at world [nx ny])))))
+                              dirs))]
+    [chosen w']))
 
 (defn try-split [world id new-hp]
-  "If entity splits on hit and has enough HP, spawn a clone at half HP."
+  "If entity splits on hit and has enough HP, spawn a clone at half HP.
+   Returns updated world or nil if no split happened."
   (let [entity (get-in world [:entities id])
         splits (get-in entity [:properties :splits-on-hit])
         pos (:pos entity)]
     (if (and splits (>= new-hp min-split-hp))
-      (when-let [dir (find-split-pos world pos)]
-        (let [half-hp (quot new-hp 2)
-              remain-hp (- new-hp half-hp)
-              [dx dy] dir
-              [px py] pos
-              clone-pos [(+ px dx) (+ py dy)]
-              species (:template entity)
-              ;; spawn clone and set its HP
-              w (spawn world species clone-pos)
-              ;; find the clone (last spawned entity of this species)
-              clone-id (last (filter (fn [k]
-                                       (and (= species (:template (get-in w [:entities k])))
-                                            (= clone-pos (:pos (get-in w [:entities k])))))
-                                     (keys (:entities w))))]
-          (when clone-id
-            (let [parent-ticks (or (:ticks entity) 0)]
-              (-> w
-                  (assoc-in [:entities id :body :hp] remain-hp)
-                  (assoc-in [:entities clone-id :body :hp] half-hp)
-                  (assoc-in [:entities clone-id :body :max-hp] half-hp)
-                  (assoc-in [:entities clone-id :ticks] parent-ticks)
-                  (assoc-in [:entities clone-id :ai :state] :hunt))))))
+      (let [split-pair (find-split-pos world pos)
+            dir (first split-pair)
+            world (second split-pair)]
+        (when dir
+          (let [half-hp (quot new-hp 2)
+                remain-hp (- new-hp half-hp)
+                [dx dy] dir
+                [px py] pos
+                clone-pos [(+ px dx) (+ py dy)]
+                species (:template entity)
+                ;; spawn clone and set its HP
+                w (spawn world species clone-pos)
+                ;; find the clone (last spawned entity of this species)
+                clone-id (last (filter (fn [k]
+                                         (and (= species (:template (get-in w [:entities k])))
+                                              (= clone-pos (:pos (get-in w [:entities k])))))
+                                       (keys (:entities w))))]
+            (when clone-id
+              (let [parent-ticks (or (:ticks entity) 0)]
+                (-> w
+                    (assoc-in [:entities id :body :hp] remain-hp)
+                    (assoc-in [:entities clone-id :body :hp] half-hp)
+                    (assoc-in [:entities clone-id :body :max-hp] half-hp)
+                    (assoc-in [:entities clone-id :ticks] parent-ticks)
+                    (assoc-in [:entities clone-id :ai :state] :hunt)))))))
       nil)))
 
 (defn damage-entity [world id amount]

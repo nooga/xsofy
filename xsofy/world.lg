@@ -217,10 +217,18 @@
     w))
 
 (defn make-world [w h]
-  (let [world (generate-floor w h 1 (make-player))]
+  ;; Reset the entity ID counter so replays generate identical IDs.
+  ;; ent/id-counter is a global atom; if we don't reset, IDs drift across
+  ;; runs and break replay equality. Long-term fix: thread world's :next-id
+  ;; via det/next-id and remove the global counter. For now, reset suffices.
+  (reset! ent/id-counter 0)
+  (let [world (generate-floor w h 1 (make-player))
+        rune-pair (runes/generate-rune-table world)
+        rune-table (first rune-pair)
+        world (second rune-pair)]
     (-> world
         give-starting-items
-        (assoc :floors {} :gold 0 :rune-table (runes/generate-rune-table))
+        (assoc :floors {} :gold 0 :rune-table rune-table)
         spawn-runestones)))
 
 ;; --- Floor Transition ---
@@ -337,24 +345,32 @@
     world))
 
 (defn splatter-blood [world x y dmg hp-before killed]
-  "Blood scales with overkill. Light hits = maybe a drop. Overkill = splat."
-  (if killed
-    (let [overkill (- dmg hp-before)]  ;; how much damage beyond lethal
-      (cond
-        ;; massive overkill (double+ the hp) — big splat
-        (> overkill hp-before)
-        (fx/blood-puddle world x y)
-        ;; moderate overkill — small puddle
-        (> overkill 0)
-        (let [w (fx/add-stain world x y :blood 3)]
-          (if (< (rand-int 3) 2) (fx/blood-drop w x y) w))
-        ;; just barely killed — center blood only
-        :else
-        (fx/add-stain world x y :blood 2)))
-    ;; not killed — small chance of a drop on big hits
-    (if (and (> dmg 5) (< (rand-int 6) 1))
-      (fx/blood-drop world x y)
-      world)))
+  "Blood scales with overkill deterministically. Light hits = maybe a drop.
+   Overkill = splat. Threads world through fx-det calls + det rolls."
+  (let [w-ctx (det/with-context world [:fx :splatter x y])]
+    (if killed
+      (let [overkill (- dmg hp-before)]
+        (cond
+          ;; massive overkill (double+ the hp) — big splat
+          (> overkill hp-before)
+          (fx/blood-puddle-det w-ctx x y)
+          ;; moderate overkill — small puddle + maybe drop
+          (> overkill 0)
+          (let [w (fx/add-stain w-ctx x y :blood 3)
+                pair (det/int-in w 0 3)
+                drip? (< (first pair) 2)
+                w' (second pair)]
+            (if drip? (fx/blood-drop-det w' x y) w'))
+          ;; just barely killed — center blood only
+          :else
+          (fx/add-stain w-ctx x y :blood 2)))
+      ;; not killed — small chance of a drop on big hits
+      (if (> dmg 5)
+        (let [pair (det/int-in w-ctx 0 6)
+              drip? (< (first pair) 1)
+              w' (second pair)]
+          (if drip? (fx/blood-drop-det w' x y) w'))
+        world))))
 
 ;; --- Message Log ---
 
@@ -619,7 +635,9 @@
         target (get-in world [:entities target-id])]
     (if (or (nil? attacker) (nil? target))
       world
-      (let [result (combat/resolve-attack world attacker-id target-id)
+      (let [ra-pair (combat/resolve-attack-det world attacker-id target-id)
+            result (first ra-pair)
+            world (second ra-pair)
             atk-name (entity-name attacker)
             def-name (entity-name target)]
         (if (nil? result)
@@ -777,8 +795,13 @@
         accuracy (or (:accuracy opts) 80)]
     (let [hit-result (first-entity-on-path world flight-path launcher-id)
           hit-entity (when hit-result (first hit-result))
-          ;; accuracy roll — can miss even if projectile reaches target
-          did-hit (and hit-entity (< (rand-int 100) accuracy))
+          ;; accuracy roll — only fires when there's an entity in path
+          hit-pair (if hit-entity
+                     (det/percent? (det/with-context world [:projectile launcher-id])
+                                   accuracy)
+                     [false world])
+          did-hit (first hit-pair)
+          world (second hit-pair)
           actual-path (if hit-result (second hit-result) flight-path)
           landed-pos (last actual-path)
           hit-pos (if hit-entity (:pos hit-entity) landed-pos)]
@@ -972,7 +995,10 @@
           (assoc :screen :quick-menu :menu-action :enchant :enchant-scroll-id item-id))
 
       :identify
-      (let [[new-table rune-key] (runes/identify-random-rune (or (:rune-table world) {}))]
+      (let [tr (runes/identify-random-rune world (or (:rune-table world) {}))
+            new-table (first tr)
+            rune-key (second tr)
+            world (nth tr 2)]
         (if rune-key
           (-> world
               (assoc :rune-table new-table)
@@ -1103,7 +1129,9 @@
                       (let [e (get-in w [:entities creature-id])
                             ename (let [k (or (:template e) (:id e))]
                                     (if k (name k) "???"))
-                            s (when e (snd/creature-idle (:pos e) ename (:sounds e)))]
+                            [s w] (if e
+                                    (snd/creature-idle-det w creature-id (:pos e) ename (:sounds e))
+                                    [nil w])]
                         (if s (snd/deliver-sound w s) w))
                       w)
                   w (ai/ai-act w creature-id melee-attack ranged-attack)
@@ -1204,7 +1232,9 @@
                 (if-not (has-clear-line? world px py tx ty)
                   (log-msg world "No clear line of fire.")
                   ;; resolve damage using combat system
-                  (let [result (combat/resolve-attack world :player (:id target))
+                  (let [ra-pair (combat/resolve-attack-det world :player (:id target))
+                        result (first ra-pair)
+                        world (second ra-pair)
                         dmg (if (and result (:hit result)) (:damage result) 0)
                         speed (or (get-in wep [:item :speed]) 100)]
                     (if (and result (not (:hit result)))
@@ -1245,20 +1275,28 @@
                                             " for " dmg "."))))))))))))))))
 
 (defn swim-drop-item [world]
-  "While swimming, 15% chance to lose an item from inventory each move."
-  (if (< (rand-int 100) 15)
-    (let [inv (or (get-in world [:entities :player :inventory]) [])
-          equipment (or (get-in world [:entities :player :equipment]) {})
-          equipped-ids (set (filter some? (vals equipment)))
-          droppable (vec (filter #(not (contains? equipped-ids %)) inv))]
-      (if (seq droppable)
-        (let [item-id (nth droppable (rand-int (count droppable)))
-              iname (or (get-in world [:entities item-id :item-name])
-                        (name (or (get-in world [:entities item-id :template]) :item)))]
-          (-> (ent/drop-item world item-id :player)
-              (log-msg (str "The " iname " slips from your grasp!"))))
-        world))
-    world))
+  "While swimming, 15% chance to lose an item from inventory each move.
+   Threads world for replay determinism."
+  (let [w-ctx (det/with-context world [:swim-drop])
+        chance-pair (det/percent? w-ctx 15)
+        drop-now (first chance-pair)
+        w-after-chance (second chance-pair)]
+    (if-not drop-now
+      w-after-chance
+      (let [inv (or (get-in w-after-chance [:entities :player :inventory]) [])
+            equipment (or (get-in w-after-chance [:entities :player :equipment]) {})
+            equipped-ids (set (filter some? (vals equipment)))
+            droppable (vec (filter #(not (contains? equipped-ids %)) inv))]
+        (if-not (seq droppable)
+          w-after-chance
+          (let [pick-pair (det/int-in w-after-chance 0 (count droppable))
+                idx (first pick-pair)
+                w-after-pick (second pick-pair)
+                item-id (nth droppable idx)
+                iname (or (get-in w-after-pick [:entities item-id :item-name])
+                          (name (or (get-in w-after-pick [:entities item-id :template]) :item)))]
+            (-> (ent/drop-item w-after-pick item-id :player)
+                (log-msg (str "The " iname " slips from your grasp!")))))))))
 
 (defn check-leave-water [world]
   "Remove swimming status when player is no longer on deep water."
@@ -1273,12 +1311,13 @@
     world))
 
 (defn drift-water-items [world]
-  "Items on deep water drift in a random direction each turn."
+  "Items on deep water drift in a random direction each turn (deterministic)."
   (let [{:keys [terrain width height]} world
         items (->> (vals (:entities world))
                    (filter (fn [e] (and (some? e) (map? e)
                                          (= :item (:entity-type e)) (:pos e))))
-                   (vec))]
+                   (vec))
+        w0 (det/with-context world [:drift-water])]
     (reduce (fn [w item]
               (let [cur (get-in w [:entities (:id item)])]
                 (if (or (nil? cur) (nil? (:pos cur)))
@@ -1286,7 +1325,10 @@
                   (let [[x y] (:pos cur)
                         tile (terrain/tget terrain width x y)]
                     (if (= tile 4)
-                      (let [[dx dy] (nth [[1 0] [-1 0] [0 1] [0 -1]] (rand-int 4))
+                      (let [dir-pair (det/int-in w 0 4)
+                            idx (first dir-pair)
+                            w (second dir-pair)
+                            [dx dy] (nth [[1 0] [-1 0] [0 1] [0 -1]] idx)
                             nx (+ x dx) ny (+ y dy)
                             ntile (terrain/tget terrain width nx ny)]
                         (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
@@ -1295,7 +1337,7 @@
                           (assoc-in w [:entities (:id item) :pos] [nx ny])
                           w))
                       w)))))
-            world items)))
+            w0 items)))
 
 (defn player-move [world dx dy]
   (if-not (get-in world [:entities :player :pos])
@@ -1364,8 +1406,15 @@
                       [(first targets)]
                       targets)]
         (if (seq targets)
-          ;; attack all targets
-          (let [first-result (combat/resolve-attack world :player (:id (first targets)))
+          ;; attack all targets. We peek at the first target's resolution to
+          ;; compute swing-speed before applying. Note: this peek does advance
+          ;; the world's :seed (det/percent? + det/int-in fire), but that's
+          ;; intentional — the peek IS a roll commitment under the deterministic
+          ;; chain. The actual melee-attack below uses a fresh roll (different
+          ;; with-context), so swing speed and actual hit are independent rolls.
+          (let [peek-pair (combat/resolve-attack-det world :player (:id (first targets)))
+                first-result (first peek-pair)
+                world (second peek-pair)
                 speed (if first-result (or (:speed first-result) move-cost) move-cost)
                 ;; attack each target in sequence
                 w (reduce (fn [w tgt]

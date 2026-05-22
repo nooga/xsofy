@@ -5,6 +5,7 @@
   (:require [test :refer [deftest is testing]]
             [xsofy.items :as items]
             [xsofy.terrain :as terrain]
+            [xsofy.world :as world]
             [xsofy.det :as d]))
 
 (deftest items-roll-floor-loot-is-deterministic
@@ -106,3 +107,63 @@
           s1 (:seed (second r1))
           s2 (:seed (second r2))]
       (is (not= s1 s2)))))
+
+;; ============================================================================
+;; Replay determinism — locks down the full-stack contract
+;;
+;; A replay is two runs of (make-world + a fixed action sequence) starting
+;; from identical state. If the engine is fully deterministic, both runs
+;; end in the same observable state.
+;;
+;; Today this passes for movement-only sequences (PR3+PR3b made worldgen
+;; deterministic) but fails as soon as combat/blood/projectile rolls fire,
+;; because those still use clojure.core/rand. The failure points at
+;; exactly which gameplay rolls need migrating to det/*.
+;; ============================================================================
+
+(defn- run-actions [world actions]
+  (reduce (fn [wrld act] (world/update-world wrld act))
+          world
+          actions))
+
+(defn- project
+  "Reduce world to comparable state for replay equality."
+  [w]
+  {:pos    (get-in w [:entities :player :pos])
+   :hp     (get-in w [:entities :player :body :hp])
+   :turn   (:turn w)
+   :seed   (:seed w)
+   :n-ents (count (:entities w))
+   :log-n  (count (:log w))})
+
+(deftest replay-movement-only-is-deterministic
+  (testing "Same starting world + same movement-only actions → same end state"
+    ;; Wandering with no combat trigger should be fully deterministic
+    ;; today, because all worldgen rolls thread :seed and player-move
+    ;; itself only consumes rolls when fighting an entity.
+    (let [actions [:up :down :left :right :wait :up-left :down-right :wait :wait :left]
+          w1 (run-actions (world/make-world 30 20) actions)
+          w2 (run-actions (world/make-world 30 20) actions)]
+      (is (= (project w1) (project w2))))))
+
+;; Long fuzzing run: with the same seed, longer sequences that bump into
+;; creatures and trigger combat rolls.
+;;
+;; Currently EXPECTED TO FAIL. The failure is the point — it confirms
+;; gameplay rolls (combat hit, blood splatter, projectile accuracy, drop
+;; chance, drift) are still on clojure.core/rand. Once those migrate to
+;; det/*, this test should pass and lock the contract.
+;;
+;; PR4 migrated all gameplay-time rolls to det/* and reset the global
+;; id-counter at make-world. This test is now the permanent end-to-end
+;; determinism lockdown: same seed + same action sequence → identical state.
+(deftest replay-long-sequence-is-deterministic
+  (testing "Long replay including combat — full-stack determinism contract"
+    (let [base [:up :right :down :right :up-left :wait :down-right :left]
+          actions (apply concat (repeat 5 base))
+          w1 (run-actions (world/make-world 30 20) actions)
+          w2 (run-actions (world/make-world 30 20) actions)]
+      (is (= (project w1) (project w2))
+          (str "REPLAY DIVERGED — non-determinism leak in gameplay rolls:\n"
+               "  w1=" (project w1) "\n"
+               "  w2=" (project w2))))))

@@ -147,13 +147,17 @@
 
 (c/defprop format-sexp-doesnt-leak-internal-shape
   [tokens gen-raw-program]
-  (let [tbl (runes/generate-rune-table)
+  (let [world (g/minimal-stone-room)
+        rune-pair (runes/generate-rune-table world)
+        tbl (first rune-pair)
         s (runes/format-sexp tbl tokens)]
     (not (looks-like-internal-map? s))))
 
 (c/defprop format-glyphs-doesnt-leak-internal-shape
   [tokens gen-raw-program]
-  (let [tbl (runes/generate-rune-table)
+  (let [world (g/minimal-stone-room)
+        rune-pair (runes/generate-rune-table world)
+        tbl (first rune-pair)
         s (runes/format-glyphs tbl tokens)]
     (not (looks-like-internal-map? s))))
 
@@ -185,7 +189,9 @@
   (testing "Inscribing :add (which needs two numeric args) with no args
             produces a parser error. The player-facing format-sexp output
             must not include the internal {:reason ... :error true} map."
-    (let [tbl (runes/generate-rune-table)
+    (let [world (g/minimal-stone-room)
+          rune-pair (runes/generate-rune-table world)
+          tbl (first rune-pair)
           ;; Same shape as the player's screenshot: a selector then a
           ;; math rune that consumes nothing.
           s (runes/format-sexp tbl [:nearest :add])]

@@ -5,6 +5,7 @@
             [xsofy.fire :as fire]
             [xsofy.status :as status]
             [xsofy.sound :as snd]
+            [xsofy.det :as det]
             [math]))
 
 ;; --- Spatial (delegated to util) ---
@@ -126,15 +127,19 @@
 
 (def cardinal-dirs u/dirs8)
 
-(defn random-step [world entity-id]
-  "Take a random walkable step."
+(defn random-step
+  "Take a random walkable step deterministically. Returns world'."
+  [world entity-id]
   (let [entity (get-in world [:entities entity-id])
         [ex ey] (:pos entity)
-        dirs (shuffle cardinal-dirs)
-        valid (first (filter (fn [[dx dy]] (can-move? world (+ ex dx) (+ ey dy) entity-id)) dirs))]
+        w-ctx (det/with-context world [:ai :random-step entity-id])
+        pair (det/permute w-ctx cardinal-dirs)
+        dirs (first pair)
+        w' (second pair)
+        valid (first (filter (fn [[dx dy]] (can-move? w' (+ ex dx) (+ ey dy) entity-id)) dirs))]
     (if valid
-      (try-move world entity-id (first valid) (second valid))
-      world)))
+      (try-move w' entity-id (first valid) (second valid))
+      w')))
 
 ;; --- Awareness ---
 
@@ -199,10 +204,15 @@
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
                 (assoc-in [:entities entity-id :ai :target] player-pos))
-            ;; random chance to start wandering
-            (< (rand-int 100) wander-chance)
-            (assoc-in world [:entities entity-id :ai :state] :wander)
-            :else world)
+            ;; random chance to start wandering — deterministic roll
+            :else
+            (let [w-ctx (det/with-context world [:ai :sleep-wake entity-id])
+                  pair (det/percent? w-ctx wander-chance)
+                  go-wander (first pair)
+                  w' (second pair)]
+              (if go-wander
+                (assoc-in w' [:entities entity-id :ai :state] :wander)
+                w')))
 
           ;; --- WANDER ---
           (= state :wander)
@@ -212,10 +222,15 @@
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
                 (assoc-in [:entities entity-id :ai :target] player-pos))
-            ;; random chance to go back to sleep
-            (< (rand-int 100) 10)
-            (assoc-in world [:entities entity-id :ai :state] :sleep)
-            :else world)
+            ;; random chance to go back to sleep — deterministic roll
+            :else
+            (let [w-ctx (det/with-context world [:ai :wander-sleep entity-id])
+                  pair (det/percent? w-ctx 10)
+                  go-sleep (first pair)
+                  w' (second pair)]
+              (if go-sleep
+                (assoc-in w' [:entities entity-id :ai :state] :sleep)
+                w')))
 
           ;; --- HUNT ---
           (= state :hunt)
@@ -278,7 +293,14 @@
 
 (defn hunt-ranged
   "Ranged hunt: maintain preferred distance. Shoot when in range + LOS.
-   Flee if too close, approach if too far, sidestep if no LOS."
+   Flee if too close, approach if too far, sidestep if no LOS.
+
+   The fire-chance roll fires deterministically whenever we evaluate the
+   shoot branch's gating condition (in-range + LOS). Even if the chance
+   check returns false and we fall through to another branch, the roll
+   has been consumed — this matches the original semantics: cond
+   short-circuits, so the rand-int only fired when the in-range+LOS
+   prerequisites were met."
   [world entity-id pos player-pos attack-fn ranged-attack-fn]
   (let [entity (get-in world [:entities entity-id])
         ai (:ai entity)
@@ -288,7 +310,20 @@
         dist (distance pos player-pos)
         [px py] player-pos
         [ex ey] pos
-        los (has-clear-line? world ex ey px py)]
+        los (has-clear-line? world ex ey px py)
+        too-close (< dist (- pref-range 1))
+        in-range-with-los (and (<= dist max-range) los)
+        ;; Pre-roll fire-chance only when the cond would have evaluated it.
+        ;; In the original, the rand-int was inside branch 2's predicate,
+        ;; which is only reached if branch 1 (too close) is false AND
+        ;; the and-clause short-circuits past the (<= dist max-range) and
+        ;; los checks. So we fire iff (not too-close) AND in-range-with-los.
+        fire-pair (if (and (not too-close) in-range-with-los)
+                    (det/percent? (det/with-context world [:ai :ranged-fire entity-id])
+                                  (or (:fire-chance spell-data) 100))
+                    [false world])
+        fires-now (first fire-pair)
+        world (second fire-pair)]
     (cond
       ;; too close — back away
       (< dist (- pref-range 1))
@@ -301,9 +336,8 @@
             w)
           w))
 
-      ;; in range and has LOS — shoot (with fire-chance if set)
-      (and (<= dist max-range) los
-           (< (rand-int 100) (or (:fire-chance spell-data) 100)))
+      ;; in range and has LOS and rolled to fire — shoot
+      (and in-range-with-los fires-now)
       (ranged-attack-fn world entity-id :player)
 
       ;; in range but no LOS — approach to get angle

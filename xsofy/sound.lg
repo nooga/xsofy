@@ -1,5 +1,6 @@
 (ns xsofy.sound
   (:require [xsofy.util :as u]
+            [xsofy.det :as det]
             [math]))
 
 ;; --- Sound System ---
@@ -84,12 +85,20 @@
        :msg-far  (or (:far d) nil)}
       (death-cry pos who))))
 
-(defn creature-idle [pos who sounds]
+(defn creature-idle-det
+  "Deterministic creature idle sound. Returns [sound-or-nil world']."
+  [world creature-id pos who sounds]
   (let [options (:idle sounds)]
-    (when (and options (seq options))
-      (let [pick (nth options (rand-int (count options)))]
-        (when (< (rand-int 100) (or (:chance pick) 5))
-          {:pos pos :radius (or (:radius pick) 10)
-           :msg-near (:near pick)
-           :msg-mid  (:mid pick)
-           :msg-far  (:far pick)})))))
+    (if-not (and options (seq options))
+      [nil world]
+      (let [w (det/with-context world [:fx :creature-idle creature-id])
+            [pick-idx w] (det/int-in w 0 (count options))
+            pick (nth options pick-idx)
+            [hit? w] (det/percent? w (or (:chance pick) 5))]
+        (if hit?
+          [{:pos pos :radius (or (:radius pick) 10)
+            :msg-near (:near pick)
+            :msg-mid  (:mid pick)
+            :msg-far  (:far pick)}
+           w]
+          [nil w])))))

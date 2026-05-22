@@ -1,6 +1,7 @@
 (ns xsofy.combat
   (:require [xsofy.entities :as ent]
             [xsofy.terrain :as terrain]
+            [xsofy.det :as det]
             [math]))
 
 ;; --- Strength Modifier ---
@@ -23,6 +24,17 @@
         scale (enchant-scale net-enchant)]
     (max 1 (int (* base scale)))))
 
+(defn roll-damage-det
+  "Deterministic variant of roll-damage. Takes world, returns [damage world']."
+  [world min-dmg max-dmg net-enchant]
+  (let [span (max 1 (inc (- max-dmg min-dmg)))
+        roll-pair (det/int-in world 0 span)
+        roll (first roll-pair)
+        w' (second roll-pair)
+        base (+ min-dmg roll)
+        scale (enchant-scale net-enchant)]
+    [(max 1 (int (* base scale))) w']))
+
 ;; --- Hit Chance ---
 
 (defn hit-chance [accuracy defense]
@@ -31,6 +43,15 @@
 
 (defn hit? [accuracy defense]
   (< (rand-int 100) (hit-chance accuracy defense)))
+
+(defn hit-det?
+  "Deterministic variant of hit?. Takes world, returns [bool world']."
+  [world accuracy defense]
+  (let [pct (hit-chance accuracy defense)
+        pair (det/percent? world pct)
+        b (first pair)
+        w' (second pair)]
+    [b w']))
 
 ;; --- Attack Speed ---
 
@@ -114,6 +135,40 @@
          :speed speed
          :sneak (and did-hit sneak (> sneak-mult 1))
          :net-enchant net-enchant}))))
+
+(defn resolve-attack-det
+  "Deterministic variant of resolve-attack. Takes world, returns [result world']
+   where result is {:hit :damage :speed :sneak :net-enchant} or nil if either
+   entity is missing."
+  [world attacker-id target-id]
+  (let [attacker (get-in world [:entities attacker-id])
+        target (get-in world [:entities target-id])]
+    (if-not (and attacker target)
+      [nil world]
+      (let [w-ctx (det/with-context world [:combat attacker-id target-id])
+            atk (attacker-stats w-ctx attacker-id)
+            def_ (defender-stats w-ctx target-id)
+            net-enchant (+ (:enchant atk) (strength-modifier (:str atk) (:str-req atk)))
+            sneak (= (:ai-state def_) :sleep)
+            ;; Hit check: sneak bypass OR det/percent? for accuracy
+            hit-pair (if sneak [true w-ctx] (hit-det? w-ctx (:accuracy atk) (:defense def_)))
+            did-hit (first hit-pair)
+            w-after-hit (second hit-pair)
+            ;; Damage roll only if hit
+            dmg-pair (if did-hit
+                       (roll-damage-det w-after-hit (:min-dmg atk) (:max-dmg atk) net-enchant)
+                       [0 w-after-hit])
+            raw-dmg (first dmg-pair)
+            w-after-dmg (second dmg-pair)
+            sneak-mult (if (and did-hit sneak) (sneak-multiplier (:weapon atk)) 1)
+            final-dmg (if did-hit (max 1 (* raw-dmg sneak-mult)) 0)
+            speed (attack-speed (:weapon atk) did-hit)]
+        [{:hit did-hit
+          :damage final-dmg
+          :speed speed
+          :sneak (and did-hit sneak (> sneak-mult 1))
+          :net-enchant net-enchant}
+         w-after-dmg]))))
 
 ;; --- Attack Patterns ---
 ;; Given attacker position, direction, and weapon, compute which positions to attack.

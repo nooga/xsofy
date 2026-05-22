@@ -1,4 +1,5 @@
-(ns xsofy.runes)
+(ns xsofy.runes
+  (:require [xsofy.det :as det]))
 
 ;; --- Rune System v2 ---
 ;; All primitives are arity-0 by default.
@@ -46,15 +47,19 @@
 
 ;; --- Rune Table ---
 
-(defn generate-rune-table []
-  (let [shuffled-glyphs (shuffle rune-glyphs)
-        shuffled-names (shuffle garbled-names)]
-    (reduce (fn [table i]
-              (let [rune (nth all-runes i)]
-                (assoc table rune {:glyph (nth shuffled-glyphs i)
-                                   :garbled (nth shuffled-names i)
-                                   :identified false})))
-            {} (range (count all-runes)))))
+(defn generate-rune-table
+  "Generate a rune table deterministically. Returns [table world']."
+  [world]
+  (let [w (det/with-context world [:runes :gen-table])
+        [shuffled-glyphs w] (det/permute w rune-glyphs)
+        [shuffled-names w] (det/permute w garbled-names)]
+    [(reduce (fn [table i]
+               (let [rune (nth all-runes i)]
+                 (assoc table rune {:glyph (nth shuffled-glyphs i)
+                                    :garbled (nth shuffled-names i)
+                                    :identified false})))
+             {} (range (count all-runes)))
+     w]))
 
 ;; --- Query ---
 
@@ -86,12 +91,19 @@
     (assoc-in rune-table [rune-key :identified] true)
     rune-table))
 
-(defn identify-random-rune [rune-table]
+(defn identify-random-rune
+  "Identify a random unidentified rune deterministically.
+   Returns [updated-table identified-rune-key-or-nil world']."
+  [world rune-table]
   (let [unidentified (vec (filter (fn [[k v]] (not (:identified v))) rune-table))]
     (if (empty? unidentified)
-      [rune-table nil]
-      (let [[rune-key _] (nth unidentified (rand-int (count unidentified)))]
-        [(identify-rune rune-table rune-key) rune-key]))))
+      [rune-table nil world]
+      (let [w-ctx (det/with-context world [:runes :identify-random])
+            pair (det/int-in w-ctx 0 (count unidentified))
+            idx (first pair)
+            w' (second pair)
+            [rune-key _] (nth unidentified idx)]
+        [(identify-rune rune-table rune-key) rune-key w']))))
 
 ;; --- Parser ---
 ;; Compiles flat rune sequence to pipeline steps.

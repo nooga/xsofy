@@ -2,7 +2,8 @@
   (:require [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
             [xsofy.util :as u]
-            [xsofy.status :as status]))
+            [xsofy.status :as status]
+            [xsofy.det :as det]))
 
 ;; --- Fire System ---
 ;; Fire is terrain tile 15. TTL tracked in world :fire-ttl {[x y] turns-left}.
@@ -38,29 +39,47 @@
       (assoc-in world [:fire-ttl [x y]] ttl))))
 
 (defn step-fire [world]
-  "One tick of fire simulation. Spread, damage, burn out."
+  "One tick of fire simulation. Spread, damage, burn out.
+   Threads world through the spread rolls for replay determinism."
   (let [{:keys [terrain width height]} world
         fire-ttl (or (:fire-ttl world) {})
         new-fires (atom [])
-        new-ttl (atom {})]
-    ;; process each fire cell
-    (doseq [[[x y] ttl] fire-ttl]
-      (let [tile (terrain/tget terrain width x y)]
-        (when (= tile fire-tile)
-          (if (<= ttl 1)
-            ;; burn out → ash
-            (terrain/tset! terrain width x y ash-tile)
-            (do
-              ;; keep burning
-              (swap! new-ttl assoc [x y] (dec ttl))
-              ;; spread to adjacent flammable
-              (doseq [[dx dy] u/dirs8]
-                (let [nx (+ x dx) ny (+ y dy)]
-                  (when (and (>= nx 0) (< nx width) (>= ny 0) (< ny height))
-                    (let [ntile (terrain/tget terrain width nx ny)]
-                      (when (and (contains? terrain/flammable-tiles ntile)
-                                 (< (rand-int 100) fire-spread-chance))
-                        (swap! new-fires conj [nx ny])))))))))))
+        new-ttl (atom {})
+        w-ctx (det/with-context world [:fire :step])
+        ;; process each fire cell, threading world through spread rolls
+        w-after-rolls
+        (reduce
+          (fn [w [[x y] ttl]]
+            (let [tile (terrain/tget terrain width x y)]
+              (if (not= tile fire-tile)
+                w
+                (if (<= ttl 1)
+                  (do
+                    ;; burn out → ash
+                    (terrain/tset! terrain width x y ash-tile)
+                    w)
+                  (do
+                    ;; keep burning
+                    (swap! new-ttl assoc [x y] (dec ttl))
+                    ;; spread to adjacent flammable — threaded reduce
+                    (reduce
+                      (fn [w-inner [dx dy]]
+                        (let [nx (+ x dx) ny (+ y dy)]
+                          (if-not (and (>= nx 0) (< nx width) (>= ny 0) (< ny height))
+                            w-inner
+                            (let [ntile (terrain/tget terrain width nx ny)]
+                              (if-not (contains? terrain/flammable-tiles ntile)
+                                w-inner
+                                (let [pair (det/percent? w-inner fire-spread-chance)
+                                      spread? (first pair)
+                                      w-next (second pair)]
+                                  (when spread?
+                                    (swap! new-fires conj [nx ny]))
+                                  w-next))))))
+                      w
+                      u/dirs8))))))
+          w-ctx
+          (seq fire-ttl))]
     ;; ignite new fires
     (let [w (reduce (fn [w [x y]]
                       (let [t (terrain/tget (:terrain w) (:width w) x y)]
@@ -69,7 +88,7 @@
                               (swap! new-ttl assoc [x y] fire-default-ttl)
                               w)
                           w)))
-                    world @new-fires)]
+                    w-after-rolls @new-fires)]
       ;; damage entities standing in fire
       (let [w (reduce (fn [w [[x y] _]]
                         (let [targets (vec (filter
