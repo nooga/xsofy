@@ -376,14 +376,29 @@
                      (recur w w (term/size))))))
 
          :death
-         (loop [scroll 0]
-           (render/render-death-screen world scroll)
-           (let [k (term/read-key)]
-             (cond
-               (= k "\u001b") (assoc world :running false)
-               (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)))
-               (or (= k "k") (= k "\u001b[A")) (recur (inc scroll))
-               :else (recur scroll))))
+         (let [result (loop [scroll 0]
+                        (render/render-death-screen world scroll)
+                        (let [k (term/read-key)]
+                          (cond
+                            (or (= k "n") (= k "\r") (= k "\n") (= k " "))
+                            :new-game
+                            (= k "\u001b")
+                            (if *in-wasm*
+                              (do
+                                (render/render-hazard-prompt world "Start a new game?")
+                                (let [confirm (term/read-key)]
+                                  (if (= confirm "y")
+                                    :new-game
+                                    (recur scroll))))
+                              (assoc world :running false))
+                            (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)))
+                            (or (= k "k") (= k "\u001b[A")) (recur (inc scroll))
+                            :else (recur scroll))))]
+           (if (= result :new-game)
+             (let [w (new-game)]
+               (render/render-full w)
+               (recur w w (term/size)))
+             result))
 
          :confirm-hazard
          (do

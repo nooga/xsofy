@@ -534,7 +534,8 @@
 
 (defn render-status [world r]
   (ui/write-line r 0 (str " yuhjklbn/1-9:move  .:wait  5/Z:rest  eUda:item  i:inv  <>:stairs  m:log  "
-                          (input/action-key-labels :help) ":help  esc:quit")
+                          (input/action-key-labels :help) ":help  esc:"
+                          (if *in-wasm* "restart" "quit"))
                  [60 60 60] ui/bg))
 
 ;; --- Quick Menu Overlay ---
@@ -944,10 +945,13 @@
                         (subs msg 0 (- tw 4))
                         msg)))))
     ;; prompt
-    (term/move-cursor (max 1 (- cx 12)) (dec th))
-    (term/set-fg 80 70 60)
-    (term/set-bg 10 10 10)
-    (term/write "[esc] to exit    [j/k] scroll")
+    (let [prompt (if *in-wasm*
+                   "[n/enter] new game    [esc] confirm restart    [j/k] scroll"
+                   "[n/enter] new game    [esc] exit    [j/k] scroll")]
+      (term/move-cursor (max 1 (- cx (quot (count prompt) 2))) (dec th))
+      (term/set-fg 80 70 60)
+      (term/set-bg 10 10 10)
+      (term/write prompt))
     (term/flush)))
 
 ;; --- Rune Codex Screen ---

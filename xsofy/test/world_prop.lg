@@ -5,7 +5,8 @@
             [xsofy.check :as c]
             [xsofy.check-gen :as g]
             [xsofy.world :as w]
-            [xsofy.fire :as fire]))
+            [xsofy.fire :as fire]
+            [xsofy.terrain :as terrain]))
 
 (c/defprop turn-never-goes-backward
   [world g/gen-minimal-world
@@ -103,3 +104,20 @@
       ;; acceptable, e.g. didn't die). What we MUST avoid is a partial shell.
       (is (or (nil? p)
               (and (some? (:pos p)) (some? (:body p))))))))
+
+(deftest floor-save-restore-preserves-fire-ttl
+  (testing "Saved floors keep fire simulation state with fire terrain tiles."
+    (let [world (-> (g/minimal-stone-room)
+                    (assoc :depth 1 :floors {} :turn 12 :log [])
+                    (assoc-in [:entities :player]
+                      {:id :player :template :player :pos [1 1]
+                       :ticks 0
+                       :body {:hp 30 :max-hp 30 :strength 2}
+                       :inventory []}))
+          _ (terrain/tset! (:terrain world) (:width world) 2 2 15)
+          world (assoc world :fire-ttl {[2 2] 4})
+          saved (w/save-current-floor world)
+          [player items] (w/extract-player-items saved)
+          restored (w/restore-floor saved 1 player items)]
+      (is (= 4 (get-in saved [:floors 1 :fire-ttl [2 2]])))
+      (is (= 4 (get-in restored [:fire-ttl [2 2]]))))))

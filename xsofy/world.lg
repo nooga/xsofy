@@ -226,6 +226,7 @@
                :entities floor-entities
                :stains (or (:stains world) {})
                :gases (or (:gases world) {})
+               :fire-ttl (or (:fire-ttl world) {})
                :lights (:lights world)
                :memory (or (:memory world) {})}]
     (assoc-in world [:floors (:depth world)] floor)))
@@ -255,6 +256,7 @@
          :lights (:lights floor)
          :stains (:stains floor)
          :gases (:gases floor)
+         :fire-ttl (or (:fire-ttl floor) {})
          :log (:log world)
          :turn (:turn world)
          :gold (or (:gold world) 0)
