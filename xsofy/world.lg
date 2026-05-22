@@ -12,6 +12,7 @@
             [xsofy.runes :as runes]
             [xsofy.status :as status]
             [xsofy.items :as items]
+            [xsofy.det :as det]
             [xsofy.debug :as dbg]
             [xsofy.bestiary]
             [xsofy.title :as title]
@@ -48,62 +49,81 @@
    ;; deep dungeon
    {:species :dragon         :peak 9  :spread 1.5  :weight 2}])
 
-(defn pick-creature [depth]
-  "Pick a creature using depth-weighted random selection."
-  (let [weighted (mapv (fn [e]
+(defn pick-creature
+  "Pick a creature deterministically using depth-weighted random selection.
+   Returns [species world']."
+  [world depth]
+  (let [world (det/with-context world [:worldgen :pick-creature depth])
+        weighted (mapv (fn [e]
                          (assoc e :eff-weight
                                 (* (:weight e)
                                    (depth-freq depth (:peak e) (:spread e)))))
                        creature-table)
         total (reduce (fn [s e] (+ s (:eff-weight e))) 0.0 weighted)
-        roll (* (rand) total)]
+        [u world'] (det/unit world)
+        roll (* u total)]
     (loop [remaining weighted acc 0.0]
       (if (empty? remaining)
-        :goblin  ;; fallback
+        [:goblin world']  ;; fallback
         (let [e (first remaining)
               acc (+ acc (:eff-weight e))]
           (if (>= acc roll)
-            (:species e)
+            [(:species e) world']
             (recur (rest remaining) acc)))))))
 
-(defn populate-room-creatures [world room-center grid tw th depth]
-  "Spawn creatures in a room using depth-curved selection."
-  (let [num-creatures (rand-int 3)
-        [rx ry] room-center]
-    (loop [world world n num-creatures]
-      (if (<= n 0) world
-        (let [species (pick-creature depth)
-              ox (+ rx (- (rand-int 5) 2))
-              oy (+ ry (- (rand-int 5) 2))]
+(defn populate-room-creatures
+  "Spawn creatures in a room using depth-curved deterministic selection. Returns world'."
+  [world room-center grid tw th depth]
+  (let [[rx ry] room-center
+        w (det/with-context world [:worldgen :populate-creatures depth rx ry])
+        [num-creatures w] (det/int-in w 0 3)]
+    (loop [w w n num-creatures]
+      (if (<= n 0) w
+        (let [[species w] (pick-creature w depth)
+              [ox-roll w] (det/int-in w 0 5)
+              [oy-roll w] (det/int-in w 0 5)
+              ox (+ rx (- ox-roll 2))
+              oy (+ ry (- oy-roll 2))]
           (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
                    (terrain/walkable? grid tw th ox oy)
-                   (nil? (ent/creature-at world [ox oy])))
-            (recur (ent/spawn world species [ox oy]) (dec n))
-            (recur world (dec n))))))))
+                   (nil? (ent/creature-at w [ox oy])))
+            (recur (ent/spawn w species [ox oy]) (dec n))
+            (recur w (dec n))))))))
 
-(defn find-spawn-pos [grid tw th rx ry]
-  "Find a walkable position near (rx,ry) for item placement."
-  (loop [attempts 5]
-    (when (> attempts 0)
-      (let [ox (+ rx (- (rand-int 5) 2))
-            oy (+ ry (- (rand-int 5) 2))]
-        (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
-                 (terrain/walkable? grid tw th ox oy))
-          [ox oy]
-          (recur (dec attempts)))))))
+(defn find-spawn-pos
+  "Find a walkable position near (rx,ry) deterministically.
+   Returns [[ox oy] world'] on success, [nil world'] on failure."
+  [world grid tw th rx ry]
+  (let [w (det/with-context world [:worldgen :find-spawn rx ry])]
+    (loop [attempts 5 w w]
+      (if (<= attempts 0)
+        [nil w]
+        (let [[ox-roll w] (det/int-in w 0 5)
+              [oy-roll w] (det/int-in w 0 5)
+              ox (+ rx (- ox-roll 2))
+              oy (+ ry (- oy-roll 2))]
+          (if (and (>= ox 0) (< ox tw) (>= oy 0) (< oy th)
+                   (terrain/walkable? grid tw th ox oy))
+            [[ox oy] w]
+            (recur (dec attempts) w)))))))
 
-(defn distribute-loot [world loot-bag rooms grid tw th]
-  "Distribute a bag of loot descriptors across rooms (skip first room = player start)."
+(defn distribute-loot
+  "Distribute a bag of loot descriptors across rooms deterministically
+   (skip first room = player start). Returns world'."
+  [world loot-bag rooms grid tw th]
   (let [target-rooms (vec (rest rooms))
         num-rooms (count target-rooms)]
     (if (or (empty? loot-bag) (= 0 num-rooms))
       world
-      (reduce (fn [w descriptor]
-                (let [[rx ry] (nth target-rooms (rand-int num-rooms))]
-                  (if-let [pos (find-spawn-pos grid tw th rx ry)]
-                    (ent/spawn-loot-item w descriptor pos)
-                    w)))
-              world loot-bag))))
+      (let [world (det/with-context world [:worldgen :distribute-loot])]
+        (reduce (fn [w descriptor]
+                  (let [[idx w] (det/int-in w 0 num-rooms)
+                        [rx ry] (nth target-rooms idx)
+                        [pos w] (find-spawn-pos w grid tw th rx ry)]
+                    (if pos
+                      (ent/spawn-loot-item w descriptor pos)
+                      w)))
+                world loot-bag)))))
 
 ;; --- FOV ---
 
@@ -129,9 +149,14 @@
         [px py] (first rooms)]
     (dbg/log "  rooms:" (count rooms) "player-pos:" [px py])
     (let [lights (light/collect-terrain-lights grid w h)
+          ;; world carries an explicit per-floor seed so worldgen rolls
+          ;; are reproducible. depth alone disambiguates floors; if a
+          ;; caller wants a different seed it can pass in a player with
+          ;; :base-seed (not currently used).
           world {:terrain grid
                  :width w
                  :height h
+                 :seed depth
                  :entities {:player (assoc player :pos [px py])}
                  :fov #{}
                  :memory {}
@@ -141,18 +166,19 @@
                  :log []
                  :turn 0
                  :depth depth
-                 :running true}]
+                 :running true}
+          world (det/with-context world [:worldgen :floor depth])]
       (dbg/log "  populating rooms")
-      (let [;; spawn creatures per room
+      (let [;; spawn creatures per room (each call returns world')
             with-creatures (reduce (fn [wrld room]
                                      (dbg/log "    populate room:" room)
                                      (populate-room-creatures wrld room grid w h depth))
                                    world
                                    (rest rooms))
             ;; generate floor loot and distribute across rooms
-            loot-bag (items/roll-floor-loot depth)
+            [loot-bag with-loot-world] (items/roll-floor-loot with-creatures depth)
             _ (dbg/log "  loot bag:" (count loot-bag) "items")
-            with-loot (distribute-loot with-creatures loot-bag rooms grid w h)
+            with-loot (distribute-loot with-loot-world loot-bag rooms grid w h)
             with-rooms (assoc with-loot :rooms-cache rooms)]
         (dbg/log "  rooms populated, running update-fov")
         (let [result (update-fov with-rooms)]
@@ -820,38 +846,45 @@
 
 ;; --- Runestones ---
 
-(defn spawn-runestones [world]
-  "Spawn 1-2 runestones on the floor for unidentified runes."
+(defn spawn-runestones
+  "Spawn 1-2 runestones on the floor for unidentified runes deterministically.
+   Returns world'."
+  [world]
   (let [rune-table (or (:rune-table world) {})
         unidentified (runes/undiscovered-runes rune-table)
         {:keys [terrain width height]} world
-        rooms (:rooms-cache world)
-        num-stones (if (seq unidentified) (+ 1 (rand-int 2)) 0)]
+        rooms (:rooms-cache world)]
     (if (or (empty? unidentified) (nil? rooms))
       world
-      (loop [w world n num-stones remaining (shuffle unidentified)]
-        (if (or (<= n 0) (empty? remaining))
-          w
-          (let [rune-info (first remaining)
-                rune-key (:rune rune-info)
-                ;; pick a random room (not the first = player start)
-                target-rooms (vec (rest rooms))
-                room (when (seq target-rooms)
-                       (nth target-rooms (rand-int (count target-rooms))))
-                [rx ry] (or room [5 5])
-                pos (find-spawn-pos terrain width height rx ry)]
-            (if pos
-              (let [id (ent/next-id :runestone)
-                    template (get @ent/templates :runestone)
-                    glyph (:glyph rune-info)
-                    instance (-> template
-                                 (assoc :id id
-                                        :template :runestone
-                                        :pos pos
-                                        :rune-key rune-key
-                                        :item-name (str "runestone " (or glyph "?"))))]
-                (recur (assoc-in w [:entities id] instance) (dec n) (rest remaining)))
-              (recur w (dec n) (rest remaining)))))))))
+      (let [w (det/with-context world [:worldgen :spawn-runestones])
+            [num-roll w] (det/int-in w 0 2)
+            num-stones (+ 1 num-roll)
+            [shuffled w] (det/permute w unidentified)
+            target-rooms (vec (rest rooms))
+            num-target-rooms (count target-rooms)]
+        (loop [w w n num-stones remaining shuffled]
+          (if (or (<= n 0) (empty? remaining))
+            w
+            (let [rune-info (first remaining)
+                  rune-key (:rune rune-info)
+                  [room w] (if (zero? num-target-rooms)
+                             [[5 5] w]
+                             (let [[idx w] (det/int-in w 0 num-target-rooms)]
+                               [(nth target-rooms idx) w]))
+                  [rx ry] room
+                  [pos w] (find-spawn-pos w terrain width height rx ry)]
+              (if pos
+                (let [id (ent/next-id :runestone)
+                      template (get @ent/templates :runestone)
+                      glyph (:glyph rune-info)
+                      instance (-> template
+                                   (assoc :id id
+                                          :template :runestone
+                                          :pos pos
+                                          :rune-key rune-key
+                                          :item-name (str "runestone " (or glyph "?"))))]
+                  (recur (assoc-in w [:entities id] instance) (dec n) (rest remaining)))
+                (recur w (dec n) (rest remaining))))))))))
 
 (defn consume-runestone [world item]
   "Consume a runestone, identifying its rune. Returns updated world."

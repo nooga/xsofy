@@ -1,6 +1,7 @@
 (ns xsofy.items
   (:require [xsofy.entities :refer [defitem visual weapon armor ring
                                      consumable item-name item-desc drops runes]]
+            [xsofy.det :as det]
             [math]))
 
 ;; --- Gold ---
@@ -252,31 +253,41 @@
 ;; --- Weighted random selection ---
 
 (defn weighted-pick
-  "Pick a random item from entries using :eff-weight. Returns the entry or nil."
-  [entries]
-  (when (seq entries)
+  "Pick an entry from a weighted entry list deterministically.
+   Returns [entry world'] (entry may be nil if list is empty or all-zero-weight)."
+  [world entries]
+  (if-not (seq entries)
+    [nil world]
     (let [total (reduce (fn [sum e] (+ sum (:eff-weight e))) 0.0 entries)]
-      (when (> total 0)
-        (let [roll (* (rand) total)]
+      (if-not (> total 0)
+        [nil world]
+        (let [[u world'] (det/unit world)
+              roll (* u total)]
           (loop [remaining entries acc 0.0]
-            (when (seq remaining)
+            (if-not (seq remaining)
+              [nil world']
               (let [e (first remaining)
                     acc (+ acc (:eff-weight e))]
                 (if (>= acc roll)
-                  e
+                  [e world']
                   (recur (rest remaining) acc))))))))))
 
 ;; --- Enchantment ---
 
-(defn roll-enchant [depth]
-  (let [;; base roll: heavily weighted toward 0
-        ;; roll two dice and take the one closer to 0
-        r1 (- (rand-int 3) 1)   ;; -1, 0, +1
-        r2 (- (rand-int 3) 1)
+(defn roll-enchant
+  "Roll an enchantment delta deterministically. Returns [delta world'].
+   Caller threads (depth, slot) via with-context to disambiguate items
+   on the same floor."
+  [world depth slot]
+  (let [world (det/with-context world [:itemgen :enchant depth slot])
+        [r1-raw world] (det/int-in world 0 3)
+        [r2-raw world] (det/int-in world 0 3)
+        r1 (- r1-raw 1)   ;; -1, 0, +1
+        r2 (- r2-raw 1)
         roll (if (<= (math/abs r1) (math/abs r2)) r1 r2)
         depth-bonus (quot depth 4)
         result (+ roll depth-bonus)]
-    (max -3 (min 5 result))))
+    [(max -3 (min 5 result)) world]))
 
 ;; --- Procedural Runics ---
 
@@ -291,70 +302,86 @@
   [{:effect :heal    :weight 15  :name "vampiric"}
    {:effect :damage  :weight 10  :name "volatile"}])
 
-(defn pick-effect [pool]
+(defn pick-effect
+  "Pick a weighted effect from pool deterministically. Returns [effect-map world']."
+  [world pool]
   (let [total (reduce (fn [s e] (+ s (:weight e))) 0 pool)
-        roll (rand-int total)]
+        [roll world'] (det/int-in world 0 total)]
     (loop [remaining pool acc 0]
-      (when (seq remaining)
+      (if-not (seq remaining)
+        [nil world']
         (let [e (first remaining)
               acc (+ acc (:weight e))]
           (if (>= acc roll)
-            e
+            [e world']
             (recur (rest remaining) acc)))))))
 
 ;; Runic templates by quality tier
-(defn generate-runic-program [depth tier]
-  (let [eff (pick-effect runic-effects)
-        param (+ 1 (rand-int (min 4 (+ 1 (quot depth 2)))))]
+(defn generate-runic-program
+  "Generate a runic program deterministically. Returns [program world']."
+  [world depth slot tier]
+  (let [world (det/with-context world [:itemgen :runic depth slot tier])
+        [eff world] (pick-effect world runic-effects)
+        [param-roll world] (det/int-in world 0 (min 4 (+ 1 (quot depth 2))))
+        param (+ 1 param-roll)]
     (case tier
       ;; useful: simple on-hit effects
       :useful
-      (let [shape (rand-int 3)]
+      (let [[shape world] (det/int-in world 0 3)]
         (case shape
-          0 {:runes [(:effect eff)]
-             :name (:name eff)}
-          1 {:runes [:apply (:effect eff) param]
-             :name (:name eff)}
-          2 (let [eff2 (pick-effect (vec (filter #(not= (:effect %) (:effect eff)) runic-effects)))]
-              {:runes [(:effect eff) (:effect eff2)]
-               :name (str (:name eff) " " (:name eff2))})))
+          0 [{:runes [(:effect eff)]
+              :name (:name eff)} world]
+          1 [{:runes [:apply (:effect eff) param]
+              :name (:name eff)} world]
+          2 (let [[eff2 world] (pick-effect
+                                world
+                                (vec (filter #(not= (:effect %) (:effect eff))
+                                             runic-effects)))]
+              [{:runes [(:effect eff) (:effect eff2)]
+                :name (str (:name eff) " " (:name eff2))} world])))
 
       ;; powerful: area, chain, vampiric
       :powerful
-      (let [shape (rand-int 3)
-            radius (+ 1 (rand-int 2))]
+      (let [[shape world] (det/int-in world 0 3)
+            [radius-roll world] (det/int-in world 0 2)
+            radius (+ 1 radius-roll)]
         (case shape
-          0 {:runes [:apply :area radius (:effect eff)]
-             :name (str "furious " (:name eff))}
-          1 {:runes [:arc :arc]
-             :name "thundering"}
-          2 (let [dmg (+ 1 (rand-int 3))
+          0 [{:runes [:apply :area radius (:effect eff)]
+              :name (str "furious " (:name eff))} world]
+          1 [{:runes [:arc :arc]
+              :name "thundering"} world]
+          2 (let [[dmg-roll world] (det/int-in world 0 3)
+                  dmg (+ 1 dmg-roll)
                   heal (max 1 (dec dmg))]
-              {:runes [:apply :damage dmg :self :apply :heal heal]
-               :name "vampiric"})))
+              [{:runes [:apply :damage dmg :self :apply :heal heal]
+                :name "vampiric"} world])))
 
       ;; dangerous: useful but with self-targeting twist
       :dangerous
-      (let [self-eff (pick-effect runic-self-effects)]
-        {:runes [(:effect eff) :self (:effect self-eff)]
-         :name (str (:name eff) " " (:name self-eff))})
+      (let [[self-eff world] (pick-effect world runic-self-effects)]
+        [{:runes [(:effect eff) :self (:effect self-eff)]
+          :name (str (:name eff) " " (:name self-eff))} world])
 
       ;; broken: inverted — hurts the wielder
       :broken
-      (let [shape (rand-int 2)]
+      (let [[shape world] (det/int-in world 0 2)]
         (case shape
-          0 {:runes [:self (:effect eff)]
-             :name (str "cursed " (:name eff))}
-          1 {:runes [:self :apply :damage param]
-             :name "self-destructive"})))))
+          0 [{:runes [:self (:effect eff)]
+              :name (str "cursed " (:name eff))} world]
+          1 [{:runes [:self :apply :damage param]
+              :name "self-destructive"} world])))))
 
-(defn roll-quality-tier []
-  (let [r (rand-int 100)]
-    (cond
-      (< r 55) :useful
-      (< r 80) :powerful
-      (< r 95) :dangerous
-      :else    :broken)))
+(defn roll-quality-tier
+  "Pick a quality tier deterministically. Returns [tier-keyword world']."
+  [world depth slot]
+  (let [world (det/with-context world [:itemgen :quality-tier depth slot])
+        [r world] (det/int-in world 0 100)]
+    [(cond
+       (< r 55) :useful
+       (< r 80) :powerful
+       (< r 95) :dangerous
+       :else    :broken)
+     world]))
 
 (defn runic-chance [depth]
   (cond
@@ -380,12 +407,18 @@
 ;; --- Floor Loot Generation ---
 
 (defn roll-floor-loot
-  "Generate a vector of item descriptors for a floor.
-   Each descriptor: {:template :key :enchant N :runic {:runes [...] :name str} or nil}"
-  [depth]
-  (let [budget (atom (+ 6 depth (rand-int 3)))
-        counts (atom {})  ;; category -> count
-        ;; compute effective weights
+  "Generate a vector of item descriptors for a floor deterministically.
+   Returns [items world'].
+   Each item: {:template :key :enchant N :runic {:runes [...] :name str} or nil}
+
+   Implementation note: atoms (budget, counts, items) handle in-iteration
+   accumulation cleanly. The world is threaded across iterations via the
+   outer loop's recur. Each iteration uses slot as a with-context anchor."
+  [world depth]
+  (let [w (det/with-context world [:itemgen :floor-loot depth])
+        [budget-roll w] (det/int-in w 0 3)
+        budget (atom (+ 6 depth budget-roll))
+        counts (atom {})
         weighted (vec (filter
                         #(> (:eff-weight %) 0.01)
                         (mapv (fn [entry]
@@ -394,40 +427,52 @@
                                           (depth-freq depth (:peak entry) (:spread entry)))))
                               loot-table)))
         items (atom [])]
-    (dotimes [_ 30]  ;; max 30 attempts
-      (when (> @budget 0)
-        (let [;; filter by budget and category caps
+    (loop [slot 0
+           w w]
+      (if (or (>= slot 30) (<= @budget 0))
+        [@items w]
+        (let [w (det/with-context w [:itemgen :floor-loot-slot depth slot])
               available (vec (filter
                               (fn [e]
                                 (and (<= (:cost e) @budget)
                                      (< (get @counts (:category e) 0)
                                         (get category-caps (:category e) 99))))
                               weighted))]
-          (when (seq available)
-            (when-let [pick (weighted-pick available)]
-              (let [cat (:category pick)
-                    tpl (:template pick)
-                    ;; roll enchant for weapons and armor
-                    enchant (if (or (= cat :weapon) (= cat :armor))
-                              (roll-enchant depth) 0)
-                    ;; roll runic for weapons and armor
-                    is-runic (and (or (= cat :weapon) (= cat :armor))
-                                  (< (rand) (runic-chance depth)))
-                    runic (when is-runic
-                            (generate-runic-program depth (roll-quality-tier)))
-                    cost (+ (:cost pick) (if is-runic 2 0))]
-                (when (<= cost @budget)
-                  (swap! budget - cost)
-                  (swap! counts update cat #(inc (or % 0)))
-                  (swap! items conj {:template tpl
-                                     :enchant enchant
-                                     :runic runic}))))))))
-    @items))
+          (if-not (seq available)
+            (recur (inc slot) w)
+            (let [[pick w] (weighted-pick w available)]
+              (if (nil? pick)
+                (recur (inc slot) w)
+                (let [cat (:category pick)
+                      tpl (:template pick)
+                      is-weapon-or-armor (or (= cat :weapon) (= cat :armor))
+                      [enchant w] (if is-weapon-or-armor
+                                    (roll-enchant w depth slot)
+                                    [0 w])
+                      [is-runic w] (if is-weapon-or-armor
+                                     (det/percent? w (int (* 100 (runic-chance depth))))
+                                     [false w])
+                      [runic w] (if is-runic
+                                  (let [[tier w] (roll-quality-tier w depth slot)]
+                                    (generate-runic-program w depth slot tier))
+                                  [nil w])
+                      cost (+ (:cost pick) (if is-runic 2 0))]
+                  (when (<= cost @budget)
+                    (swap! budget - cost)
+                    (swap! counts update cat #(inc (or % 0)))
+                    (swap! items conj {:template tpl
+                                       :enchant enchant
+                                       :runic runic}))
+                  (recur (inc slot) w))))))))))
+
 
 ;; --- Legacy API (still used by populate-room until world.lg is updated) ---
 
-(defn random-loot [depth]
-  (let [items (roll-floor-loot depth)]
+(defn random-loot
+  "Pick a single random item template deterministically. Returns [template world']."
+  [world depth]
+  (let [[items world] (roll-floor-loot world depth)]
     (if (seq items)
-      (:template (nth items (rand-int (count items))))
-      :health-potion)))
+      (let [[item world] (det/pick world items)]
+        [(:template item) world])
+      [:health-potion world])))

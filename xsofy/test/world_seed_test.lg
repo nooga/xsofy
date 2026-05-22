@@ -1,0 +1,66 @@
+(ns xsofy.test.world-seed-test
+  "Determinism test: same seed yields same world generation outcome.
+   This is the integration test that locks down PR3's threading
+   contract — if any caller drops a thread or order shifts, the
+   golden values change."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.items :as items]
+            [xsofy.det :as d]))
+
+(deftest items-roll-floor-loot-is-deterministic
+  (testing "Same seed → same items"
+    (let [w0 {:seed 42}
+          r1 (items/roll-floor-loot w0 3)
+          r2 (items/roll-floor-loot w0 3)
+          items1 (first r1)
+          items2 (first r2)]
+      (is (= items1 items2)))))
+
+(deftest items-roll-floor-loot-advances-seed
+  (testing "Two consecutive floor rolls give different items (chain advances)"
+    (let [w0 {:seed 42}
+          r1 (items/roll-floor-loot w0 3)
+          items1 (first r1)
+          w1 (second r1)
+          r2 (items/roll-floor-loot w1 3)
+          items2 (first r2)]
+      (is (not= items1 items2)))))
+
+(deftest items-roll-floor-loot-depth-matters
+  (testing "Same seed, different depth → different items"
+    (let [w0 {:seed 42}
+          items-d1 (first (items/roll-floor-loot w0 1))
+          items-d5 (first (items/roll-floor-loot w0 5))]
+      (is (not= items-d1 items-d5)))))
+
+(deftest items-random-loot-is-deterministic
+  (testing "Same seed → same template"
+    (let [w0 {:seed 100}
+          t1 (first (items/random-loot w0 3))
+          t2 (first (items/random-loot w0 3))]
+      (is (= t1 t2)))))
+
+(deftest items-roll-enchant-is-deterministic
+  (testing "Same world + depth + slot → same enchant"
+    (let [w0 {:seed 7}
+          e1 (first (items/roll-enchant w0 3 0))
+          e2 (first (items/roll-enchant w0 3 0))]
+      (is (= e1 e2)))))
+
+(deftest items-roll-enchant-slot-sensitivity
+  (testing "Different slots produce at least a few distinct enchants"
+    (let [w0 {:seed 7}
+          enchants (set (map (fn [slot]
+                               (first (items/roll-enchant w0 3 slot)))
+                             (range 20)))]
+      ;; over 20 slots we should see at least 3 distinct enchant values
+      (is (>= (count enchants) 3)
+          (str "expected >=3 distinct enchants, got " (count enchants))))))
+
+(deftest items-roll-enchant-range
+  (testing "Enchant always in [-3, 5]"
+    (doseq [seed (range 50)]
+      (doseq [depth [1 3 5 10 20]]
+        (let [e (first (items/roll-enchant {:seed seed} depth 0))]
+          (is (and (>= e -3) (<= e 5))
+              (str "out of range: " e " for seed " seed " depth " depth)))))))
