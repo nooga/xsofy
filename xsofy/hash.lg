@@ -1260,7 +1260,7 @@
 
    This is the function every det/ call invokes. The plan:
 
-     (det/int world [:combat :hit a t] lo hi)
+     (det/int-in world [:combat :hit a t] lo hi)
 
    reduces (modulo the macro layer) to
 

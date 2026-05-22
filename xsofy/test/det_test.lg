@@ -1,0 +1,306 @@
+(ns xsofy.test.det-test
+  "Tests for xsofy.det — deterministic randomness via hash-chain over world :seed.
+
+   The new API: every helper returns [value world'] where world' has :seed
+   advanced. Callers thread world. No salt-key parameter; the operation
+   signature + args ARE what gets folded into the chain."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.det :as d]))
+
+;; Helper: extract value from a [value world'] tuple (let-go's chained
+;; vector destructure has been finicky; first/second is reliable).
+(defn- v [r] (first r))
+(defn- w [r] (second r))
+
+;; ============================================================================
+;; advance — the primitive
+;; ============================================================================
+
+(deftest advance-is-deterministic
+  (testing "Same (world, contextual) yields same advanced :seed"
+    (is (= (:seed (d/advance {:seed 42} [:foo]))
+           (:seed (d/advance {:seed 42} [:foo]))))))
+
+(deftest advance-mutates-seed
+  (testing "Advanced :seed differs from input :seed (under any non-trivial contextual)"
+    (is (not= 42 (:seed (d/advance {:seed 42} [:foo]))))))
+
+(deftest advance-context-sensitivity
+  (testing "Different contextuals give different advanced seeds"
+    (is (not= (:seed (d/advance {:seed 42} [:foo]))
+              (:seed (d/advance {:seed 42} [:bar]))))))
+
+(deftest advance-seed-sensitivity
+  (testing "Different starting seeds give different advanced seeds"
+    (is (not= (:seed (d/advance {:seed 1} [:foo]))
+              (:seed (d/advance {:seed 2} [:foo]))))))
+
+(deftest advance-defaults-missing-seed-to-zero
+  (testing "Missing :seed is treated as 0"
+    (is (= (:seed (d/advance {:seed 0} [:foo]))
+           (:seed (d/advance {} [:foo]))))))
+
+;; ============================================================================
+;; with-context — alias for advance, expresses intent
+;; ============================================================================
+
+(deftest with-context-equals-advance
+  (testing "with-context is functionally equivalent to advance"
+    (is (= (d/advance {:seed 7} [:phase :rooms])
+           (d/with-context {:seed 7} [:phase :rooms])))))
+
+;; ============================================================================
+;; int-in — determinism, range, threading
+;; ============================================================================
+
+(deftest int-in-is-deterministic
+  (testing "Repeated calls with same world yield same value AND same world'"
+    (let [w0 {:seed 42}
+          r1 (d/int-in w0 1 10)
+          r2 (d/int-in w0 1 10)]
+      (is (= (v r1) (v r2)))
+      (is (= (w r1) (w r2))))))
+
+(deftest int-in-advances-seed
+  (testing "Returned world' has different :seed than input"
+    (let [r (d/int-in {:seed 42} 0 100)]
+      (is (not= 42 (:seed (w r)))))))
+
+(deftest int-in-range-correctness
+  (testing "100 samples land in [lo, hi)"
+    (let [lo 3 hi 17]
+      (doseq [i (range 100)]
+        (let [r (d/int-in {:seed i} lo hi)
+              val (v r)]
+          (is (and (>= val lo) (< val hi))
+              (str "out of range: " val " for seed " i)))))))
+
+(deftest int-in-degenerate-range
+  (testing "hi <= lo returns [lo world-unchanged]"
+    (let [w0 {:seed 1}
+          r5 (d/int-in w0 5 5)
+          r10 (d/int-in w0 10 5)]
+      (is (= 5 (v r5)))
+      (is (= w0 (w r5)) "world unchanged when range collapses")
+      (is (= 10 (v r10)))
+      (is (= w0 (w r10))))))
+
+(deftest int-in-consecutive-calls-differ
+  (testing "Two consecutive rolls in the same chain produce different values"
+    (let [r1 (d/int-in {:seed 42} 0 1000000)
+          r2 (d/int-in (w r1) 0 1000000)]
+      (is (not= (v r1) (v r2))))))
+
+;; ============================================================================
+;; pick — pick from coll
+;; ============================================================================
+
+(deftest pick-is-deterministic
+  (testing "Repeated calls return same element AND same advanced world"
+    (let [w0 {:seed 7} coll [:a :b :c :d :e]
+          r1 (d/pick w0 coll)
+          r2 (d/pick w0 coll)]
+      (is (= (v r1) (v r2)))
+      (is (= (w r1) (w r2))))))
+
+(deftest pick-empty-returns-nil
+  (testing "Empty collection yields [nil world-unchanged]"
+    (let [w0 {:seed 1}
+          r (d/pick w0 [])]
+      (is (nil? (v r)))
+      (is (= w0 (w r))))))
+
+(deftest pick-result-is-member
+  (testing "Result is always an element of the input"
+    (let [coll [:a :b :c :d :e]]
+      (doseq [i (range 50)]
+        (is (contains? (set coll) (v (d/pick {:seed i} coll)))
+            (str "non-member result for seed " i))))))
+
+;; ============================================================================
+;; permute — preserves the multiset
+;; ============================================================================
+
+(deftest permute-preserves-multiset
+  (testing "Set of permuted elements equals set of input; count unchanged"
+    (let [coll [1 2 3 4 5 6 7 8 9 10]]
+      (doseq [i (range 20)]
+        (let [shuffled (v (d/permute {:seed i} coll))]
+          (is (= (set coll) (set shuffled)))
+          (is (= (count coll) (count shuffled))))))))
+
+(deftest permute-preserves-frequencies
+  (testing "Frequency map preserved (multiset, not just set)"
+    (let [coll [:a :a :b :b :b :c]]
+      (doseq [i (range 10)]
+        (let [shuffled (v (d/permute {:seed i} coll))]
+          (is (= (frequencies coll) (frequencies shuffled))))))))
+
+(deftest permute-empty-and-singleton
+  (testing "Edge cases: empty and single-element collections"
+    (let [w0 {:seed 1}
+          r0 (d/permute w0 [])
+          r1 (d/permute w0 [:x])]
+      (is (= [] (v r0)))
+      (is (= w0 (w r0)) "empty input doesn't advance seed")
+      (is (= [:x] (v r1)))
+      (is (= w0 (w r1)) "singleton doesn't advance seed"))))
+
+(deftest permute-produces-distinct-orderings
+  (testing "Across many seeds, permute yields multiple distinct orderings"
+    (let [coll [1 2 3 4 5]
+          perms (set (map (fn [i] (v (d/permute {:seed i} coll)))
+                          (range 20)))]
+      (is (>= (count perms) 10)))))
+
+;; ============================================================================
+;; percent?
+;; ============================================================================
+
+(deftest percent?-is-deterministic
+  (testing "Repeated calls return same boolean and same world"
+    (let [w0 {:seed 7}
+          r1 (d/percent? w0 30)
+          r2 (d/percent? w0 30)]
+      (is (= (v r1) (v r2)))
+      (is (= (w r1) (w r2))))))
+
+(deftest percent?-calibration
+  (testing "Over 1000 trials at chance=30, hit ratio is roughly 0.3"
+    (let [trials 1000
+          chance 30
+          hits (count (filter (fn [i] (v (d/percent? {:seed i} chance)))
+                              (range trials)))
+          ratio (/ hits (clojure.core/double trials))]
+      (is (and (> ratio 0.25) (< ratio 0.35))
+          (str "expected ~0.3, got " ratio " (" hits "/" trials ")")))))
+
+(deftest percent?-extremes
+  (testing "chance=0 always false; chance=100 always true"
+    (doseq [i (range 50)]
+      (is (false? (v (d/percent? {:seed i} 0))))
+      (is (true? (v (d/percent? {:seed i} 100)))))))
+
+;; ============================================================================
+;; unit — float in [0, 1)
+;; ============================================================================
+
+(deftest unit-is-deterministic
+  (testing "Repeated calls return same float and same world"
+    (let [w0 {:seed 7}
+          r1 (d/unit w0)
+          r2 (d/unit w0)]
+      (is (= (v r1) (v r2)))
+      (is (= (w r1) (w r2))))))
+
+(deftest unit-range-correctness
+  (testing "100 samples all land in [0.0, 1.0)"
+    (doseq [i (range 100)]
+      (let [val (v (d/unit {:seed i}))]
+        (is (and (>= val 0.0) (< val 1.0))
+            (str "out of range: " val " for seed " i))))))
+
+;; ============================================================================
+;; next-id — counter increment (independent of seed chain)
+;; ============================================================================
+
+(deftest next-id-increments
+  (testing "Consecutive calls produce different ids and grow :next-id"
+    (let [r1 (d/next-id {} :rat)
+          r2 (d/next-id (w r1) :rat)
+          r3 (d/next-id (w r2) :rat)]
+      (is (= :rat-1 (v r1)))
+      (is (= :rat-2 (v r2)))
+      (is (= :rat-3 (v r3)))
+      (is (= 1 (:next-id (w r1))))
+      (is (= 2 (:next-id (w r2))))
+      (is (= 3 (:next-id (w r3)))))))
+
+(deftest next-id-prefix-determines-name
+  (testing "The prefix keyword becomes the id name's prefix"
+    (is (= :goblin-1 (v (d/next-id {} :goblin))))))
+
+(deftest next-id-preserves-other-world-keys
+  (testing "next-id only touches :next-id, leaves everything else alone"
+    (let [w0 {:seed 42 :other :value :nested {:a 1}}
+          r (d/next-id w0 :rat)
+          w' (w r)]
+      (is (= 42 (:seed w')))
+      (is (= :value (:other w')))
+      (is (= {:a 1} (:nested w'))))))
+
+(deftest next-id-does-not-advance-seed
+  (testing "next-id is purely counter-based; :seed is untouched"
+    (let [w0 {:seed 42}
+          r (d/next-id w0 :rat)
+          w' (w r)]
+      (is (= 42 (:seed w'))))))
+
+;; ============================================================================
+;; Threading — chained calls produce a coherent sequence
+;; ============================================================================
+
+(deftest chained-calls-produce-distinct-values
+  (testing "Five rolls in sequence produce five different values"
+    (let [r1 (d/int-in {:seed 1} 0 1000000)
+          r2 (d/int-in (w r1) 0 1000000)
+          r3 (d/int-in (w r2) 0 1000000)
+          r4 (d/int-in (w r3) 0 1000000)
+          r5 (d/int-in (w r4) 0 1000000)
+          vals [(v r1) (v r2) (v r3) (v r4) (v r5)]]
+      (is (= 5 (count (set vals)))))))
+
+(deftest mixed-helpers-thread-cleanly
+  (testing "int-in then unit then pick then percent? all reading the same world chain"
+    (let [r1 (d/int-in {:seed 1} 0 100)
+          r2 (d/unit (w r1))
+          r3 (d/pick (w r2) [:a :b :c])
+          r4 (d/percent? (w r3) 50)]
+      ;; Just verify no error and final world is fully-advanced
+      (is (not= 1 (:seed (w r4))))
+      (is (number? (v r1)))
+      (is (number? (v r2)))
+      (is (keyword? (v r3)))
+      (is (boolean? (v r4))))))
+
+;; ============================================================================
+;; with-context — refactor stability anchor
+;; ============================================================================
+
+(deftest with-context-changes-downstream-rolls
+  (testing "Anchoring with a context changes the values of subsequent rolls"
+    (let [w0 {:seed 42}
+          ;; Without context
+          r-plain (d/int-in w0 0 1000000)
+          ;; With context first
+          r-anchored (d/int-in (d/with-context w0 [:my-phase]) 0 1000000)]
+      (is (not= (v r-plain) (v r-anchored))))))
+
+;; ============================================================================
+;; Property tests
+;; ============================================================================
+
+(def gen-seed (c/gen-int 0 1000000))
+(def gen-span (c/gen-int 1 1000))
+
+(c/defprop int-in-stays-in-range
+  [seed gen-seed
+   lo (c/gen-int -10000 10000)
+   span gen-span]
+  (let [hi (+ lo span)
+        val (v (d/int-in {:seed seed} lo hi))]
+    (and (>= val lo) (< val hi))))
+
+(c/defprop unit-stays-in-unit-interval
+  [seed gen-seed]
+  (let [val (v (d/unit {:seed seed}))]
+    (and (>= val 0.0) (< val 1.0))))
+
+(c/defprop permute-preserves-count
+  [seed gen-seed
+   n (c/gen-int 0 12)]
+  (let [coll (vec (range n))
+        shuffled (v (d/permute {:seed seed} coll))]
+    (and (= (count coll) (count shuffled))
+         (= (set coll) (set shuffled)))))

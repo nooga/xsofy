@@ -1,0 +1,150 @@
+(ns xsofy.det
+  "Deterministic randomness via a rolling hash chain over world :seed.
+
+   Model: the world IS the RNG state. Every det/* helper:
+     1. Folds the operation's signature into (:seed world) via xxh3-64,
+        producing a new seed.
+     2. Derives a return value from the new seed.
+     3. Returns [value world'] where world' has :seed advanced.
+
+   This unifies the spec's earlier 'salt' and 'action' concepts: both are
+   just bytes that get hashed into the seed. The dispatcher's per-action
+   advance and a within-action roll's advance are the same primitive.
+
+   Independence: two consecutive rolls produce different values because
+   the first one mutated :seed. No explicit salt-key parameter is needed
+   for disambiguation.
+
+   Refactor stability: rolls are stable so long as the call sequence
+   doesn't change. If you reorder rolls, downstream values shift. To
+   bind a phase of rolls to a stable identifier (e.g. so renaming the
+   surrounding code doesn't shift the chain), use det/with-context to
+   fold an explicit anchor in first.
+
+   Naming: every helper avoids shadowing clojure.core. det/int-in,
+   det/pick, det/unit, det/permute (not int, nth, float, shuffle). The
+   destructure macro in let-go expands to unqualified nth; shadowing it
+   from this ns silently breaks destructuring in any namespace that
+   requires xsofy.det. (See det/pick docstring.)"
+  (:require [xsofy.hash :as h]))
+
+;; -------------------------------------------------------------------------
+;; Primitive
+;; -------------------------------------------------------------------------
+
+(defn advance
+  "Fold contextual into world's :seed and return the new world. The
+   contextual can be any value the salt encoder accepts (keyword, int,
+   string, vector, map). This is the single mutation primitive; every
+   higher-level helper is built on it.
+
+   Defaults :seed to 0 if missing, so worlds constructed without an
+   explicit seed still hash consistently."
+  [world contextual]
+  (let [old-seed (or (:seed world) 0)
+        new-seed (h/combine old-seed contextual)]
+    (assoc world :seed new-seed)))
+
+(defn with-context
+  "Anchor subsequent rolls under an explicit identifier. Equivalent to
+   advance, but expresses intent: 'all rolls from here forward in this
+   phase are tagged by this context.' Useful for refactor stability —
+   if you wrap a phase like (with-context world [:worldgen :phase :rooms]),
+   reorderings of work outside that phase don't shift the rolls inside."
+  [world context]
+  (advance world context))
+
+(defn- step
+  "Internal: advance world by op-signature, return [seed' world']."
+  [world op-signature]
+  (let [w' (advance world op-signature)]
+    [(:seed w') w']))
+
+;; -------------------------------------------------------------------------
+;; Helpers — each returns [value world'] with seed advanced
+;; -------------------------------------------------------------------------
+
+(defn int-in
+  "Integer in [lo, hi). Returns [lo world] if hi <= lo.
+
+   Maps a u64 hash to the requested span via (mod h span). For non-power-of-2
+   spans this is slightly biased, which is fine for game randomness — the bias
+   is bounded by span / 2^64 and invisible at the scale of die rolls.
+
+   Relies on let-go's `mod` returning non-negative for positive divisor
+   (Clojure parity): (mod -5 7) = 2, not -5."
+  [world lo hi]
+  (if (<= hi lo)
+    [lo world]
+    (let [[seed w'] (step world [:int-in lo hi])
+          span (unchecked-subtract hi lo)]
+      [(unchecked-add lo (mod seed span)) w'])))
+
+(defn pick
+  "Pick an element from coll. Returns [nil world] if coll is empty.
+
+   Named pick (not nth) to avoid shadowing clojure.core/nth — the
+   destructure macro expands to unqualified `nth`, and a same-named def
+   here would silently break destructuring in downstream code."
+  [world coll]
+  (let [v (vec coll)
+        n (count v)]
+    (if (zero? n)
+      [nil world]
+      (let [[i w'] (int-in world 0 n)]
+        [(nth v i) w']))))
+
+(defn percent?
+  "True with probability chance/100, where chance is an int in [0, 100].
+   Returns [bool world']."
+  [world chance]
+  (let [[i w'] (int-in world 0 100)]
+    [(< i chance) w']))
+
+(defn unit
+  "Float in [0.0, 1.0). Returns [float world'].
+
+   Implementation: take the advanced u64 mod 1_000_000 then divide by
+   1_000_000.0. Six digits of precision; sidesteps subtle u64-to-double
+   conversion edge cases.
+
+   Named unit (not float) to avoid shadowing clojure.core/float. The
+   'unit' refers to the unit interval [0, 1)."
+  [world]
+  (let [[seed w'] (step world [:unit])]
+    [(/ (mod seed 1000000) 1000000.0) w']))
+
+(defn permute
+  "Permute coll. Returns [vector world'].
+
+   Fisher-Yates: each swap step advances the chain, naturally producing
+   independent indices.
+
+   Named permute (not shuffle) to avoid shadowing clojure.core/shuffle."
+  [world coll]
+  (let [v (vec coll)
+        n (count v)]
+    (if (<= n 1)
+      [v world]
+      (loop [arr v
+             i (dec n)
+             w world]
+        (if (<= i 0)
+          [arr w]
+          (let [[j w'] (int-in w 0 (inc i))
+                a (nth arr i)
+                b (nth arr j)]
+            (recur (assoc (assoc arr i b) j a)
+                   (dec i)
+                   w')))))))
+
+(defn next-id
+  "Generate a fresh entity id keyed by prefix (a keyword).
+   Returns [id world'] with :next-id incremented.
+
+   Unlike the other helpers, this is a pure counter increment — no
+   hash-chain involvement. The counter is independent of :seed."
+  [world prefix]
+  (let [n  (inc (or (:next-id world) 0))
+        id (keyword (str (name prefix) "-" n))]
+    [id (assoc world :next-id n)]))
