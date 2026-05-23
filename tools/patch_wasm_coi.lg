@@ -1,0 +1,106 @@
+(ns tools.patch-wasm-coi
+  (:require [string :as str]
+            [os]))
+
+(def index-path
+  (let [path (getenv "XSOFY_WASM_INDEX")]
+    (if (and path (> (count path) 0))
+      path
+      "dist/index.html")))
+
+(def coi-start-marker
+  "// --- Cross-origin isolation: prefer server headers, fall back to SW ---")
+
+(def wasm-marker
+  "// --- Inline wasm_exec.js and WASM data ---")
+
+(def entry-before
+  (str "    } else {\n"
+       "      await startMainThreadMode();\n"
+       "    }"))
+
+(def entry-after
+  (str "    } else if (!window.__lgCoiPending) {\n"
+       "      await startMainThreadMode();\n"
+       "    } else {\n"
+       "      status.textContent = 'enabling browser isolation...';\n"
+       "    }"))
+
+(def coi-block
+  (str coi-start-marker "\n"
+       "// GitHub Pages cannot send COOP/COEP headers directly. The let-go\n"
+       "// service-worker shim adds them, but the first reload can race activation.\n"
+       "// Keep retrying a bounded number of times before falling back to output-only\n"
+       "// mode, so terminal input does not start until SharedArrayBuffer is available.\n"
+       "window.__lgCoiPending = false;\n"
+       "const LG_COI_RETRY_PARAM = '_lg_coi_retry';\n"
+       "function lgSetStatus(text) {\n"
+       "  const el = document.getElementById('status');\n"
+       "  if (el) el.textContent = text;\n"
+       "}\n"
+       "function lgReloadWithRetry(retry) {\n"
+       "  const next = new URL(location.href);\n"
+       "  next.searchParams.set(LG_COI_RETRY_PARAM, String(retry + 1));\n"
+       "  location.replace(next.href);\n"
+       "}\n"
+       "if (crossOriginIsolated && 'serviceWorker' in navigator) {\n"
+       "  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});\n"
+       "  if (location.search.includes(LG_COI_RETRY_PARAM)) {\n"
+       "    const url = new URL(location.href);\n"
+       "    url.searchParams.delete(LG_COI_RETRY_PARAM);\n"
+       "    history.replaceState(null, '', url.href);\n"
+       "  }\n"
+       "}\n"
+       "if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigator) {\n"
+       "  const url = new URL(location.href);\n"
+       "  const retry = Number(url.searchParams.get(LG_COI_RETRY_PARAM) || '0');\n"
+       "  if (retry < 6) {\n"
+       "    window.__lgCoiPending = true;\n"
+       "    lgSetStatus('enabling browser isolation...');\n"
+       "    navigator.serviceWorker.register('coi-serviceworker.js')\n"
+       "      .then(() => navigator.serviceWorker.ready)\n"
+       "      .then(() => {\n"
+       "        if (navigator.serviceWorker.controller) {\n"
+       "          lgReloadWithRetry(retry);\n"
+       "        } else {\n"
+       "          navigator.serviceWorker.addEventListener('controllerchange', () => lgReloadWithRetry(retry), {once: true});\n"
+       "          setTimeout(() => lgReloadWithRetry(retry), 1000);\n"
+       "        }\n"
+       "      })\n"
+       "      .catch(() => lgReloadWithRetry(retry));\n"
+       "  }\n"
+       "}\n\n"
+       wasm-marker))
+
+(defn abort! [message]
+  (println message)
+  (os/exit 1))
+
+(defn replace-range [s start-marker end-marker replacement]
+  (let [start (str/index-of s start-marker)]
+    (when (nil? start)
+      (abort! (str "missing marker: " start-marker)))
+    (let [end (str/index-of s end-marker start)]
+      (when (nil? end)
+        (abort! (str "missing marker: " end-marker)))
+      (str (subs s 0 start)
+           replacement
+           (subs s (+ end (count end-marker)))))))
+
+(defn replace-exact [s needle replacement]
+  (let [idx (str/index-of s needle)]
+    (if (nil? idx)
+      (if (str/includes? s replacement)
+        s
+        (abort! "missing main-thread entry guard"))
+      (str (subs s 0 idx)
+           replacement
+           (subs s (+ idx (count needle)))))))
+
+(let [html (slurp index-path)
+      html (replace-range html coi-start-marker wasm-marker coi-block)
+      html (replace-exact html entry-before entry-after)]
+  (when-not (str/includes? html "__lgCoiPending")
+    (abort! "failed to patch COI startup guard"))
+  (spit index-path html)
+  (println (str "patched " index-path)))
