@@ -14,6 +14,9 @@
 (def wasm-marker
   "// --- Inline wasm_exec.js and WASM data ---")
 
+(def wasm-const-marker
+  "const WASM_EXEC_JS")
+
 (def entry-before
   (str "    } else {\n"
        "      await startMainThreadMode();\n"
@@ -77,15 +80,15 @@
   (os/exit 1))
 
 (defn replace-range [s start-marker end-marker replacement]
-  (let [start (str/index-of s start-marker)]
-    (when (nil? start)
-      (abort! (str "missing marker: " start-marker)))
-    (let [end (str/index-of s end-marker start)]
-      (when (nil? end)
-        (abort! (str "missing marker: " end-marker)))
-      (str (subs s 0 start)
+  (let [start-parts (vec (str/split s start-marker))]
+    (when (not= 2 (count start-parts))
+      (abort! (str "missing or repeated marker: " start-marker)))
+    (let [end-parts (vec (str/split (nth start-parts 1) end-marker))]
+      (when (not= 2 (count end-parts))
+        (abort! (str "missing or repeated marker: " end-marker)))
+      (str (nth start-parts 0)
            replacement
-           (subs s (+ end (count end-marker)))))))
+           (nth end-parts 1)))))
 
 (defn replace-exact [s needle replacement]
   (let [idx (str/index-of s needle)]
@@ -102,5 +105,7 @@
       html (replace-exact html entry-before entry-after)]
   (when-not (str/includes? html "__lgCoiPending")
     (abort! "failed to patch COI startup guard"))
+  (when-not (str/includes? html wasm-const-marker)
+    (abort! "failed to preserve WASM bootstrap"))
   (spit index-path html)
   (println (str "patched " index-path)))
