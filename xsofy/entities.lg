@@ -4,11 +4,23 @@
 ;; --- Registry ---
 
 (def templates (atom {}))
-(def id-counter (atom 0))
 
-(defn next-id [prefix]
-  (let [n (swap! id-counter inc)]
-    (keyword (str (name prefix) "-" n))))
+(defn next-id
+  "Allocate a fresh entity ID by rolling a 31-bit int from the world's seed
+   chain. Returns [id world'] where world's :seed is advanced by one step
+   and the id is :prefix-N where N is the rolled int.
+
+   No global counter — this is purely a function of the world's current
+   seed. Two replays from the same seed allocate identical IDs in the
+   same order.
+
+   Collision-resistant: 31-bit space (~2.1B values). Per-floor entity
+   counts are O(10), so collision odds are negligible (~10^-9 per pair)."
+  [world prefix]
+  (let [pair (det/int-in world 0 2147483647)
+        n (first pair)
+        w' (second pair)]
+    [(keyword (str (name prefix) "-" n)) w']))
 
 ;; --- Deep Merge ---
 
@@ -132,7 +144,9 @@
 (defn spawn [world species pos]
   (let [template (get @templates species)
         _ (when (nil? template) (throw (str "Unknown species: " species)))
-        id (next-id species)
+        id-pair (next-id world species)
+        id (first id-pair)
+        world (second id-pair)
         body (:body template)
         instance (-> template
                      (assoc :id id
@@ -147,7 +161,9 @@
 (defn spawn-item [world species pos]
   (let [template (get @templates species)
         _ (when (nil? template) (throw (str "Unknown item: " species)))
-        id (next-id species)
+        id-pair (next-id world species)
+        id (first id-pair)
+        world (second id-pair)
         instance (-> template
                      (assoc :id id
                             :template species
@@ -160,7 +176,9 @@
   (let [species (:template descriptor)
         template (get @templates species)
         _ (when (nil? template) (throw (str "Unknown item: " species)))
-        id (next-id species)
+        id-pair (next-id world species)
+        id (first id-pair)
+        world (second id-pair)
         enchant (or (:enchant descriptor) 0)
         runic (:runic descriptor)
         instance (-> template
