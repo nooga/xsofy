@@ -1,4 +1,4 @@
-# Spell DSL Specification v2
+# Spell DSL Specification v3
 
 ## Overview
 
@@ -357,6 +357,152 @@ store X ... recall X
 ```
 
 This enables computed spells: store a damage amount, use it later for healing. Store the result of one effect, apply it to another. Turing complete? Maybe. That's fine.
+
+## Cost Economics — Enchantment Points + Mana
+
+*(Design direction recovered from 2026-05-17 sessions; not yet implemented.)*
+
+Every rune **evaluated** costs one point, drawn in cascade order:
+
+1. A point of the **item's enchantment level**, if any remains.
+2. A point of the caster's **mana**, once enchantment is exhausted.
+
+This unifies fuel/budget, per-rune evaluation cost, and cursed-item dynamics
+into a single resource model. Discovery is therefore an *economic* choice —
+you cannot observe the language for free.
+
+**Failed runes still cost.** Two models were weighed:
+
+| Model        | Rule                                   | Trade-off |
+|--------------|----------------------------------------|-----------|
+| **Full cost** *(preferred)* | 1 per failed step, same as success | Simple, unifies the cost model, punitive |
+| Fizzle tax   | Flat 1 HP regardless of steps failed   | Friendlier discovery, but a special case |
+
+## Discovery — Incomplete Spells Leak by Category
+
+*(Design direction recovered from 2026-05-17; not yet implemented.)*
+
+Incomplete or failed spells must **not** fail silently. Each failed rune emits
+**category-level** feedback — proportional but indistinct — so players can
+reverse-engineer the language by reading the runtime trace (the "isekai
+programmer discovers the compiler" framing). Crucially, leaks reveal the
+*category*, never the specific rune.
+
+| Category                              | Leak on failure                                   |
+|---------------------------------------|---------------------------------------------------|
+| Elemental (fire, ice, poison, arc)    | spark / frost / wisp / crackle VFX at cursor, no damage |
+| Damage / impact (damage, push, arc)   | 1 HP damage flash at target                       |
+| Heal / life                           | 1 HP heal with glow                               |
+| Mana / transfer (take, give, friend)  | 1 MP drain/grant between caster and target        |
+| Selectors (self, nearest, target)     | brief highlight of would-be cursor positions      |
+| Cursor modifiers (area, spread)       | highlight modified-area cells                     |
+| Math / structural (apply, mul, add, blank, result) | **no leak** (purely structural)      |
+| Time (future, past)                   | temporal shimmer at caster                        |
+
+This composes with the parser-leak guard below: leaks are *deliberate,
+categorical* signals; internal error-maps are not.
+
+### Parser-leak guard (property)
+
+The parser produces error-maps mid-stream
+(`{:reason :bad-argument :rune :add :args [nil nil] :error true}`). These must
+never reach the player. Target property:
+
+> For any parseable rune sequence, `format-sexp` returns a string containing no
+> `:error`, `:reason`, or other internal-shape markers.
+
+## The Five-Role Model
+
+*(Recovered from 2026-05-17. The positions-as-cursors decision is already live;
+the `:container` role is the main open gap — see below.)*
+
+Every spell resolves through five roles. Borrowed loosely from MTG's
+actor/subject framing:
+
+| Role            | In ctx       | Meaning                                              |
+|-----------------|--------------|------------------------------------------------------|
+| **Actor**       | `:caster`    | entity that initiated the spell                      |
+| **Subject**     | `:cursors`   | positions where effects apply (**positions, not entities**) |
+| **Container**   | `:container` *(planned)* | the item the runes fire from               |
+| **Action**      | each step    | the effect itself                                    |
+| **Environment** | `:world`     | shared world state all spells resolve into           |
+
+**Targets are positions, not entities** — intentional, so one spell can:
+damage whoever stands on a tile (now or after `:wait` steps), light empty tiles,
+push from vacated cells, freeze water, or transmute terrain.
+
+## Container-Aware Runes (the main open gap)
+
+*(Recovered from 2026-05-17 / 2026-05-20. Partially implemented.)*
+
+The source item is a first-class part of a spell's identity. Different
+container types fire on different triggers:
+
+| Container | Trigger        | Status                                            |
+|-----------|----------------|---------------------------------------------------|
+| Weapon    | on-hit (melee) | **Live** — `world.lg` melee-attack reads `(:runes wep)` |
+| (creature)| on-hit / on-shot | **Live** — falls back to `(:runes attacker)` / fires `(:spell-runes attacker)` at projectile impact |
+| Armor     | on-take-hit    | **Gap** — inscribable & stored, but never fired   |
+| Ring      | on-turn        | **Gap** — slot exists, nothing fires              |
+| Shield    | on-block       | **Gap** — not yet in slot system                  |
+| Wand/staff| on-use         | **Gap** — designed, unimplemented                 |
+
+Plan: add a `:container` field to ctx so runes can query their source item,
+behave by container type (e.g. "amplify if container is +3"), drain HP from
+cursed items, and restrict to slot types. **Design this as one unified
+container-rune system, not per-item patches** — armor (hit-triggered), ring
+(per-turn), shield (block-triggered), and wand (use-triggered) share the
+mechanism, differing only in trigger event.
+
+> Note: container-aware runes are *why armor can't be inscribed usefully today* —
+> inscription works, but `damage-entity` never reads `(:runes armor)` on the
+> defender, so the runes are dead data. The fix is the trigger layer, not the
+> parser.
+
+## Creature Abilities Are Rune Programs
+
+*(Recovered from 2026-05-17. Core mechanism is live; named signatures are the
+next layer.)*
+
+Creatures and players share **one evaluator** (`spell/eval-spell`). Monster
+abilities are not hardcoded — they are rune sequences inscribed on the creature
+entity, fired through the same pipeline:
+
+- Melee: `(:runes attacker)` fires on hit (`world.lg` melee-attack).
+- Ranged: `(:spell-runes attacker)` fires at projectile impact (`ranged-attack`).
+
+**Cones and breath are just cursor shapes.** Area/directional effects come from
+selector + modifier runes, not bespoke code:
+
+```clojure
+;; dragon fire breath — already live in bestiary.lg
+{:spell-runes [:apply :area 2 :fire]}    ; (area 2) fire
+
+;; ice cone
+{:spell-runes [:apply :area 1 :ice]}     ; (area 1) ice
+
+;; spider web-on-hit
+{:spell-runes [:web]}
+
+;; vampiric melee (fires via :runes on hit)
+{:runes [:apply :damage 2 :self :apply :heal 1]}
+```
+
+### Signature spells (planned)
+
+High-tier creatures ship pre-named, multi-rune programs as innate runes. The
+fire-imp's spell is bare `(fire)`; an elder fire-drake's
+`(area 5) (repeat 3) fire (push)` is **"Cinder Storm"** — the creature
+*announces* it, the spell takes 2–3 turns to wind up, and the player has time to
+retreat. Wind-up time scales with program length.
+
+### Magic resistance (planned)
+
+Unlike armor's flat reduction, magic resistance is **percentage-based**,
+enabling partial transfers rather than binary save-or-fail. A wraith with 50%
+resistance, drained for 4 MP, yields the caster 2 MP. Players learn how
+resistance varies across creatures by repeated experimentation — discovery
+gameplay.
 
 ## Implementation Notes
 
