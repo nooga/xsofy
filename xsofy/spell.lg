@@ -115,21 +115,21 @@
 ;; --- Effect Primitives (do things at cursors) ---
 
 (defn r-damage [ctx amount]
-  (let [total (atom 0)
-        new-hits (atom (:hits ctx))
-        w (reduce
-            (fn [world pos]
-              (let [targets (u/targets-at world pos (:caster ctx))]
-                (reduce (fn [w e]
-                          (let [armor (get-in e [:body :armor] 0)
-                                actual (max 1 (- amount armor))]
-                            (swap! total + actual)
-                            (swap! new-hits conj (:id e))
-                            (ent/damage-entity w (:id e) actual)))
-                        world targets)))
-            (:world ctx)
-            (:cursors ctx))]
-    (assoc ctx :world w :result @total :hits @new-hits)))
+  (let [[w total new-hits]
+        (reduce
+          (fn [[world total hits] pos]
+            (let [targets (u/targets-at world pos (:caster ctx))]
+              (reduce (fn [[w total hits] e]
+                        (let [armor (get-in e [:body :armor] 0)
+                              actual (max 1 (- amount armor))]
+                          [(ent/damage-entity w (:id e) actual)
+                           (+ total actual)
+                           (conj hits (:id e))]))
+                      [world total hits]
+                      targets)))
+          [(:world ctx) 0 (:hits ctx)]
+          (:cursors ctx))]
+    (assoc ctx :world w :result total :hits new-hits)))
 
 (defn r-heal [ctx amount]
   (let [w (reduce
