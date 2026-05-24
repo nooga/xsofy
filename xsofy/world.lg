@@ -398,33 +398,38 @@
 (defn bfs-path [world goal-fn]
   (let [{:keys [terrain width height]} world
         [px py] (get-in world [:entities :player :pos])
-        start [px py]
-        visited (atom #{start})
-        queue (atom [[start nil]])
-        found (atom nil)
-        steps (atom 0)]
-    (loop []
-      (when (and (seq @queue) (nil? @found) (< @steps 3000))
-        (swap! steps inc)
-        (let [[pos first-dir] (first @queue)]
-          (swap! queue #(subvec % 1))
-          (let [[cx cy] pos]
-            (doseq [[dx dy] [[0 -1] [0 1] [-1 0] [1 0]]]
-              (when (nil? @found)
-                (let [nx (+ cx dx) ny (+ cy dy)
-                      npos [nx ny]
-                      tile (terrain/tget terrain width nx ny)]
-                  (when (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
-                             (not (contains? @visited npos))
-                             (or (terrain/walkable? terrain width height nx ny)
-                                 (= tile 11)))
-                    (swap! visited conj npos)
-                    (let [step-dir (or first-dir [dx dy])]
-                      (if (goal-fn npos tile)
-                        (reset! found step-dir)
-                        (swap! queue conj [npos step-dir]))))))))
-          (recur))))
-    @found))
+        start [px py]]
+    (loop [visited #{start}
+           queue [[start nil]]
+           found nil
+           steps 0]
+      (if (or (empty? queue) found (>= steps 3000))
+        found
+        (let [[pos first-dir] (first queue)
+              queue (subvec queue 1)
+              [cx cy] pos
+              state (reduce (fn [[visited queue found] [dx dy]]
+                              (if found
+                                [visited queue found]
+                                (let [nx (+ cx dx) ny (+ cy dy)
+                                      npos [nx ny]
+                                      tile (terrain/tget terrain width nx ny)]
+                                  (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                                           (not (contains? visited npos))
+                                           (or (terrain/walkable? terrain width height nx ny)
+                                               (= tile 11)))
+                                    (let [visited (conj visited npos)
+                                          step-dir (or first-dir [dx dy])]
+                                      (if (goal-fn npos tile)
+                                        [visited queue step-dir]
+                                        [visited (conj queue [npos step-dir]) found]))
+                                    [visited queue found]))))
+                            [visited queue found]
+                            [[0 -1] [0 1] [-1 0] [1 0]])]
+          (recur (first state)
+                 (second state)
+                 (nth state 2)
+                 (inc steps)))))))
 
 (defn route-to-tile [world tile-type]
   (let [memory (or (:memory world) {})
@@ -718,24 +723,26 @@
         dx (math/abs (- x2 x1))
         dy (- (math/abs (- y2 y1)))
         sx (if (< x1 x2) 1 -1)
-        sy (if (< y1 y2) 1 -1)
-        err (atom (+ dx dy))
-        cx (atom x1)
-        cy (atom y1)
-        clear (atom true)]
-    (while (and @clear (not (and (= @cx x2) (= @cy y2))))
-      (let [e2 (* 2 @err)]
-        (when (>= e2 dy)
-          (swap! err + dy)
-          (swap! cx + sx))
-        (when (<= e2 dx)
-          (swap! err + dx)
-          (swap! cy + sy)))
-      ;; check intermediate tiles (not start or end)
-      (when (and @clear (not (and (= @cx x2) (= @cy y2))))
-        (when-not (terrain/transparent? terrain width height @cx @cy)
-          (reset! clear false))))
-    @clear))
+        sy (if (< y1 y2) 1 -1)]
+    (loop [err (+ dx dy)
+           cx x1
+           cy y1
+           clear true]
+      (if (or (not clear) (and (= cx x2) (= cy y2)))
+        clear
+        (let [e2 (* 2 err)
+              [err cx] (if (>= e2 dy)
+                         [(+ err dy) (+ cx sx)]
+                         [err cx])
+              [err cy] (if (<= e2 dx)
+                         [(+ err dx) (+ cy sy)]
+                         [err cy])
+              ;; check intermediate tiles (not start or end)
+              clear (if (and (not (and (= cx x2) (= cy y2)))
+                             (not (terrain/transparent? terrain width height cx cy)))
+                      false
+                      clear)]
+          (recur err cx cy clear))))))
 
 ;; --- Ranged Attack ---
 
