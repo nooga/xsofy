@@ -445,10 +445,10 @@
       (log-msg world "You haven't seen any stairs yet."))))
 
 (defn autoexplore-step [world]
+  (doseq [[k v] (or (:entities world) {})]
+    (when-not (map? v)
+      (dbg/log "BAD ENTITY:" k "=" v)))
   (let [memory (or (:memory world) {})
-        _ (doseq [[k v] (or (:entities world) {})]
-            (when-not (map? v)
-              (dbg/log "BAD ENTITY:" k "=" v)))
         ents (vec (filter (fn [e] (and (some? e) (map? e))) (vals (or (:entities world) {}))))
         floor-items (set (reduce (fn [acc e]
                                    (if (and (:pos e) (= :item (:entity-type e)))

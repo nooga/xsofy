@@ -82,7 +82,7 @@
       {:pos pos :radius 20
        :msg-near (or (:near d) (str "The " who " dies."))
        :msg-mid  (or (:mid d) "You hear something die.")
-       :msg-far  (or (:far d) nil)}
+       :msg-far  (:far d)}
       (death-cry pos who))))
 
 (defn creature-idle-det
