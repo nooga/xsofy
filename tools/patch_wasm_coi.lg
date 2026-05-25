@@ -91,14 +91,21 @@
            (nth end-parts 1)))))
 
 (defn replace-exact [s needle replacement]
-  (let [idx (str/index-of s needle)]
-    (if (nil? idx)
-      (if (str/includes? s replacement)
-        s
-        (abort! "missing main-thread entry guard"))
-      (str (subs s 0 idx)
-           replacement
-           (subs s (+ idx (count needle)))))))
+  ;; Use str/split + cardinality validation rather than (subs + index-of
+  ;; arithmetic): string/index-of returns a byte offset while subs is
+  ;; rune-indexed, so mixing them in (+ idx (count needle)) skews the
+  ;; slice point whenever the input has UTF-8 multibyte characters before
+  ;; the match. The generated WASM HTML contains non-ASCII in its inline
+  ;; template comments (em dashes etc.), so the old splice could land
+  ;; mid-content. This pattern mirrors replace-range above: split on the
+  ;; needle, require exactly one match, fail closed on duplicates.
+  (let [parts (vec (str/split s needle))]
+    (cond
+      (= 2 (count parts))  (str (nth parts 0) replacement (nth parts 1))
+      (= 1 (count parts))  (if (str/includes? s replacement)
+                             s    ;; already patched — idempotent re-run
+                             (abort! "missing main-thread entry guard"))
+      :else                (abort! "main-thread entry guard appears more than once"))))
 
 (let [html (slurp index-path)
       html (replace-range html coi-start-marker wasm-marker coi-block)
