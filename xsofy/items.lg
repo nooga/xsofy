@@ -292,11 +292,17 @@
 ;; --- Procedural Runics ---
 
 ;; Effect pools with weights
+;; :takes-arg gates the (apply <effect> N) inscription shape — only
+;; effects that accept a numeric arg can use it. Without this guard,
+;; the loot generator emitted programs like (apply arc 3) on the
+;; Thundering Flail, which the spell parser rejected with :bad-argument
+;; and apply-spell-result converted into a backfire zap on every hit
+;; (nooga/xsofy#32).
 (def runic-effects
-  [{:effect :fire  :weight 20  :name "flaming"}
-   {:effect :ice   :weight 20  :name "freezing"}
-   {:effect :push  :weight 15  :name "repulsing"}
-   {:effect :arc   :weight 5   :name "thundering"}])
+  [{:effect :fire  :weight 20  :name "flaming"     :takes-arg true}
+   {:effect :ice   :weight 20  :name "freezing"    :takes-arg true}
+   {:effect :push  :weight 15  :name "repulsing"   :takes-arg false}
+   {:effect :arc   :weight 5   :name "thundering"  :takes-arg false}])
 
 (def runic-self-effects
   [{:effect :heal    :weight 15  :name "vampiric"}
@@ -331,8 +337,17 @@
         (case shape
           0 [{:runes [(:effect eff)]
               :name (:name eff)} world]
-          1 [{:runes [:apply (:effect eff) param]
-              :name (:name eff)} world]
+          ;; Shape 1 requires a parametric effect — fall back to shape 0
+          ;; when the picked effect doesn't accept a numeric arg. Without
+          ;; this guard the loot generator emits programs like
+          ;; (apply arc 3) on the Thundering Flail, which the spell parser
+          ;; rejects with :bad-argument and apply-spell-result converts
+          ;; into a backfire zap on every hit (nooga/xsofy#32).
+          1 (if (:takes-arg eff)
+              [{:runes [:apply (:effect eff) param]
+                :name (:name eff)} world]
+              [{:runes [(:effect eff)]
+                :name (:name eff)} world])
           2 (let [[eff2 world] (pick-effect
                                 world
                                 (vec (filter #(not= (:effect %) (:effect eff))

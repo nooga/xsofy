@@ -275,6 +275,57 @@
               (:cursors ctx))]
       (assoc ctx :world w))))
 
+;; Creatures the player can conjure. Excludes :player. Future versions may
+;; gate by depth or weight; for now any non-player species is fair game.
+(def conjurable-species
+  [:rat :goblin :kobold :archer :spider :slime
+   :goblin-shaman :fire-imp :ogre :troll :wraith])
+
+(defn- adjacent-spawn-cell
+  "Random walkable + unoccupied 8-neighbor of pos. nil if none."
+  [world [x y]]
+  (let [{:keys [terrain width height]} world
+        candidates (vec (for [dx [-1 0 1]
+                              dy [-1 0 1]
+                              :when (not (and (zero? dx) (zero? dy)))
+                              :let [nx (+ x dx) ny (+ y dy)]
+                              :when (terrain/walkable? terrain width height nx ny)
+                              :when (nil? (ent/creature-at world [nx ny]))]
+                          [nx ny]))]
+    (when (seq candidates)
+      (nth candidates (rand-int (count candidates))))))
+
+(defn r-conjure
+  "Summon a random creature next to the caster. Stores the new entity's
+   id on :last-conjured-id so a following `friend` rune can flag it. If
+   no adjacent walkable cell is available, sets :fizzle on the ctx so
+   apply-spell-result surfaces a message — soft failure, distinct from
+   :error/backfire (nooga/xsofy#32)."
+  [ctx]
+  (let [world (:world ctx)
+        caster-pos (get-in world [:entities (:caster ctx) :pos])
+        pos (when caster-pos (adjacent-spawn-cell world caster-pos))]
+    (if (nil? pos)
+      (assoc ctx :fizzle {:rune :conjure :reason :no-room})
+      (let [species (nth conjurable-species (rand-int (count conjurable-species)))
+            before (set (keys (:entities world)))
+            w (ent/spawn world species pos)
+            new-id (first (filter #(not (contains? before %))
+                                  (keys (:entities w))))]
+        (-> ctx
+            (assoc :world w)
+            (assoc :last-conjured-id new-id))))))
+
+(defn r-friend
+  "Mark the last conjured creature as :friendly. The AI doesn't yet
+   honor this flag (it always targets the player); see follow-up issue
+   for faction work. Without a prior conjure in this spell, no-op."
+  [ctx]
+  (let [id (:last-conjured-id ctx)]
+    (if (and id (get-in ctx [:world :entities id]))
+      (assoc-in ctx [:world :entities id :friendly] true)
+      ctx)))
+
 (def rune-primitives
   {:self     r-self
    :nearest  r-nearest
@@ -286,7 +337,9 @@
    :ice      r-ice
    :push     r-push
    :arc      r-arc
-   :web      r-web})
+   :web      r-web
+   :conjure  r-conjure    ;; summon random creature adjacent
+   :friend   r-friend})   ;; flag last conjured as :friendly
 
 ;; default args when called bare (no apply)
 (def rune-defaults
@@ -347,4 +400,5 @@
         result (reduce eval-step ctx steps)]
     {:world (:world result)
      :vfx (or (:vfx result) [])
-     :error (:error result)}))
+     :error (:error result)
+     :fizzle (:fizzle result)}))

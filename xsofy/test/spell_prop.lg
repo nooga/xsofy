@@ -3,10 +3,13 @@
    sequence of raw tokens, well-formed or not."
   (:require [test :refer [deftest is testing]]
             [string :as str]
+            [math]
             [xsofy.check :as c]
             [xsofy.check-gen :as g]
             [xsofy.runes :as runes]
-            [xsofy.spell :as spell]))
+            [xsofy.spell :as spell]
+            [xsofy.terrain :as terrain]
+            [xsofy.items :as items]))
 
 ;; --- Layer 1: raw token generators (fuzzing) ---
 
@@ -197,3 +200,97 @@
           s (runes/format-sexp tbl [:nearest :add])]
       (is (not (looks-like-internal-map? s))
           (str "format-sexp leaked internal map: " s)))))
+
+;; nooga/xsofy#32 — conjure and friend were in the rune vocabulary and
+;; documented in spell-dsl.md but had no entries in rune-primitives, so
+;; any spell using them returned :unknown-rune and apply-spell-result
+;; converted that into a backfire.
+
+(defn- player-in-room [pos]
+  (assoc-in (g/minimal-stone-room) [:entities :player]
+            {:id :player :template :player :pos pos
+             :ticks 0 :status {} :statuses {} :inventory []
+             :body {:hp 30 :max-hp 30 :strength 2 :armor 0}}))
+
+(deftest conjure-summons-an-adjacent-creature
+  (testing "Bare :conjure adds one new creature adjacent to the caster."
+    (let [world  (player-in-room [4 4])
+          before (count (:entities world))
+          result (spell/eval-spell world :player [4 4] [:conjure])
+          w'     (:world result)
+          new-ids (filter #(not= % :player) (keys (:entities w')))]
+      (is (nil? (:error result)))
+      (is (= (inc before) (count (:entities w'))))
+      (let [new-id (first new-ids)
+            pos    (get-in w' [:entities new-id :pos])
+            [px py] [4 4]
+            [nx ny] pos]
+        (is (some? pos))
+        (is (and (<= (math/abs (- nx px)) 1)
+                 (<= (math/abs (- ny py)) 1)
+                 (not (and (= nx px) (= ny py)))))))))
+
+(deftest conjure-then-friend-flags-the-new-entity
+  (testing "[:conjure :friend] marks the conjured creature :friendly."
+    (let [world  (player-in-room [4 4])
+          result (spell/eval-spell world :player [4 4] [:conjure :friend])
+          w'     (:world result)
+          new-id (first (filter #(not= % :player) (keys (:entities w'))))]
+      (is (nil? (:error result)))
+      (is (true? (get-in w' [:entities new-id :friendly]))))))
+
+(deftest friend-without-prior-conjure-is-a-quiet-noop
+  (testing "Bare :friend before any conjure must not backfire — no error,
+            no new entities, no :friendly flag flipped anywhere."
+    (let [world  (player-in-room [4 4])
+          result (spell/eval-spell world :player [4 4] [:friend])
+          w'     (:world result)]
+      (is (nil? (:error result)))
+      (is (= (count (:entities world)) (count (:entities w'))))
+      (is (nil? (get-in w' [:entities :player :friendly]))))))
+
+(deftest generated-runic-programs-pass-spell-validation
+  ;; nooga/xsofy#32 — :useful-tier shape 1 emitted (apply <rune> N) for
+  ;; runes that don't accept a numeric arg (:arc, :push), producing the
+  ;; Thundering Flail's on-hit backfire. Sweep every tier to guard the
+  ;; whole loot pipeline.
+  (testing "generate-runic-program never emits a program the spell
+            validator would reject."
+    (doseq [tier [:useful :powerful :dangerous :broken]]
+      (dotimes [_ 100]
+        (let [program (items/generate-runic-program 1 tier)
+              steps   (runes/parse-runes (:runes program))]
+          (doseq [step steps]
+            (cond
+              (keyword? step)
+              (is (contains? spell/rune-primitives step)
+                  (str tier " emitted unknown rune: " step " in " program))
+              (vector? step)
+              (let [rune (first step)
+                    args (rest step)]
+                (is (contains? spell/rune-primitives rune)
+                    (str tier " emitted unknown rune in vector: " rune))
+                (is (spell/valid-rune-args? rune args)
+                    (str tier " emitted invalid args: " step " in " program))))))))))
+
+(deftest conjure-without-room-surfaces-a-fizzle-not-an-error
+  (testing "Conjure with the caster in a fully-walled pocket adds no
+            entity, sets :fizzle on the result so apply-spell-result can
+            surface a message, and does NOT trip :error (which would
+            backfire and zap the caster)."
+    (let [base   (g/minimal-stone-room)
+          ;; Wall off all 3 in-bounds neighbors of (1 1) — the room's
+          ;; corner. (0,*) and (*,0) are already stone walls.
+          _ (terrain/tset! (:terrain base) (:width base) 2 1 8)
+          _ (terrain/tset! (:terrain base) (:width base) 1 2 8)
+          _ (terrain/tset! (:terrain base) (:width base) 2 2 8)
+          world  (assoc-in base [:entities :player]
+                           {:id :player :template :player :pos [1 1]
+                            :ticks 0 :status {} :statuses {} :inventory []
+                            :body {:hp 30 :max-hp 30 :strength 2 :armor 0}})
+          result (spell/eval-spell world :player [1 1] [:conjure])
+          w'     (:world result)]
+      (is (nil? (:error result)))
+      (is (some? (:fizzle result)))
+      (is (= :conjure (:rune (:fizzle result))))
+      (is (= (count (:entities world)) (count (:entities w')))))))
