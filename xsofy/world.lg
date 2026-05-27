@@ -1264,9 +1264,14 @@
               update-fov
               (log-msg "You open the door.")))
 
-      ;; walkable (or reach weapon can attack through walls)
+      ;; walkable, reach weapon, or a non-player creature on the
+      ;; destination cell — bumping a creature on a hazard tile (e.g.
+      ;; wraith over chasm) should attack, not open the leap prompt
+      ;; (nooga/xsofy#28).
       (or (terrain/walkable? terrain width height nx ny)
-          (= :reach (combat/get-attack-pattern world :player)))
+          (= :reach (combat/get-attack-pattern world :player))
+          (let [c (ent/creature-at world [nx ny])]
+            (and c (not= :player (:id c)))))
       (let [pattern (combat/get-attack-pattern world :player)
             wep (ent/get-weapon world :player)
             bump-target (ent/creature-at world [nx ny])
