@@ -133,6 +133,15 @@
               gas (when visible (get gases [x y]))]
           (render-map-tile r x y tile visible remembered lv stain gas))))))
 
+(defn entity-z-priority
+  "Z-order weight for entities sharing a cell — higher wins.
+   Player > creature > item. Mirrors render-map-entities' draw order."
+  [e]
+  (cond
+    (= :player (:id e))         3
+    (= :item (:entity-type e))  1
+    :else                       2))
+
 (defn render-entity [world r entity]
   (when-let [pos (:pos entity)]
     (let [{:keys [fov]} world
@@ -380,6 +389,23 @@
                     [])]
         (recur (rest events) (core/into dirty cells))))))
 
+(defn dirty-cell-entities
+  "Return {pos -> entity} for entities on dirty cells. When multiple
+   entities share a cell, the highest entity-z-priority wins
+   (nooga/xsofy#30)."
+  [entities dirty]
+  (core/reduce (fn [m [_ e]]
+                 (if (and (:pos e) (contains? dirty (:pos e)))
+                   (let [pos (:pos e)
+                         prev (get m pos)]
+                     (if (or (nil? prev)
+                             (< (entity-z-priority prev)
+                                (entity-z-priority e)))
+                       (assoc m pos e)
+                       m))
+                   m))
+               {} entities))
+
 (defn restore-dirty-cells!
   "Redraw only the given cells (map tile + any entity on them)."
   [world r dirty]
@@ -387,13 +413,7 @@
         lights (or (:lights world) [])
         stains (or (:stains world) {})
         gases (or (:gases world) {})
-        ents (:entities world)
-        ;; build pos->entity lookup for dirty cells only
-        pos-ent (core/reduce (fn [m [k e]]
-                               (if (and (:pos e) (contains? dirty (:pos e)))
-                                 (assoc m (:pos e) e)
-                                 m))
-                             {} ents)]
+        pos-ent (dirty-cell-entities (:entities world) dirty)]
     (doseq [[x y] dirty]
       (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
         (let [visible (contains? fov [x y])

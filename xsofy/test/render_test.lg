@@ -27,3 +27,47 @@
       (is (= [] (:entries window)))
       (is (= 0 (:count window)))
       (is (= 0 (:max-scroll window))))))
+
+;; nooga/xsofy#30 — stacked entities on a dirty cell.
+
+(deftest entity-z-priority-ranks-player-over-creature-over-item
+  (let [player  {:id :player :pos [1 1]}
+        monster {:id :goblin-1 :pos [1 1]}
+        item    {:id :sword-3 :entity-type :item :pos [1 1]}]
+    (is (> (render/entity-z-priority player) (render/entity-z-priority monster)))
+    (is (> (render/entity-z-priority monster) (render/entity-z-priority item)))))
+
+(deftest dirty-cell-entities-keeps-monster-when-item-iterates-last
+  ;; Vec of pairs forces deterministic order; item-last is the unhappy case.
+  (let [monster {:id :goblin-1 :pos [5 5]}
+        item    {:id :sword-3 :entity-type :item :pos [5 5]}
+        result  (render/dirty-cell-entities [[:goblin-1 monster]
+                                             [:sword-3 item]]
+                                            #{[5 5]})]
+    (is (= :goblin-1 (:id (get result [5 5]))))))
+
+(deftest dirty-cell-entities-keeps-monster-when-item-iterates-first
+  (let [monster {:id :goblin-1 :pos [5 5]}
+        item    {:id :sword-3 :entity-type :item :pos [5 5]}
+        result  (render/dirty-cell-entities [[:sword-3 item]
+                                             [:goblin-1 monster]]
+                                            #{[5 5]})]
+    (is (= :goblin-1 (:id (get result [5 5]))))))
+
+(deftest dirty-cell-entities-keeps-player-over-monster-and-item
+  (let [player  {:id :player :pos [5 5]}
+        monster {:id :goblin-1 :pos [5 5]}
+        item    {:id :sword-3 :entity-type :item :pos [5 5]}
+        result  (render/dirty-cell-entities [[:sword-3 item]
+                                             [:goblin-1 monster]
+                                             [:player player]]
+                                            #{[5 5]})]
+    (is (= :player (:id (get result [5 5]))))))
+
+(deftest dirty-cell-entities-skips-entities-outside-dirty-set
+  (let [item-a {:id :gold-1 :entity-type :item :pos [1 1]}
+        item-b {:id :gold-2 :entity-type :item :pos [5 5]}
+        result (render/dirty-cell-entities [[:gold-1 item-a] [:gold-2 item-b]]
+                                           #{[5 5]})]
+    (is (nil? (get result [1 1])))
+    (is (= :gold-2 (:id (get result [5 5]))))))
