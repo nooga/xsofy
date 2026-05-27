@@ -23,6 +23,14 @@
 
 (def view-radius 12)
 
+;; Hook for sub-phase timing. When in-update-world markers are wired,
+;; flipping this on stashes :perf-detail {:rupt :fire :ignite :drift
+;; :fov} on the returned world for per-phase profiling. Currently the
+;; markers themselves aren't wired — the def remains as a known
+;; attachment point for the next time we want sub-phase attribution
+;; via Methodology A (see docs/project_notes/perf-audit-2026-05-18.md).
+(def *perf-detail* false)
+
 ;; --- Depth-based creature spawning (gaussian curves) ---
 
 (defn depth-freq [depth peak spread]
@@ -602,18 +610,26 @@
       (str rune))))
 
 (defn apply-spell-result [world attacker-id source-name result]
-  "Merge spell effects and convert rune programming errors into in-world backfire."
+  "Merge spell effects, surface programming errors as backfires, and
+   surface soft :fizzle outcomes as a quieter log message."
   (let [w (-> (:world result)
               (update :vfx #(vec (concat (or % []) (or (:vfx result) [])))))
-        err (:error result)]
-    (if err
+        err (:error result)
+        fizz (:fizzle result)]
+    (cond
+      err
       (let [rune (spell-error-rune w err)]
         (if (= attacker-id :player)
           (-> w
               (ent/damage-entity :player 1)
               (log-msg (str "Rune " rune " on the " source-name " glows crimson and zaps you.")))
           (log-msg w (str "Rune " rune " on the " source-name " glows crimson and rings unpleasantly."))))
-      w)))
+      fizz
+      (let [rune (spell-error-rune w fizz)]
+        (if (= attacker-id :player)
+          (log-msg w (str "Rune " rune " on the " source-name " hums but nothing answers."))
+          w))
+      :else w)))
 
 (def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
 
@@ -1105,10 +1121,17 @@
           healed (if (> threshold 0) (quot new-regen threshold) 0)
           remainder (if (> threshold 0) (rem new-regen threshold) 0)
           new-hp (min max-hp (+ hp healed))]
-      (let [w (-> world
-                  (update-in [:entities entity-id :ticks] #(+ (or % 0) cost))
-                  (assoc-in [:entities entity-id :body :hp] new-hp)
-                  (assoc-in [:entities entity-id :regen-ticks] remainder))]
+      (let [;; Three updates to the same entity. Each (update-in/assoc-in
+            ;; [:entities entity-id ...]) walks the world spine and
+            ;; allocates new PersistentMap nodes at every step. Coalesce
+            ;; into one (update-in [:entities entity-id] ...) so the
+            ;; entity-id-keyed slot is touched once.
+            w (update-in world [:entities entity-id]
+                         (fn [e]
+                           (-> e
+                               (assoc :ticks (+ (or (get e :ticks) 0) cost))
+                               (assoc-in [:body :hp] new-hp)
+                               (assoc :regen-ticks remainder))))]
         ;; tick player statuses when player spends ticks
         (if (= entity-id :player)
           (status/tick-entity-statuses w :player)
@@ -1116,21 +1139,27 @@
     world))
 
 (defn next-actor [world]
-  "Returns the entity-id with lowest :ticks, or nil if none."
-  (let [actors (->> (:entities world)
-                    (vals)
-                    (filter #(or (:ai %) (= :player (:id %))))
-                    (filter #(some? (:pos %)))
-                    (vec))]
-    (when (seq actors)
-      (:id (reduce (fn [best e]
-                     (if (or (< (or (:ticks e) 0) (or (:ticks best) 0))
-                             (and (= (or (:ticks e) 0) (or (:ticks best) 0))
-                                  (= :player (:id e))))
-                       e
-                       best))
-                   (first actors)
-                   (rest actors))))))
+  "Returns the entity-id with lowest :ticks, or nil if none.
+   Single-pass reduce over entity values: avoids the intermediate
+   filter→filter→vec chain (each step allocated a LazySeq / ArrayVector
+   per call) and uses `get` rather than (:kw e) — Keyword.Invoke
+   allocates per call in let-go, which adds up across ~100 calls per
+   game turn."
+  (let [best
+        (reduce (fn [best e]
+                  (if (or (nil? (get e :pos))
+                          (and (not (get e :ai)) (not= :player (get e :id))))
+                    best
+                    (let [t  (or (get e :ticks) 0)
+                          bt (when best (or (get best :ticks) 0))]
+                      (cond
+                        (nil? best)                              e
+                        (< t bt)                                 e
+                        (and (= t bt) (= :player (get e :id)))   e
+                        :else                                    best))))
+                nil
+                (vals (:entities world)))]
+    (when best (get best :id))))
 
 (defn creature-turn [world creature-id]
   (dbg/snapshot! world "creature-turn:enter " creature-id)
@@ -1629,13 +1658,41 @@
           _ (dbg/snapshot! w "update-world:after-player-action " action)
           acted (> (:turn w) (:turn world))
           w (if acted
-              (let [w2 (run-until-player-turn w)
-                    _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
-                    ;; fire simulation + burning entities ignite terrain + water drift
-                    w3 (-> w2 fire/step-fire fire/burning-entities-ignite drift-water-items)]
-                (if (get-in w3 [:entities :player])
-                  (update-fov w3)
-                  w3))
+              (if *perf-detail*
+                ;; Same sub-phase order, but timed. Splitting the threaded
+                ;; -> form lets us drop a clock between each step. Cost
+                ;; when *perf-detail* is off (the common path) is the
+                ;; one branch above; this arm is only taken in benches.
+                ;; Snapshot+invariant check runs in both branches so
+                ;; bench paths catch the same entity-resurrection class
+                ;; of bugs that the non-bench path does.
+                (let [t0 (System/currentTimeMillis)
+                      w2 (run-until-player-turn w)
+                      _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
+                      t1 (System/currentTimeMillis)
+                      w3 (fire/step-fire w2)
+                      t2 (System/currentTimeMillis)
+                      w4 (fire/burning-entities-ignite w3)
+                      t3 (System/currentTimeMillis)
+                      w5 (drift-water-items w4)
+                      t4 (System/currentTimeMillis)
+                      w6 (if (get-in w5 [:entities :player])
+                           (update-fov w5)
+                           w5)
+                      t5 (System/currentTimeMillis)]
+                  (assoc w6 :perf-detail
+                         {:rupt   (- t1 t0)
+                          :fire   (- t2 t1)
+                          :ignite (- t3 t2)
+                          :drift  (- t4 t3)
+                          :fov    (- t5 t4)}))
+                (let [w2 (run-until-player-turn w)
+                      _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
+                      ;; fire simulation + burning entities ignite terrain + water drift
+                      w3 (-> w2 fire/step-fire fire/burning-entities-ignite drift-water-items)]
+                  (if (get-in w3 [:entities :player])
+                    (update-fov w3)
+                    w3)))
               w)]
       ;; check for player death (entity missing or no HP)
       (if (or (nil? (get-in w [:entities :player]))
