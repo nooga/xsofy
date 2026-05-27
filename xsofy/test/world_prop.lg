@@ -86,6 +86,28 @@
 ;; Targeted regression tests (from property-discovered failures)
 ;; ============================================================================
 
+(deftest melee-attack-hits-creature-on-hazard-tile
+  (testing "nooga/xsofy#28 — wraith on a chasm should be melee-able with
+            bare hands instead of opening the leap-into-void prompt."
+    (let [base (g/minimal-stone-room)
+          _ (terrain/tset! (:terrain base) (:width base) 3 2 6)  ;; chasm
+          world (-> base
+                    (assoc-in [:entities :player]
+                      {:id :player :template :player :pos [2 2]
+                       :ticks 0 :status {} :statuses {} :inventory []
+                       :body {:hp 30 :max-hp 30 :strength 5 :armor 0}})
+                    (assoc-in [:entities :wraith-1]
+                      {:id :wraith-1 :template :wraith :pos [3 2]
+                       :ticks 0 :status {} :statuses {}
+                       :body {:hp 5 :max-hp 5 :strength 1 :armor 0}}))
+          w' (w/update-world world :right)]
+      ;; Attack and hazard-prompt branches are mutually exclusive: prompt
+      ;; freezes the turn pending y/n, attack ticks it. Hit/miss is RNG
+      ;; so we don't assert wraith HP.
+      (is (not= :confirm-hazard (:screen w')))
+      (is (< (:turn world) (:turn w')))
+      (is (= [2 2] (get-in w' [:entities :player :pos]))))))
+
 (deftest burning-low-hp-player-with-expiring-status-doesnt-resurrect
   (testing "Player dies from burning AND has a status about to expire on same tick.
             The remove-status of the expired one must not resurrect a dead player."
