@@ -275,11 +275,30 @@
               (:cursors ctx))]
       (assoc ctx :world w))))
 
-;; Creatures the player can conjure. Excludes :player. Future versions may
-;; gate by depth or weight; for now any non-player species is fair game.
+;; Creatures the player can conjure, with pick weights by bestiary tier.
+;; The bestiary's "DEPTH N-M" section comments map species to tiers, and we
+;; bias inversely: tier-1 creatures (rat-tier) appear ~6× more often than
+;; tier-5 (wraith). The combined boss-tier probability is ~8% — possible
+;; "OP run" outcomes happen but aren't the median experience.
+;; Tuned per nooga/xsofy#32 review feedback (Oakwhisper).
 (def conjurable-species
-  [:rat :goblin :kobold :archer :spider :slime
-   :goblin-shaman :fire-imp :ogre :troll :wraith])
+  [[:rat 6] [:goblin 6] [:kobold 6]              ;; tier 1 — depth 1-2
+   [:archer 4] [:spider 4] [:slime 4]            ;; tier 2 — depth 2-3
+   [:goblin-shaman 2] [:fire-imp 2]              ;; tier 3 — depth 3-4
+   [:ogre 1] [:troll 1]                          ;; tier 4 — depth 4-5
+   [:wraith 1]])                                 ;; tier 5 — depth 5-6
+
+(defn- weighted-pick
+  "Pick a key from a vec of [k weight] pairs, biased by weight."
+  [pairs]
+  (let [total (reduce + (map second pairs))
+        roll (rand-int total)]
+    (loop [pairs pairs acc 0]
+      (let [[k w] (first pairs)
+            acc' (+ acc w)]
+        (if (> acc' roll)
+          k
+          (recur (rest pairs) acc'))))))
 
 (defn- adjacent-spawn-cell
   "Random walkable + unoccupied 8-neighbor of pos. nil if none."
@@ -296,18 +315,19 @@
       (nth candidates (rand-int (count candidates))))))
 
 (defn r-conjure
-  "Summon a random creature next to the caster. Stores the new entity's
-   id on :last-conjured-id so a following `friend` rune can flag it. If
-   no adjacent walkable cell is available, sets :fizzle on the ctx so
-   apply-spell-result surfaces a message — soft failure, distinct from
-   :error/backfire (nooga/xsofy#32)."
+  "Summon a random creature next to the caster, weighted toward weaker
+   tiers (see conjurable-species). Stores the new entity's id on
+   :last-conjured-id so a following `friend` rune can find it. If no
+   adjacent walkable cell is available, sets :fizzle on the ctx so
+   apply-spell-result surfaces a message — soft failure, distinct
+   from :error/backfire (nooga/xsofy#32)."
   [ctx]
   (let [world (:world ctx)
         caster-pos (get-in world [:entities (:caster ctx) :pos])
         pos (when caster-pos (adjacent-spawn-cell world caster-pos))]
     (if (nil? pos)
       (assoc ctx :fizzle {:rune :conjure :reason :no-room})
-      (let [species (nth conjurable-species (rand-int (count conjurable-species)))
+      (let [species (weighted-pick conjurable-species)
             before (set (keys (:entities world)))
             w (ent/spawn world species pos)
             new-id (first (filter #(not (contains? before %))
@@ -317,14 +337,15 @@
             (assoc :last-conjured-id new-id))))))
 
 (defn r-friend
-  "Mark the last conjured creature as :friendly. The AI doesn't yet
-   honor this flag (it always targets the player); see follow-up issue
-   for faction work. Without a prior conjure in this spell, no-op."
+  "Stub. Faction-aware AI doesn't exist yet — the AI in xsofy.ai always
+   targets the player — so a creature marked :friendly would still
+   attack the caster and the player would be summoning a confusingly-
+   named enemy. Until the faction work lands as a separate PR, :friend
+   stays in the rune vocabulary as a no-op so inscriptions don't
+   backfire (that was the original bug in nooga/xsofy#32), it just
+   doesn't do anything visible. Per #32 review (Oakwhisper)."
   [ctx]
-  (let [id (:last-conjured-id ctx)]
-    (if (and id (get-in ctx [:world :entities id]))
-      (assoc-in ctx [:world :entities id :friendly] true)
-      ctx)))
+  ctx)
 
 (def rune-primitives
   {:self     r-self
