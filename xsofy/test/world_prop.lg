@@ -143,3 +143,46 @@
           restored (w/restore-floor saved 1 player items)]
       (is (= 4 (get-in saved [:floors 1 :fire-ttl [2 2]])))
       (is (= 4 (get-in restored [:fire-ttl [2 2]]))))))
+
+(deftest floor-restore-rebases-creature-ticks
+  (testing "nooga/xsofy#19 — change-floor resets player :ticks to 0 on
+            revisit, but creature :ticks come back from the saved
+            floor as-was. Without a rebase the player got many free
+            turns before next-actor would pick any creature. Items
+            (no :ai, nil :ticks) must not pin the min at 0 and skip
+            the rebase."
+    (let [world (-> (g/minimal-stone-room)
+                    (assoc :depth 1 :floors {} :turn 0 :log [])
+                    (assoc-in [:entities :player]
+                      {:id :player :template :player :pos [1 1]
+                       :ticks 0
+                       :body {:hp 30 :max-hp 30 :strength 2}
+                       :inventory []})
+                    (assoc-in [:entities :slime-1]
+                      {:id :slime-1 :template :slime :pos [4 4]
+                       :ticks 5000
+                       :ai {:state :hunt :speed 1 :behavior :hunter}
+                       :body {:hp 5 :max-hp 5}})
+                    (assoc-in [:entities :imp-1]
+                      {:id :imp-1 :template :fire-imp :pos [5 5]
+                       :ticks 5200
+                       :ai {:state :hunt :speed 1 :behavior :ranged}
+                       :body {:hp 8 :max-hp 8}})
+                    ;; Pre-fix: this item's nil :ticks made the rebase no-op.
+                    (assoc-in [:entities :sword-1]
+                      {:id :sword-1 :template :sword :pos [3 3]
+                       :entity-type :item}))
+          saved (w/save-current-floor world)
+          [player items] (w/extract-player-items saved)
+          ;; Mimic change-floor's player-ticks reset on revisit.
+          player (assoc player :ticks 0)
+          restored (w/restore-floor saved 1 player items)
+          slime-ticks (get-in restored [:entities :slime-1 :ticks])
+          imp-ticks   (get-in restored [:entities :imp-1 :ticks])]
+      ;; After rebase: lowest creature lands on 0 (= player), the gap
+      ;; between creatures (200) is preserved, and the player is no
+      ;; longer dozens of next-actor wins ahead.
+      (is (= 0 slime-ticks))
+      (is (= 200 imp-ticks))
+      ;; Item is untouched — no :ticks key materialized.
+      (is (nil? (get-in restored [:entities :sword-1 :ticks]))))))

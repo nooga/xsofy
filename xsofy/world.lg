@@ -239,6 +239,35 @@
               (assoc-in w [:entities id] (assoc item :pos nil)))
             w items)))
 
+(defn rebase-creature-ticks [world]
+  "Shift every :ai-bearing entity's :ticks down so the lowest sits at 0
+   (= the player's post-restore :ticks). change-floor resets the
+   player to 0 on floor revisit, but creature :ticks come back from
+   the saved floor with whatever they had at exit — leaving the player
+   many ticks ahead in the next-actor scheduler and getting a long run
+   of free turns before any monster acts (nooga/xsofy#19). Only
+   entities with :ai participate; items have nil :ticks and would
+   otherwise pin the min at 0 and short-circuit the rebase."
+  (let [es (:entities world)
+        m (reduce (fn [acc [id e]]
+                    (if (or (= :player id) (nil? (:ai e)))
+                      acc
+                      (let [t (or (:ticks e) 0)]
+                        (if (or (nil? acc) (< t acc)) t acc))))
+                  nil
+                  (seq es))]
+    (if (or (nil? m) (<= m 0))
+      world
+      (update world :entities
+              (fn [es]
+                (reduce (fn [acc [id e]]
+                          (assoc acc id
+                                 (if (or (= :player id) (nil? (:ai e)))
+                                   e
+                                   (assoc e :ticks (- (or (:ticks e) 0) m)))))
+                        {}
+                        (seq es)))))))
+
 (defn restore-floor [world depth player items]
   "Restore a saved floor, placing player at stairs."
   (let [floor (get-in world [:floors depth])
@@ -265,7 +294,8 @@
          :floors (:floors world)
          :scheme (:scheme world)
          :running true}
-        (inject-player player items nil))))
+        (inject-player player items nil)
+        rebase-creature-ticks)))
 
 ;; --- Message Log ---
 
