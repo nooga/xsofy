@@ -481,17 +481,23 @@
 
          ;; default: game screen
          (let [;; determine auto-action or wait for input
-               auto-key (cond
-                          (:resting world) :wait
-                          (:running-dir world) (let [[dx dy] (:running-dir world)]
-                                                 (cond (and (= dx 0) (< dy 0)) :up
-                                                       (and (= dx 0) (> dy 0)) :down
-                                                       (and (< dx 0) (= dy 0)) :left
-                                                       (and (> dx 0) (= dy 0)) :right
-                                                       :else nil))
-                          (:autoexploring world) :autoexplore
-                          (:auto-target world) :auto-target-step
-                          :else nil)
+               auto-key0 (cond
+                           (:resting world) :wait
+                           (:running-dir world) (let [[dx dy] (:running-dir world)]
+                                                  (cond (and (= dx 0) (< dy 0)) :up
+                                                        (and (= dx 0) (> dy 0)) :down
+                                                        (and (< dx 0) (= dy 0)) :left
+                                                        (and (> dx 0) (= dy 0)) :right
+                                                        :else nil))
+                           (:autoexploring world) :autoexplore
+                           (:auto-target world) :auto-target-step
+                           :else nil)
+               ;; queued keystroke cancels in-flight auto-action
+               interrupting (and auto-key0 (term/key-pending?))
+               world (if interrupting
+                       (dissoc world :resting :running-dir :autoexploring :auto-target)
+                       world)
+               auto-key (when (not interrupting) auto-key0)
                key (or auto-key (input/parse-key (term/read-key)))
                new-world (world/update-world world key)
                ;; check if auto-mode should stop
