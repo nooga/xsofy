@@ -1,0 +1,26 @@
+(ns xsofy.dispatch
+  "Single dispatch entry for game turns. Wraps world/update-world to fold
+   the player action into the seed (via det/advance) and record it to the
+   :action-log, so a (seed, action-log) pair replays bit-identically.
+
+   The world carries its own determinism + replay state (:seed, :seed-input,
+   :action-log), consistent with xsofy.det's 'the world IS the state' model.
+   The commit-DAG / game-state wrapper arrives in a later PR; until then the
+   log lives on the world."
+  (:require [xsofy.world :as world]
+            [xsofy.det :as det]))
+
+;; Pure-UI actions: toggle a screen or confirm a dialog. They never mutate
+;; world state, so they are neither folded into the seed nor logged.
+(def ^:private ui-actions
+  #{:messages :help :inventory :rune-codex
+    :equip-menu :unequip-menu :drop-menu :use-menu
+    :quit})
+
+(defn replay-action?
+  "True if `action` can mutate world state and must therefore be folded
+   into the seed and recorded for replay. Everything that is not a pure-UI
+   action qualifies (movement, attacks, wait/rest, fire, autoexplore,
+   descend/ascend, pickup)."
+  [action]
+  (not (contains? ui-actions action)))
