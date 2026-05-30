@@ -173,3 +173,142 @@
   [world g/gen-rich-world]
   (g/world-invariants?
     (ai/process-creatures world w/melee-attack w/ranged-attack)))
+
+;; ============================================================================
+;; Faction-aware AI — :friendly creatures hunt hostiles, not the player.
+;; ============================================================================
+
+(defn- minimal-with-player
+  "Tiny room + a fully-shaped player at pos. fov gets populated by
+   the caller via w/update-fov so find-target's in-fov? gate works."
+  [pos]
+  (-> (g/minimal-stone-room)
+      (assoc-in [:entities :player]
+        {:id :player :template :player :pos pos
+         :ticks 0 :status {} :statuses {} :inventory []
+         :body {:hp 30 :max-hp 30 :strength 2 :armor 0}})))
+
+(deftest friendly-creature-does-not-attack-player
+  (testing "A creature flagged :friendly ignores the player even when
+            adjacent and in :hunt. Pre-faction code would melee-attack."
+    (let [world (-> (minimal-with-player [3 3])
+                    (assoc-in [:entities :rat-1]
+                      {:id :rat-1 :template :rat :pos [4 3]
+                       :ticks 0 :status {} :statuses {}
+                       :friendly true
+                       :ai {:state :hunt :behavior :hunter :speed 1
+                            :target [3 3]}
+                       :body {:hp 6 :max-hp 6 :strength 1 :armor 0}})
+                    w/update-fov)
+          hp-before (get-in world [:entities :player :body :hp])
+          w' (ai/ai-act world :rat-1 w/melee-attack w/ranged-attack)
+          hp-after (get-in w' [:entities :player :body :hp])]
+      (is (= hp-before hp-after)))))
+
+(deftest hostile-targets-friendly-when-closer-than-player
+  (testing "find-target for a hostile prefers a visible friendly over
+            the player when the friendly is closer."
+    (let [world (-> (minimal-with-player [1 1])
+                    (assoc-in [:entities :friend-1]
+                      {:id :friend-1 :template :rat :pos [5 5]
+                       :ticks 0 :status {} :statuses {}
+                       :friendly true
+                       :ai {:state :hunt :behavior :hunter :speed 1}
+                       :body {:hp 6 :max-hp 6 :strength 1 :armor 0}})
+                    (assoc-in [:entities :goblin-1]
+                      {:id :goblin-1 :template :goblin :pos [6 5]
+                       :ticks 0 :status {} :statuses {}
+                       :ai {:state :hunt :behavior :hunter :speed 1}
+                       :body {:hp 15 :max-hp 15 :strength 2 :armor 0}})
+                    w/update-fov)
+          target (ai/find-target world (get-in world [:entities :goblin-1]))]
+      (is (some? target))
+      (is (= :friend-1 (:id target))))))
+
+(deftest fire-bow-skips-friendlies
+  (testing "find-nearest-enemy (drives fire-bow auto-aim) skips
+            entities flagged :friendly even when they're closer."
+    (let [world (-> (minimal-with-player [2 3])
+                    (assoc-in [:entities :friend-1]
+                      {:id :friend-1 :template :rat :pos [4 3]
+                       :friendly true
+                       :ai {:state :hunt :behavior :hunter :speed 1}
+                       :body {:hp 6 :max-hp 6}})
+                    (assoc-in [:entities :goblin-1]
+                      {:id :goblin-1 :template :goblin :pos [6 3]
+                       :ai {:state :hunt :behavior :hunter :speed 1}
+                       :body {:hp 15 :max-hp 15}})
+                    w/update-fov)
+          nearest (w/find-nearest-enemy world 10)]
+      (is (some? nearest))
+      (is (= :goblin-1 (:id nearest))))))
+
+(c/defprop friendly-ai-act-doesnt-throw
+  [world g/gen-rich-world-with-friendly]
+  (let [creatures (g/creature-ids world)]
+    (if (empty? creatures)
+      true
+      (do (ai/ai-act world (first creatures)
+                     w/melee-attack w/ranged-attack)
+          true))))
+
+(c/defprop friendly-ai-act-preserves-invariants
+  [world g/gen-rich-world-with-friendly]
+  (let [creatures (g/creature-ids world)]
+    (if (empty? creatures)
+      true
+      (g/world-invariants?
+        (ai/ai-act world (first creatures)
+                   w/melee-attack w/ranged-attack)))))
+
+(c/defprop process-creatures-with-friendlies-preserves-invariants
+  [world g/gen-rich-world-with-friendly]
+  (g/world-invariants?
+    (ai/process-creatures world w/melee-attack w/ranged-attack)))
+
+(deftest hostile-targets-player-when-no-friendly
+  (testing "find-target for a hostile with no visible friendly returns the
+            player. The core invariant the faction rewrite must preserve."
+    (let [world (-> (minimal-with-player [3 3])
+                    (assoc-in [:entities :goblin-1]
+                      {:id :goblin-1 :template :goblin :pos [5 3]
+                       :ticks 0 :status {} :statuses {}
+                       :ai {:state :hunt :behavior :hunter :speed 1}
+                       :body {:hp 15 :max-hp 15 :strength 2 :armor 0}})
+                    w/update-fov)
+          target (ai/find-target world (get-in world [:entities :goblin-1]))]
+      (is (some? target) "hostile has a target")
+      (is (= :player (:id target)) "and it is the player"))))
+
+(deftest find-target-tiebreak-is-deterministic
+  (testing "Among equidistant visible candidates, find-target picks the same
+            one regardless of entity-map insertion order (stable :id tiebreak)."
+    (let [ally  {:id :ally-1 :template :rat :pos [4 4] :friendly true
+                 :ticks 0 :status {} :statuses {}
+                 :ai {:state :hunt :behavior :hunter :speed 1}
+                 :body {:hp 6 :max-hp 6}}
+          gob-a {:id :goblin-a :template :goblin :pos [4 6]   ;; distance 2 from ally
+                 :ticks 0 :status {} :statuses {}
+                 :ai {:state :hunt :behavior :hunter :speed 1}
+                 :body {:hp 15 :max-hp 15}}
+          gob-b {:id :goblin-b :template :goblin :pos [6 4]   ;; distance 2 from ally
+                 :ticks 0 :status {} :statuses {}
+                 :ai {:state :hunt :behavior :hunter :speed 1}
+                 :body {:hp 15 :max-hp 15}}
+          base (-> (g/minimal-stone-room)
+                   (assoc :fov #{[4 4] [4 6] [6 4]})
+                   (assoc-in [:entities :player]
+                     {:id :player :template :player :pos [9 9]
+                      :ticks 0 :status {} :statuses {} :inventory []
+                      :body {:hp 30 :max-hp 30}}))
+          w-ab (-> base (assoc-in [:entities :goblin-a] gob-a)
+                        (assoc-in [:entities :goblin-b] gob-b)
+                        (assoc-in [:entities :ally-1] ally))
+          w-ba (-> base (assoc-in [:entities :ally-1] ally)
+                        (assoc-in [:entities :goblin-b] gob-b)
+                        (assoc-in [:entities :goblin-a] gob-a))
+          t-ab (ai/find-target w-ab (get-in w-ab [:entities :ally-1]))
+          t-ba (ai/find-target w-ba (get-in w-ba [:entities :ally-1]))]
+      (is (some? t-ab) "a target is found")
+      (is (= (:id t-ab) (:id t-ba)) "target is independent of insertion order")
+      (is (= :goblin-a (:id t-ab)) "deterministic pick: lowest :id wins on a tie"))))

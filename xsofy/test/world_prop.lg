@@ -108,6 +108,29 @@
       (is (< (:turn world) (:turn w')))
       (is (= [2 2] (get-in w' [:entities :player :pos]))))))
 
+(deftest player-bumping-friendly-swaps-positions
+  (testing "Player walking into a :friendly creature swaps positions
+            (Brogue-style ally swap) instead of attacking, ally HP is
+            unchanged. Calls player-move directly to isolate the swap
+            from the post-turn creature loop."
+    (let [world (-> (g/minimal-stone-room)
+                    (assoc-in [:entities :player]
+                      {:id :player :template :player :pos [2 2]
+                       :ticks 0 :status {} :statuses {} :inventory []
+                       :body {:hp 30 :max-hp 30 :strength 2 :armor 0}})
+                    (assoc-in [:entities :ally-1]
+                      {:id :ally-1 :template :rat :pos [3 2]
+                       :ticks 0 :status {} :statuses {}
+                       :friendly true
+                       :ai {:state :hunt :behavior :hunter :speed 1}
+                       :body {:hp 6 :max-hp 6 :strength 1 :armor 0}}))
+          hp-before (get-in world [:entities :ally-1 :body :hp])
+          w' (w/player-move world 1 0)]
+      (is (= [3 2] (get-in w' [:entities :player :pos])))
+      (is (= [2 2] (get-in w' [:entities :ally-1 :pos])))
+      (is (= hp-before (get-in w' [:entities :ally-1 :body :hp])))
+      (is (< (:turn world) (:turn w'))))))
+
 (deftest burning-low-hp-player-with-expiring-status-doesnt-resurrect
   (testing "Player dies from burning AND has a status about to expire on same tick.
             The remove-status of the expired one must not resurrect a dead player."

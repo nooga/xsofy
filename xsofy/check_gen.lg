@@ -281,6 +281,19 @@
           (ent/spawn world :goblin pos)
           world)))))
 
+(def gen-rich-world-with-friendly
+  ;; gen-rich-world-with-creature with :friendly true flipped on the first
+  ;; non-player AI creature. Exercises faction-aware AI: ai-act and
+  ;; process-creatures must handle entities that don't target the player.
+  (c/gen-let [world gen-rich-world-with-creature]
+    (let [cid (->> (vals (:entities world))
+                   (filter (fn [e] (and (:ai e) (not= :player (:id e)))))
+                   (map :id)
+                   first)]
+      (if cid
+        (assoc-in world [:entities cid :friendly] true)
+        world))))
+
 (defn creature-ids
   "All non-player ids that have a :body."
   [world]
