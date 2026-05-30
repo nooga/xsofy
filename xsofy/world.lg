@@ -16,6 +16,7 @@
             [xsofy.debug :as dbg]
             [xsofy.bestiary]
             [xsofy.title :as title]
+            [xsofy.opcontext :as opctx]
             [math]))
 
 (declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path spawn-runestones)
@@ -568,12 +569,14 @@
         7 (if (get-in world [:entities entity-id :properties :fire-immune])
             world
             (-> world
-                (ent/damage-entity entity-id 8)
+                (opctx/with-context {:source :lava :reason :hazard}
+                  (ent/damage-entity world entity-id 8))
                 (#(if (get-in % [:entities entity-id])
                     (status/apply-status % entity-id :burning 12)
                     %))))
         ;; chasm: 10 fall damage
-        6 (ent/damage-entity world entity-id 10)
+        6 (opctx/with-context {:source :chasm :reason :hazard}
+            (ent/damage-entity world entity-id 10))
         ;; deep water: swimming + extinguish fire
         4 (-> world
               (status/apply-status entity-id :swimming 999)
@@ -662,7 +665,8 @@
               (let [dmg (:damage result)
                     sneak (:sneak result)
                     hp-before (get-in target [:body :hp] 0)
-                    w2 (ent/damage-entity world target-id dmg)
+                    w2 (opctx/with-context {:source attacker-id :reason :melee}
+                          (ent/damage-entity world target-id dmg))
                     killed (nil? (get-in w2 [:entities target-id]))
                     w (if target-pos
                         (splatter-blood w2 (first target-pos) (second target-pos) dmg hp-before killed)
@@ -828,7 +832,8 @@
             w (update world :vfx #(into (or % []) [vfx flash]))]
         (let [w (if (and did-hit (> dmg 0))
                   (let [hp-before (get-in hit-entity [:body :hp] 0)
-                        w2 (ent/damage-entity w (:id hit-entity) dmg)
+                        w2 (opctx/with-context {:source launcher-id :reason :ranged}
+                              (ent/damage-entity w (:id hit-entity) dmg))
                         killed (nil? (get-in w2 [:entities (:id hit-entity)]))]
                     (if hit-pos
                       (splatter-blood w2 (first hit-pos) (second hit-pos)
@@ -1446,7 +1451,8 @@
                           (if pushed
                             pushed
                             ;; couldn't push — bonus damage
-                            (ent/damage-entity w primary-id 2)))))
+                            (opctx/with-context {:source :player :reason :melee}
+                              (ent/damage-entity w primary-id 2))))))
                     w)
                 ;; generate VFX for attack patterns
                 w (cond

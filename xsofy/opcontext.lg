@@ -1,0 +1,65 @@
+(ns xsofy.opcontext
+  "Operation context — a dynamic-binding mechanism for threading the
+   'who-and-why' of an operation through nested calls without changing
+   signatures.
+
+   The motivating use case is killer attribution: when a goblin's
+   melee-attack ultimately calls damage-entity, damage-entity needs to
+   know the goblin caused the damage (so :cause-of-death gets set, so
+   the death log line is correct, so future analysis tooling can
+   attribute deaths). Threading a killer-id parameter through every
+   layer is painful and error-prone (see review finding I7: only one of
+   the ~13 damage-entity call sites passes it today).
+
+   The same mechanism generalizes to:
+     - Status applications (who froze me?)
+     - Terrain changes (who opened this door?)
+     - Item drops (whose corpse spawned this?)
+     - VFX attribution
+     - Log line composition
+
+   Player and NPCs use the same hook — perception code can read
+   *op-context* to decide whether a creature has reason to react
+   ('the goblin just watched its packmate die to the wraith').
+
+   Conventions for the context map:
+     :source    — entity-id that initiated the operation (attacker,
+                  spell caster, stairs-walker, etc.)
+     :reason    — keyword describing the kind of operation
+                  (:melee, :ranged, :spell, :fire, :hazard, :status-tick)
+     :weapon    — entity-id of the weapon involved (if any)
+     :spell     — the rune program being evaluated (if a spell)
+
+   Callers add other keys freely; consumers read what they need."
+  (:require))
+
+(def ^:dynamic *op-context*
+  "The current operation context. Empty map by default. Code inside a
+   with-context binding sees the merged context."
+  {})
+
+(defn current
+  "Return the full current operation context."
+  []
+  *op-context*)
+
+(defn source
+  "Convenience: who initiated the current operation?"
+  []
+  (:source *op-context*))
+
+(defn reason
+  "Convenience: what kind of operation is this?"
+  []
+  (:reason *op-context*))
+
+(defmacro with-context
+  "Bind operation-context keys for the duration of body. New keys are
+   merged into the existing context — nested with-context calls
+   accumulate rather than replace. Example:
+
+     (with-context {:source attacker-id :reason :melee}
+       (damage-entity world target-id dmg))"
+  [ctx-overrides & body]
+  `(binding [xsofy.opcontext/*op-context* (merge xsofy.opcontext/*op-context* ~ctx-overrides)]
+     ~@body))
