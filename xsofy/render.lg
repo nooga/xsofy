@@ -878,7 +878,7 @@
    ["So long and"    "thanks for"      "the fish"]
    ["No refunds"     "for the deceased"]])
 
-(defn render-death-screen [world scroll-offset]
+(defn render-death-screen [world scroll-offset frame]
   (let [[tw th] (term/size)
         cx (quot tw 2)
         cy (quot th 2)
@@ -887,9 +887,10 @@
         seed (or (:turn world) 0)]
     ;; clear to black
     (title/clear-screen tw th)
-    ;; draw runes in background
+    ;; draw runes in background — pulse over `frame` so they keep flickering
+    ;; while the screen waits for input (was a static brightness before).
     (doseq [r runes]
-      (let [b (/ (float (+ 15 (rem (:phase r) 30))) 45.0)
+      (let [b (max 0.1 (title/rune-brightness (:phase r) frame))
             [cr cg cb] (:color r)]
         (term/move-cursor (:x r) (:y r))
         (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))
