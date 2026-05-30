@@ -1,0 +1,39 @@
+(ns xsofy.test.title-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.title :as title]))
+
+;; nooga/xsofy — particle screens (title + death) must keep animating
+;; independently of input. The control seam is `drive-until-key`: it renders
+;; successive frames, polling for a key between frames, and only stops when a
+;; key arrives. Frames MUST advance while the poll returns nil (no key yet) —
+;; that is precisely the behaviour that was missing (screens froze on a
+;; blocking read-key until a key was pressed).
+
+(deftest drive-until-key-advances-frames-while-no-key
+  (testing "frames keep rendering while poll returns nil, then the key ends it"
+    (let [rendered (atom [])
+          ;; poll: nil for the first 3 ticks, then a key on the 4th
+          remaining (atom [nil nil nil "x"])
+          poll! (fn []
+                  (let [v (first @remaining)]
+                    (swap! remaining rest)
+                    v))
+          [k next-frame] (title/drive-until-key 0
+                                                (fn [frame] (swap! rendered conj frame))
+                                                poll!)]
+      ;; the key that arrived is returned
+      (is (= "x" k))
+      ;; frames 0,1,2,3 were all rendered — animation advanced without input
+      (is (= [0 1 2 3] @rendered))
+      ;; the loop reports the next frame so callers can keep continuity
+      (is (= 4 next-frame)))))
+
+(deftest drive-until-key-stops-immediately-when-key-already-ready
+  (testing "a key available on the first poll ends after one rendered frame"
+    (let [rendered (atom [])
+          [k next-frame] (title/drive-until-key 7
+                                                (fn [frame] (swap! rendered conj frame))
+                                                (fn [] "q"))]
+      (is (= "q" k))
+      (is (= [7] @rendered))
+      (is (= 8 next-frame)))))

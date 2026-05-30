@@ -428,12 +428,18 @@
                      (recur w w (term/size))))))
 
          :death
-         (let [result (loop [scroll 0]
-                        (render/render-death-screen world scroll)
-                        (let [k (term/read-key)]
+         (let [poll! (title/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
+               result (loop [scroll 0 frame 0]
+                        ;; animate the death screen continuously; the runes keep
+                        ;; pulsing while we wait for a key instead of freezing.
+                        (let [[k nf] (title/drive-until-key
+                                       frame
+                                       (fn [f] (render/render-death-screen world scroll f))
+                                       poll!)]
                           (cond
                             (or (= k "n") (= k "\r") (= k "\n") (= k " "))
                             :new-game
+                            (= k :eof) (assoc world :running false)
                             (= k "\u001b")
                             (if *in-wasm*
                               (do
@@ -441,11 +447,11 @@
                                 (let [confirm (term/read-key)]
                                   (if (= confirm "y")
                                     :new-game
-                                    (recur scroll))))
+                                    (recur scroll nf))))
                               (assoc world :running false))
-                            (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)))
-                            (or (= k "k") (= k "\u001b[A")) (recur (inc scroll))
-                            :else (recur scroll))))]
+                            (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)) nf)
+                            (or (= k "k") (= k "\u001b[A")) (recur (inc scroll) nf)
+                            :else (recur scroll nf))))]
            (if (= result :new-game)
              (let [w (new-game)]
                (render/render-full w)

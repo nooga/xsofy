@@ -3,6 +3,7 @@
             [xsofy.test.check-test]
             [xsofy.test.invariant-test]
             [xsofy.test.render-test]
+            [xsofy.test.title-test]
             [xsofy.test.spell-prop]
             [xsofy.test.world-prop]
             [xsofy.test.combat-prop]

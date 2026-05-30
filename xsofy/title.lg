@@ -98,6 +98,55 @@
 (defn pause! [ms]
   (async/<!! (async/timeout (if *in-wasm* (max ms 30) ms))))
 
+;; --- Non-blocking input for animated screens ---
+;; `term/read-key` is blocking, so a screen that calls it directly freezes its
+;; animation until a key is pressed. To keep particles running, we read keys on
+;; a goroutine and select between that channel and a frame timer.
+;;
+;; The reader is ONE-SHOT: it reads a single key, delivers it, and exits. A
+;; goroutine blocked inside `read-key` cannot be cancelled, so a looping reader
+;; would survive past the screen and steal the next keypress from the game loop.
+;; One-shot + lazy re-arming guarantees at most one reader is ever blocked on
+;; stdin, and none is left behind once a screen exits on a key.
+
+(defn read-key-chan
+  "Spawn a goroutine that reads exactly one key and delivers it on the returned
+   channel, then exits. EOF (nil from read-key) is delivered as :eof."
+  []
+  (let [ch (async/chan)]
+    (go (async/>! ch (or (term/read-key) :eof)))
+    ch))
+
+(defn make-key-poller
+  "Return a 0-arg poll fn for animation loops. Each call waits up to `ms` for a
+   keypress: returns the key string, :eof, or nil if none arrived in time.
+   Arms a one-shot reader lazily and disarms once a key is delivered, so when a
+   screen stops polling (after its terminating key) no reader is left blocked."
+  [ms]
+  (let [armed (atom nil)]
+    (fn []
+      (when (nil? @armed)
+        (reset! armed (read-key-chan)))
+      (let [[v _] (async/alts! [@armed (async/timeout ms)])]
+        (when (some? v)
+          (reset! armed nil))
+        v))))
+
+(defn drive-until-key
+  "Animation control loop. Render successive frames starting at `start-frame`,
+   calling (render! frame) then (poll!) after each. (poll!) returns a key (the
+   loop ends) or nil (keep animating — frame advances). Returns [key next-frame]
+   so callers can resume animation continuously across handled keypresses.
+   Pure with respect to the injected render!/poll! — the seam tested in
+   title_test."
+  [start-frame render! poll!]
+  (loop [frame start-frame]
+    (render! frame)
+    (let [k (poll!)]
+      (if (some? k)
+        [k (inc frame)]
+        (recur (inc frame))))))
+
 ;; --- Title Screen ---
 
 (defn scatter-runes [w h n base-color]
@@ -177,13 +226,13 @@
         runes (scatter-runes tw th 40 scheme)]
     ;; clear once
     (clear-screen tw th)
-    ;; animate
-    (dotimes [frame 50]
-      (draw-frame runes title subtitle tw th frame)
-      (pause! 80))
-    ;; hold final frame, wait for key
-    (draw-frame runes title subtitle tw th 50)
-    (term/read-key)
+    ;; animate continuously until a key is pressed — runes keep pulsing instead
+    ;; of freezing on a held final frame while a blocking read-key waits.
+    (drive-until-key 0
+                     (fn [frame] (draw-frame runes title subtitle tw th frame))
+                     ;; 120ms/frame: a calmer rune pulse (was 80ms). Input
+                     ;; latency at a title screen is imperceptible at this rate.
+                     (make-key-poller 120))
     {:title title :scheme scheme}))
 
 ;; --- Descending Screen ---
