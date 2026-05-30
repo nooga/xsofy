@@ -6,6 +6,7 @@
             [xsofy.terrain :as terrain]
             [xsofy.util :as u]
             [xsofy.runes :as runes]
+            [xsofy.opcontext :as opctx]
             [math]))
 
 ;; --- Spell Context ---
@@ -130,17 +131,18 @@
 
 (defn r-damage [ctx amount]
   (let [[w total new-hits]
-        (reduce-cursor-targets
-          ctx
-          [(:world ctx) 0 (:hits ctx)]
-          (fn [world pos]
-            (u/targets-at world pos (:caster ctx)))
-          (fn [[world total hits] _ e]
-            (let [armor (get-in e [:body :armor] 0)
-                  actual (max 1 (- amount armor))]
-              [(ent/damage-entity world (:id e) actual)
-               (+ total actual)
-               (conj hits (:id e))])))]
+        (opctx/with-context {:source (:caster ctx) :reason :spell}
+          (reduce-cursor-targets
+            ctx
+            [(:world ctx) 0 (:hits ctx)]
+            (fn [world pos]
+              (u/targets-at world pos (:caster ctx)))
+            (fn [[world total hits] _ e]
+              (let [armor (get-in e [:body :armor] 0)
+                    actual (max 1 (- amount armor))]
+                [(ent/damage-entity world (:id e) actual)
+                 (+ total actual)
+                 (conj hits (:id e))]))))]
     (assoc ctx :world w :result total :hits new-hits)))
 
 (defn r-heal [ctx amount]

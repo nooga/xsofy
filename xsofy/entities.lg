@@ -1,5 +1,6 @@
 (ns xsofy.entities
-  (:require [xsofy.det :as det]))
+  (:require [xsofy.det :as det]
+            [xsofy.opcontext :as opctx]))
 
 ;; --- Registry ---
 
@@ -392,29 +393,35 @@
                     (assoc-in [:entities clone-id :ai :state] :hunt)))))))
       nil)))
 
-(defn damage-entity [world id amount]
-  (let [entity (get-in world [:entities id])
-        armor-val (+ (get-in entity [:body :armor] 0)
-                     (get-armor-defense world id))
-        actual (max 1 (- amount armor-val))
-        new-hp (- (get-in entity [:body :hp]) actual)]
-    (if (<= new-hp 0)
-      ;; drop inventory + creature drops on death
-      (let [inv (or (get-in world [:entities id :inventory]) [])
-            drops (or (:drops entity) [])
-            pos (:pos entity)
-            ;; drop held items
-            w (reduce (fn [w iid]
-                        (if (get-in w [:entities iid])
-                          (assoc-in w [:entities iid :pos] pos)
-                          w))
-                      world inv)
-            ;; spawn creature drops
-            w (reduce (fn [w drop-type]
-                        (spawn-item w drop-type pos))
-                      w drops)]
-        (remove-entity w id))
-      ;; survived — check for split
-      (let [split-world (try-split world id new-hp)]
-        (or split-world
-            (assoc-in world [:entities id :body :hp] new-hp))))))
+(defn damage-entity
+  ([world id amount]
+   (damage-entity world id amount (opctx/source)))
+  ([world id amount killer-id]
+   (let [entity (get-in world [:entities id])
+         armor-val (+ (get-in entity [:body :armor] 0)
+                      (get-armor-defense world id))
+         actual (max 1 (- amount armor-val))
+         new-hp (- (get-in entity [:body :hp]) actual)
+         world (if (and (= id :player) (<= new-hp 0) killer-id)
+                 (assoc world :cause-of-death killer-id)
+                 world)]
+     (if (<= new-hp 0)
+       ;; drop inventory + creature drops on death
+       (let [inv (or (get-in world [:entities id :inventory]) [])
+             drops (or (:drops entity) [])
+             pos (:pos entity)
+             ;; drop held items
+             w (reduce (fn [w iid]
+                         (if (get-in w [:entities iid])
+                           (assoc-in w [:entities iid :pos] pos)
+                           w))
+                       world inv)
+             ;; spawn creature drops
+             w (reduce (fn [w drop-type]
+                         (spawn-item w drop-type pos))
+                       w drops)]
+         (remove-entity w id))
+       ;; survived — check for split
+       (let [split-world (try-split world id new-hp)]
+         (or split-world
+             (assoc-in world [:entities id :body :hp] new-hp)))))))

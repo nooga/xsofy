@@ -3,7 +3,8 @@
             [xsofy.entities :as ent]
             [xsofy.util :as u]
             [xsofy.status :as status]
-            [xsofy.det :as det]))
+            [xsofy.det :as det]
+            [xsofy.opcontext :as opctx]))
 
 ;; --- Fire System ---
 ;; Fire is terrain tile 15. TTL tracked in world :fire-ttl {[x y] turns-left}.
@@ -97,7 +98,8 @@
                                                          (get-in e [:body :hp])))
                                             (vals (:entities w))))]
                           (reduce (fn [w e]
-                                    (let [w (ent/damage-entity w (:id e) fire-damage)]
+                                    (let [w (opctx/with-context {:source :fire :reason :fire}
+                                              (ent/damage-entity w (:id e) fire-damage))]
                                       ;; only apply burning if still alive
                                       (if (get-in w [:entities (:id e)])
                                         (status/apply-status w (:id e) :burning 10)
