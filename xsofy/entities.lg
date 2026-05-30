@@ -221,6 +221,21 @@
 (defn alive? [entity]
   (> (get-in entity [:body :hp] 0) 0))
 
+(defn friendly?
+  "Conjured allies / pets carry :friendly true. Used by the AI to choose
+   whether to chase or ignore an entity, and by player-move / fire-bow
+   to skip them. See xsofy.ai/find-target."
+  [entity]
+  (true? (:friendly entity)))
+
+(defn hostile-to-player?
+  "An :ai-bearing entity that is neither the player nor friendly. AoE
+   spells and creature targeting use this to filter candidate enemies."
+  [entity]
+  (and (:ai entity)
+       (not= :player (:id entity))
+       (not (:friendly entity))))
+
 ;; --- Entity Modification ---
 
 (defn update-entity [world id f & args]
