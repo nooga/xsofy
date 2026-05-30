@@ -200,12 +200,13 @@
 (defn show-descending-screen
   "Display a brief animated descending screen. Runes rise and fade."
   [depth scheme]
-  (let [[tw th] (term/size)
-        cx (quot tw 2)
-        cy (quot th 2)
-        msg (nth descending-messages (rand-int (count descending-messages)))
-        depth-str (str "Depth " depth)
-        runes (scatter-runes tw th 25 scheme)]
+  (when (term/size)            ;; no-op headless (balance harness / tests)
+   (let [[tw th] (term/size)
+         cx (quot tw 2)
+         cy (quot th 2)
+         msg (nth descending-messages (rand-int (count descending-messages)))
+         depth-str (str "Depth " depth)
+         runes (scatter-runes tw th 25 scheme)]
     ;; clear
     (clear-screen tw th)
     ;; animate — runes drift upward, erase old position each frame
@@ -245,4 +246,4 @@
         (term/set-bg 10 10 10)
         (term/write msg))
       (term/flush)
-      (pause! 60))))
+      (pause! 60)))))
