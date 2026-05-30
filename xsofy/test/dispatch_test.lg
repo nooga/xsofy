@@ -42,3 +42,18 @@
     (is (not (dispatch/replay-action? :help)))
     (is (not (dispatch/replay-action? :quit)))
     (is (not (dispatch/replay-action? :equip-menu)))))
+
+(deftest dispatch-folds-and-logs
+  (testing "a replay action advances the seed and is logged"
+    (let [w0 (world/make-world 79 30 7)
+          s0 (:seed w0)
+          w1 (dispatch/dispatch w0 :wait)]
+      (is (not= s0 (:seed w1)) "seed advanced")
+      (is (= [:wait] (:action-log w1)) "action logged")))
+  (testing "a UI action neither advances the seed nor logs"
+    (let [w0 (world/make-world 79 30 7)
+          s0 (:seed w0)
+          w1 (dispatch/dispatch w0 :inventory)]
+      (is (= s0 (:seed w1)) "seed unchanged")
+      (is (= [] (:action-log w1)) "nothing logged")
+      (is (= :inventory (:screen w1)) "screen still toggled"))))

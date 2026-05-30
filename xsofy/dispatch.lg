@@ -24,3 +24,16 @@
    descend/ascend, pickup)."
   [action]
   (not (contains? ui-actions action)))
+
+(defn dispatch
+  "Resolve one input action against the world. For replay actions, fold the
+   action into the seed (keyed by the pre-action :turn so the fold is stable),
+   resolve via world/update-world, and append the action to :action-log.
+   UI actions are passed through unchanged. Returns world'."
+  [world action]
+  (if (replay-action? action)
+    (let [turn   (:turn world)
+          salted (det/advance world [:action turn action])
+          w'     (world/update-world salted action)]
+      (update w' :action-log conj action))
+    (world/update-world world action)))
