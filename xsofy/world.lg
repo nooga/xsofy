@@ -17,6 +17,7 @@
             [xsofy.bestiary]
             [xsofy.title :as title]
             [xsofy.opcontext :as opctx]
+            [xsofy.util :as u]
             [math]))
 
 (declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path spawn-runestones)
@@ -496,8 +497,119 @@
                         (recur (inc x)))))]
         (if found found (recur (inc y)))))))
 
+;; --- Stairs-follow: pending allies queue ---
+;; When the player takes stairs, every :friendly entity on the floor
+;; is lifted off into :pending-allies on the player, each with a
+;; per-entry :delay = max(1, chebyshev(ally-pos, player-pos)). The
+;; queue rides with the player across floors via inject-player. On
+;; each player turn, decrement every delay; entries whose delay hits
+;; 0 materialize on the current floor near :last-arrival-pos (the
+;; tile the player most recently spawned on). If the player bounces
+;; back to the origin floor before a delay expires, the ally arrives
+;; on whichever floor the player happens to be on — see
+;; nooga/xsofy#37 for the design discussion.
+
+(defn extract-friendlies-to-player
+  "Pull every :friendly entity off :entities, stash on the player as
+   :pending-allies with chebyshev-distance delays from the player's
+   current position. Existing pending entries are preserved (chain
+   descents accumulate). No-op when there's no player (test fixtures
+   without one, post-death state)."
+  [world]
+  (if-let [player-pos (get-in world [:entities :player :pos])]
+    (let [existing (or (get-in world [:entities :player :pending-allies]) [])
+          allies (filter (fn [[id e]]
+                           (and (:friendly e) (:pos e) (not= :player id)))
+                         (:entities world))
+          new-entries (mapv (fn [[id e]]
+                              {:entity (dissoc e :pos)
+                               :id id
+                               :delay (max 1 (u/chebyshev (:pos e) player-pos))})
+                            allies)
+          w (reduce (fn [acc [id _]] (update acc :entities dissoc id))
+                    world allies)]
+      (assoc-in w [:entities :player :pending-allies]
+                (into (vec existing) new-entries)))
+    world))
+
+(defn find-spawn-near
+  "Ring-BFS outward from origin for the first walkable + unoccupied
+   tile, up to chebyshev radius 8. Returns [pos world'] — pos is nil
+   if no cell is found, world' is world unchanged in that case. The
+   adjacent 8-neighbor case is covered at r=1; broader rings handle
+   crowded stairs (corridors, packed rooms).
+
+   Routes the ring pick through det/pick (salted on radius r so each
+   fallback ring gets a distinct sub-chain) — without this, ally
+   materialization couldn't replay from (seed, action-log)."
+  [world origin]
+  (let [{:keys [terrain width height]} world
+        [ox oy] origin]
+    (loop [r 1]
+      (if (> r 8)
+        [nil world]
+        (let [ring (vec (for [dx (range (- r) (inc r))
+                              dy (range (- r) (inc r))
+                              :when (or (= (math/abs dx) r)
+                                        (= (math/abs dy) r))
+                              :let [nx (+ ox dx) ny (+ oy dy)]
+                              :when (terrain/walkable? terrain width height nx ny)
+                              :when (nil? (ent/creature-at world [nx ny]))]
+                          [nx ny]))]
+          (if (seq ring)
+            (det/pick (det/with-context world [:ally-spawn r]) ring)
+            (recur (inc r))))))))
+
+(defn materialize-pending-ally
+  "Place a single pending-allies entry back into :entities at a spawn
+   tile near the player's :last-arrival-pos. Returns the world with
+   :seed advanced for the ring pick (and the entry placed if a spawn
+   cell was found). When the search radius is exhausted with no
+   candidate, returns the world unchanged — caller will retry next
+   turn by holding the entry at delay 0."
+  [world entry]
+  (let [arrival (or (get-in world [:entities :player :last-arrival-pos])
+                    (get-in world [:entities :player :pos]))
+        [spawn-pos w] (find-spawn-near world arrival)]
+    (if (nil? spawn-pos)
+      w
+      (let [ent (-> (:entity entry)
+                    (assoc :pos spawn-pos)
+                    ;; Inherit player's ticks so the new arrival slots
+                    ;; into the scheduler normally — same reason
+                    ;; r-conjure does this.
+                    (assoc :ticks (or (get-in w [:entities :player :ticks]) 0)))
+            ename (or (:template ent) (:id entry))]
+        (-> w
+            (assoc-in [:entities (:id entry)] ent)
+            (log-msg (str "Your " (name ename) " catches up to you.")))))))
+
+(defn tick-pending-allies
+  "Decrement every pending ally's delay. Entries whose delay reaches 0
+   try to materialize this turn; if their spawn cell is blocked, they
+   stay at delay 0 and retry next turn. Called once per player turn.
+   No-op when there's no player or no pending queue."
+  [world]
+  (let [pending (get-in world [:entities :player :pending-allies])]
+    (if (or (nil? (get-in world [:entities :player])) (empty? pending))
+      world
+      (let [decremented (mapv #(update % :delay dec) pending)
+            ready (filter #(<= (:delay %) 0) decremented)
+            still-pending (filter #(> (:delay %) 0) decremented)
+            [w blocked] (reduce (fn [[w blk] entry]
+                                  (let [w' (materialize-pending-ally w entry)
+                                        placed? (some? (get-in w' [:entities (:id entry)]))]
+                                    (if placed?
+                                      [w' blk]
+                                      [w' (conj blk (assoc entry :delay 0))])))
+                                [world []]
+                                ready)
+            new-pending (into (vec still-pending) blocked)]
+        (assoc-in w [:entities :player :pending-allies] new-pending)))))
+
 (defn change-floor [world new-depth]
   (let [{:keys [width height depth]} world
+        world (extract-friendlies-to-player world)
         [player items] (extract-player-items world)
         saved (save-current-floor world)]
     (if (get-in saved [:floors new-depth])
@@ -506,7 +618,7 @@
             spawn-tile (if (> new-depth depth) 14 13)
             spawn-pos (find-tile (:terrain floor) (:width floor) (:height floor) spawn-tile)
             spawn-pos (or spawn-pos [5 5])
-            player (assoc player :ticks 0)
+            player (assoc player :ticks 0 :last-arrival-pos spawn-pos)
             w (restore-floor saved new-depth player items)]
         (-> (assoc-in w [:entities :player :pos] spawn-pos)
             update-fov
@@ -520,7 +632,7 @@
                 spawn-pos (get-in new-world [:entities :player :pos])]
             ;; re-inject with proper items
             ;; reset player ticks to 0 so they act first on new floor
-            (let [player (assoc player :ticks 0)]
+            (let [player (assoc player :ticks 0 :last-arrival-pos spawn-pos)]
               (-> new-world
                   (assoc :log (:log saved)
                          :turn (:turn saved)
@@ -1705,6 +1817,7 @@
                 ;; bench paths catch the same entity-resurrection class
                 ;; of bugs that the non-bench path does.
                 (let [t0 (System/currentTimeMillis)
+                      w (tick-pending-allies w)
                       w2 (run-until-player-turn w)
                       _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
                       t1 (System/currentTimeMillis)
@@ -1724,7 +1837,8 @@
                           :ignite (- t3 t2)
                           :drift  (- t4 t3)
                           :fov    (- t5 t4)}))
-                (let [w2 (run-until-player-turn w)
+                (let [w (tick-pending-allies w)
+                      w2 (run-until-player-turn w)
                       _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
                       ;; fire simulation + burning entities ignite terrain + water drift
                       w3 (-> w2 fire/step-fire fire/burning-entities-ignite drift-water-items)]
