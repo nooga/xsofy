@@ -57,3 +57,33 @@
       (is (= s0 (:seed w1)) "seed unchanged")
       (is (= [] (:action-log w1)) "nothing logged")
       (is (= :inventory (:screen w1)) "screen still toggled"))))
+
+(deftest replay-reconstructs-identical-world
+  (testing "replaying a recorded log reproduces the live world"
+    (let [w0    (world/make-world 79 30 4242)
+          live  (-> w0
+                    (dispatch/dispatch :wait)
+                    (dispatch/dispatch :right)
+                    (dispatch/dispatch :wait)
+                    (dispatch/dispatch :down))
+          log   (:action-log live)
+          rep   (dispatch/replay 79 30 4242 log)]
+      (is (= (:seed live) (:seed rep)) "final seed identical")
+      (is (= (:entities live) (:entities rep)) "entity state identical")
+      (is (= (:action-log live) (:action-log rep)) "logs identical"))))
+
+;; Replay determinism is a *binary* guarantee (a recorded log either
+;; reconstructs the live world exactly or it doesn't), so a handful of seeds
+;; over a representative action sequence gives full confidence — far cheaper
+;; than a property sweep, where each trial runs two full playthroughs.
+;; Action alphabet excludes menu-driven item use (the :quick-menu path is not
+;; yet routed through dispatch).
+(deftest replay-is-deterministic-across-seeds
+  (testing "for several seeds, replay reconstructs live play exactly"
+    (let [actions [:right :wait :down :fire :left :wait :up :pickup :down-right :wait]]
+      (doseq [seed [1 42 777 123456 999999]]
+        (let [live (reduce dispatch/dispatch (world/make-world 79 30 seed) actions)
+              rep  (dispatch/replay 79 30 seed (:action-log live))]
+          (is (= (:seed live) (:seed rep)) (str "seed " seed ": final seed identical"))
+          (is (= (:entities live) (:entities rep)) (str "seed " seed ": entity state identical"))
+          (is (= (:action-log live) (:action-log rep)) (str "seed " seed ": logs identical")))))))

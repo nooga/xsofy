@@ -12,7 +12,8 @@
             [xsofy.ui :as ui]
             [xsofy.runes :as runes]
             [xsofy.title :as title]
-            [xsofy.debug :as dbg]))
+            [xsofy.debug :as dbg]
+            [xsofy.dispatch :as dispatch]))
 
 
 (defn init-terminal []
@@ -497,7 +498,7 @@
                           (:auto-target world) :auto-target-step
                           :else nil)
                key (or auto-key (input/parse-key (term/read-key)))
-               new-world (world/update-world world key)
+               new-world (dispatch/dispatch world key)
                ;; check if auto-mode should stop
                new-world (if (or (:resting new-world) (:running-dir new-world) (:autoexploring new-world) (:auto-target new-world))
                            (let [player (get-in new-world [:entities :player])

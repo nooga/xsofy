@@ -37,3 +37,10 @@
           w'     (world/update-world salted action)]
       (update w' :action-log conj action))
     (world/update-world world action)))
+
+(defn replay
+  "Reconstruct a world by replaying `actions` on a fresh deterministic world
+   built from `seed`. Returns the final world. Because dispatch is pure and
+   the seed chain is reproduced exactly, this equals the original live play."
+  [w h seed actions]
+  (reduce dispatch (world/make-world w h seed) actions))
