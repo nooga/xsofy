@@ -54,6 +54,13 @@
   [world context]
   (advance world context))
 
+(defn combine
+  "Pure seed fold: derive a new seed from `seed` and `contextual` without a
+   world. Used to derive construction seeds (e.g. a floor's layout seed from
+   the origin seed + depth) independently of the gameplay chain."
+  [seed contextual]
+  (h/combine seed contextual))
+
 (defn- step
   "Internal: advance world by op-signature, return [seed' world']."
   [world op-signature]

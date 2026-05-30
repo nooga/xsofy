@@ -143,10 +143,13 @@
 
 ;; --- World Creation ---
 
-(defn generate-floor [w h depth player]
-  (dbg/log "generate-floor" w h "depth:" depth)
-  (let [;; seed up front; terrain consumes & advances it deterministically
-        initial-world {:seed depth}
+(defn generate-floor [w h depth player seed-input]
+  (dbg/log "generate-floor" w h "depth:" depth "seed-input:" seed-input)
+  (let [;; Floor layout is path-independent: derive a construction seed from
+        ;; the origin seed + depth. terrain/population consume & advance THIS
+        ;; lineage; the caller restores the continuous gameplay :seed afterward.
+        floor-seed (det/combine seed-input [:floor depth])
+        initial-world {:seed floor-seed}
         terrain-result (terrain/generate-level w h depth initial-world)
         {:keys [grid rooms]} (first terrain-result)
         world-after-terrain (second terrain-result)
@@ -218,15 +221,17 @@
         [w _] (give-item w :health-potion :player)]
     w))
 
-(defn make-world [w h]
-  (let [world (generate-floor w h 1 (make-player))
+(defn make-world [w h seed]
+  (let [world (generate-floor w h 1 (make-player) seed)
         rune-pair (runes/generate-rune-table world)
         rune-table (first rune-pair)
         world (second rune-pair)]
     (-> world
         give-starting-items
         (assoc :floors {} :gold 0 :rune-table rune-table)
-        spawn-runestones)))
+        spawn-runestones
+        ;; final step: start the continuous gameplay chain at the origin seed
+        (assoc :seed seed :seed-input seed :action-log []))))
 
 ;; --- Floor Transition ---
 ;; Saves current floor, extracts player + inventory items,
@@ -327,6 +332,9 @@
          :depth depth
          :floors (:floors world)
          :scheme (:scheme world)
+         :seed (:seed world)
+         :seed-input (:seed-input world)
+         :action-log (or (:action-log world) [])
          :running true}
         (inject-player player items nil)
         rebase-creature-ticks)))
@@ -499,7 +507,7 @@
       ;; generate new floor
       (do (title/show-descending-screen new-depth (or (:scheme world) [80 120 220]))
           (let [new-player (assoc player :pos [0 0])  ;; pos set by generate-floor
-                new-world (generate-floor width height new-depth new-player)
+                new-world (generate-floor width height new-depth new-player (:seed-input saved))
                 spawn-pos (get-in new-world [:entities :player :pos])]
             ;; re-inject with proper items
             ;; reset player ticks to 0 so they act first on new floor
@@ -510,9 +518,13 @@
                          :gold (or (:gold saved) 0)
                          :rune-table (:rune-table saved)
                          :floors (:floors saved)
-                         :scheme (:scheme world))
+                         :scheme (:scheme world)
+                         :seed-input (:seed-input saved)
+                         :action-log (or (:action-log saved) []))
                   (inject-player player items spawn-pos)
                   spawn-runestones
+                  ;; final step: continue the gameplay chain from the saved world
+                  (assoc :seed (:seed saved))
                   (log-msg (str "You descend to depth " new-depth ".")))))))))
 
 (defn descend [world]

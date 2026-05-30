@@ -360,7 +360,7 @@
   (let [{:keys [title scheme]} (title/show-title-screen)
         quest (title/generate-quest)
         _ (title/show-descending-screen 1 scheme)]
-    (-> (world/make-world 79 30)
+    (-> (world/make-world 79 30 (rand-int 1000000000))
         (assoc :title title
                :scheme scheme
                :quest-item (:item quest))

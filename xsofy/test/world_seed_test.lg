@@ -142,8 +142,8 @@
     ;; today, because all worldgen rolls thread :seed and player-move
     ;; itself only consumes rolls when fighting an entity.
     (let [actions [:up :down :left :right :wait :up-left :down-right :wait :wait :left]
-          w1 (run-actions (world/make-world 30 20) actions)
-          w2 (run-actions (world/make-world 30 20) actions)]
+          w1 (run-actions (world/make-world 30 20 1) actions)
+          w2 (run-actions (world/make-world 30 20 1) actions)]
       (is (= (project w1) (project w2))))))
 
 ;; Long fuzzing run: with the same seed, longer sequences that bump into
@@ -161,8 +161,8 @@
   (testing "Long replay including combat — full-stack determinism contract"
     (let [base [:up :right :down :right :up-left :wait :down-right :left]
           actions (apply concat (repeat 5 base))
-          w1 (run-actions (world/make-world 30 20) actions)
-          w2 (run-actions (world/make-world 30 20) actions)]
+          w1 (run-actions (world/make-world 30 20 1) actions)
+          w2 (run-actions (world/make-world 30 20 1) actions)]
       (is (= (project w1) (project w2))
           (str "REPLAY DIVERGED — non-determinism leak in gameplay rolls:\n"
                "  w1=" (project w1) "\n"

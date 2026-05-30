@@ -1,0 +1,31 @@
+(ns xsofy.test.dispatch-test
+  "Tests for xsofy.dispatch — single dispatch entry, per-action seed fold,
+   action logging, and (seed, action-log) replay determinism."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.check :as c]
+            [xsofy.world :as world]
+            ;; TODO: uncomment when xsofy.dispatch exists (Task 2+)
+            ;; [xsofy.dispatch :as dispatch]
+            ))
+
+(deftest make-world-is-reproducible
+  (testing "same seed → identical world; different seed → different world"
+    (let [a (world/make-world 79 30 12345)
+          b (world/make-world 79 30 12345)
+          d (world/make-world 79 30 99999)]
+      (is (= (vec (:terrain a)) (vec (:terrain b))) "terrain byte-arrays have same content")
+      (is (= (:entities a) (:entities b)))
+      (is (= 12345 (:seed-input a)) "origin seed recorded once")
+      (is (= 12345 (:seed a)) "gameplay chain starts at the origin seed")
+      (is (= [] (:action-log a)) "log starts empty")
+      (is (not= (vec (:terrain a)) (vec (:terrain d))) "different seed → different map"))))
+
+(deftest floors-are-path-independent
+  (testing "a floor's layout depends only on (seed-input, depth), not the gameplay chain"
+    (let [player (world/make-player)
+          f1 (world/generate-floor 79 30 3 player 42)
+          f2 (world/generate-floor 79 30 3 player 42)]
+      (is (= (vec (:terrain f1)) (vec (:terrain f2))) "floor 3 of seed 42 is canonical")
+      (is (not= (vec (:terrain f1))
+                (vec (:terrain (world/generate-floor 79 30 4 player 42))))
+          "different depth → different floor"))))
