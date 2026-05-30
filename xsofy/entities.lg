@@ -405,6 +405,10 @@
                     (assoc-in [:entities clone-id :body :hp] half-hp)
                     (assoc-in [:entities clone-id :body :max-hp] half-hp)
                     (assoc-in [:entities clone-id :ticks] parent-ticks)
+                    ;; Inherit :friendly — without this, a friendly slime
+                    ;; that gets hit spawns hostile clones in :hunt state
+                    ;; right next to the player. Surfaced in playtest.
+                    (assoc-in [:entities clone-id :friendly] (:friendly entity))
                     (assoc-in [:entities clone-id :ai :state] :hunt)))))))
       nil)))
 
