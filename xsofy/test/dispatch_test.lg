@@ -4,8 +4,7 @@
   (:require [test :refer [deftest is testing]]
             [xsofy.check :as c]
             [xsofy.world :as world]
-            ;; TODO: uncomment when xsofy.dispatch exists (Task 2+)
-            ;; [xsofy.dispatch :as dispatch]
+            [xsofy.dispatch :as dispatch]
             ))
 
 (deftest make-world-is-reproducible
@@ -29,3 +28,17 @@
       (is (not= (vec (:terrain f1))
                 (vec (:terrain (world/generate-floor 79 30 4 player 42))))
           "different depth → different floor"))))
+
+(deftest replay-action-classification
+  (testing "world-mutating actions are replay actions"
+    (is (dispatch/replay-action? :up))
+    (is (dispatch/replay-action? :fire))
+    (is (dispatch/replay-action? :wait))
+    (is (dispatch/replay-action? :descend))
+    (is (dispatch/replay-action? :pickup)))
+  (testing "pure-UI actions are not"
+    (is (not (dispatch/replay-action? :messages)))
+    (is (not (dispatch/replay-action? :inventory)))
+    (is (not (dispatch/replay-action? :help)))
+    (is (not (dispatch/replay-action? :quit)))
+    (is (not (dispatch/replay-action? :equip-menu)))))
