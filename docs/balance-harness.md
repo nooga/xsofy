@@ -217,6 +217,44 @@ Run `./bin/lg xsofy/test/run.lg` to verify the harness compiles and tests pass.
 ; - Was the loadout unsuitable? (compare other loadouts)
 ```
 
+## Sample Sweep & Findings (2026-05-30)
+
+A 40-run sweep across all 4 loadouts × all 5 policies (`max-turns 250`, `target-depth 5`, `seed 7`), ~20s wall time:
+
+```
+Per-loadout outcomes:                          mean-turns survived
+  starter:                   8 died, 2 stuck       72.0
+  starter-with-damage-rune:  7 died, 3 stuck       80.9
+  heavy-melee:               7 died, 3 stuck       63.5
+  ranged:                    8 died, 2 stuck       75.8
+  (reach-rate 0.0 for all — see note below)
+
+Death by depth:
+  starter:                   depth 1: 6, depth 2: 1, depth 3: 1
+  starter-with-damage-rune:  depth 1: 6, depth 2: 1
+  heavy-melee:               depth 1: 6, depth 2: 1
+  ranged:                    depth 1: 6, depth 2: 2
+
+Death by creature (top killers):
+  starter:                   slime 3, archer 2, rat 2, status/env 1
+  ranged:                    spider 3, slime 2, kobold 1, archer 1, rat 1
+  heavy-melee:               archer 2, slime 2, kobold 1, spider 1, status/env 1
+  starter-with-damage-rune:  kobold 2, rat 2, slime 1, spider 1, status/env 1
+```
+
+Signals worth a look (balance observations, not bugs):
+
+- **The `:damage` rune measurably helps survival** — `starter-with-damage-rune` averaged 80.9 turns vs 72.0 for plain `:starter`.
+- **`:heavy-melee` is the *worst* performer (63.5 mean-turns)** — it dies *faster* than the starter, which is counterintuitive. Likely the long-sword's speed penalty lets creatures land extra hits before the bot swings. Worth checking weapon-speed vs. survivability.
+- **Top early killers:** slimes (all loadouts), spiders (punish `:ranged`), archers (ranged attackers hit everyone). `status/env` = burning/poison or lava/chasm deaths.
+- **`reach-rate = 0.0`** — none of the heuristic bots reach `target-depth 5`. Absolute depth reflects *bot quality + early-game lethality*, so trust the **comparative** numbers (rune vs. no-rune, loadout vs. loadout), not the absolute reach rate.
+
+Harness/agent limitation surfaced by the sweep:
+
+- **`:ensouled` and `:passive-rest` frequently report `:stuck`** (e.g. `:ensouled → stuck (turn 41)` recurs). `:ensouled` emits many non-advancing actions (blocked moves), so the world advances only ~41 turns before the iteration cap. This is a **policy-quality issue in `:ensouled`** (stall / weak pathing), not a harness bug — a candidate for follow-up.
+
+> Reproduce: `(b/explore {:n-runs 40 :loadouts [:starter :starter-with-damage-rune :heavy-melee :ranged] :policies [:greedy-melee :greedy-descend :random :passive-rest :ensouled] :max-turns 250 :target-depth 5 :seed 7})`
+
 ## See Also
 
 - `xsofy/balance.lg` — full harness code
