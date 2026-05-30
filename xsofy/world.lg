@@ -1239,7 +1239,9 @@
                    inv))))
 
 (defn find-nearest-enemy [world max-range]
-  "Find nearest visible enemy within range. Returns entity or nil."
+  "Find nearest visible enemy within range. Returns entity or nil.
+   Skips :friendly entities so the fire-bow doesn't target the player's
+   own summons."
   (let [player-pos (get-in world [:entities :player :pos])
         fov (or (:fov world) #{})
         [px py] player-pos
@@ -1247,6 +1249,7 @@
                         (filter (fn [e]
                                   (and (:ai e) (:pos e)
                                        (not= :player (:id e))
+                                       (not (:friendly e))
                                        (get-in e [:body :hp])
                                        (contains? fov (:pos e)))))
                         (vec))]
@@ -1422,6 +1425,39 @@
               update-fov
               (log-msg "You open the door.")))
 
+      ;; Bumping a friendly: swap places (Brogue-style) when both cells
+      ;; are safe, log a block otherwise. Avoids friendly-fire melee and
+      ;; prevents the player from getting stuck behind their own summon
+      ;; in narrow passages. Friendlies on hazard tiles can't be swapped
+      ;; into — player would fall in.
+      ;;
+      ;; Charge the swapped friendly its own per-turn cost too. Without
+      ;; this the swap moves the ally one tile but leaves their :ticks
+      ;; untouched, so run-until-player-turn gives them an immediate
+      ;; full turn — net effect is a 2-tile move per single player
+      ;; step. (quot move-cost speed) preserves speed-2 allies'
+      ;; advantage.
+      (let [c (ent/creature-at world [nx ny])]
+        (and c (:friendly c)))
+      (let [bump (ent/creature-at world [nx ny])
+            bname (or (:item-name bump)
+                      (name (or (:template bump) (:id bump))))
+            ;; Clamp at 1: (or x 1) defaults a missing key, but an
+            ;; explicit :ai {:speed 0} (templated or set by future code)
+            ;; would still divide by zero.
+            bump-speed (max 1 (or (get-in bump [:ai :speed]) 1))
+            bump-cost (quot move-cost bump-speed)]
+        (if (terrain/walkable? terrain width height nx ny)
+          (-> world
+              (assoc-in [:entities :player :pos] [nx ny])
+              (assoc-in [:entities (:id bump) :pos] [px py])
+              (add-ticks :player move-cost)
+              (add-ticks (:id bump) bump-cost)
+              (update :turn inc)
+              update-fov
+              (log-msg (str "You swap places with the " bname ".")))
+          (log-msg world (str "The " bname " is in the way."))))
+
       ;; walkable, reach weapon, or a non-player creature on the
       ;; destination cell — bumping a creature on a hazard tile (e.g.
       ;; wraith over chasm) should attack, not open the leap prompt
@@ -1439,12 +1475,14 @@
             ;; compute all positions this pattern can hit
             positions (when (or has-target can-pattern-attack)
                         (combat/pattern-target-positions world px py dx dy pattern))
-            ;; find creatures at those positions
+            ;; find creatures at those positions — friendlies skipped so
+            ;; reach/skip patterns pass through allies to hostiles beyond.
             targets (when positions
                       (vec (filter some?
                              (map (fn [pos]
                                     (let [c (ent/creature-at world pos)]
-                                      (when (and c (not= :player (:id c)))
+                                      (when (and c (not= :player (:id c))
+                                                 (not (:friendly c)))
                                         {:id (:id c) :pos pos})))
                                   positions))))
             ;; for :reach, only hit the FIRST creature in the line
