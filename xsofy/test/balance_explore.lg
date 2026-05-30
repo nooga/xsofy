@@ -15,9 +15,9 @@
 (println "Running balance sweep (small params: 6 runs per policy, should finish in ~30s)...")
 (let [report (b/explore {:n-runs 6
                          :loadouts [:starter :starter-with-damage-rune]
-                         :policies [:greedy-melee :ensouled]
-                         :max-turns 200
-                         :target-depth 3
+                         :policies [:greedy-descend :ensouled]
+                         :max-turns 400
+                         :target-depth 4
                          :width 40
                          :height 25
                          :seed 42})]
