@@ -338,7 +338,14 @@
             before (set (keys (:entities world)))
             w (ent/spawn world species pos)
             new-id (first (filter #(not (contains? before %))
-                                  (keys (:entities w))))]
+                                  (keys (:entities w))))
+            ;; Inherit caster's :ticks so the summon doesn't start at 0
+            ;; while everyone else on the floor sits at hundreds. Without
+            ;; this, run-until-player-turn has to catch the summon up,
+            ;; and pulls all other low-ticks actors forward with it —
+            ;; hostiles get multi-tile "jump" turns per player step.
+            caster-ticks (or (get-in world [:entities (:caster ctx) :ticks]) 0)
+            w (assoc-in w [:entities new-id :ticks] caster-ticks)]
         (-> ctx
             (assoc :world w)
             (assoc :last-conjured-id new-id))))))
