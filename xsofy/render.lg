@@ -142,6 +142,11 @@
     (= :item (:entity-type e))  1
     :else                       2))
 
+;; Tint blended into a creature's :visual color when (:friendly e) is
+;; true. Cyan-blue stays clear of player gold [255 220 80], hostile red,
+;; goblin green, fire-orange.
+(def friendly-tint [120 200 255])
+
 (defn render-entity [world r entity]
   (when-let [pos (:pos entity)]
     (let [{:keys [fov]} world
@@ -160,15 +165,23 @@
                     (fx/stain-tint-bg tile-bg (:type stain) (or (:intensity stain) 1) x y)
                     tile-bg)
               bg-lit (if lv (light/apply-light bg0 lv) bg0)
-              ;; entity fg — apply status tint if any
+              ;; entity fg — apply friendly tint first (so an ally on
+              ;; fire still reads as burning), then status tint.
               base-fg (get-in entity [:visual :color] [200 60 60])
+              friendly-fg (if (:friendly entity)
+                            (let [[br bg bb] base-fg
+                                  [fr fgc fb] friendly-tint]
+                              [(quot (+ br fr) 2)
+                               (quot (+ bg fgc) 2)
+                               (quot (+ bb fb) 2)])
+                            base-fg)
               stint (status/entity-status-tint entity)
               fg0 (if stint
                     (let [[sc _] stint
-                          [br bg bb] base-fg
+                          [br bg bb] friendly-fg
                           [sr sg sb] sc]
                       [(quot (+ br sr) 2) (quot (+ bg sg) 2) (quot (+ bb sb) 2)])
-                    base-fg)
+                    friendly-fg)
               bg1 (if stint
                     (let [[_ sbg] stint
                           [br bg bb] bg-lit
@@ -230,10 +243,13 @@
         tpl (:template c)
         eid (:id c)
         cname (if tpl (name tpl) (if eid (name eid) "???"))
-        color (or (get-in c [:visual :color]) [200 60 60])
+        ally-tag (if (:friendly c) " (ally)" "")
+        color (if (:friendly c)
+                friendly-tint
+                (or (get-in c [:visual :color]) [200 60 60]))
         glyph (or (get-in c [:visual :glyph]) "?")]
     (when (< (+ row 1) (:h r))
-      (ui/write-line r row (str " " glyph " " cname) color ui/bg)
+      (ui/write-line r row (str " " glyph " " cname ally-tag) color ui/bg)
       (let [row (inc row)]
         (ui/bar r row (str " " chp "/" cmhp)
                 chp cmhp
