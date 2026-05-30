@@ -1,0 +1,65 @@
+(ns startup-perf
+  (:require [xsofy.terrain :as terrain]
+            [xsofy.world :as world]
+            [xsofy.runes :as runes]
+            [xsofy.items :as items]))
+
+(defn ms [] (System/currentTimeMillis))
+
+(defn elapsed [f]
+  (let [t0 (ms)
+        result (f)
+        t1 (ms)]
+    [(- t1 t0) result]))
+
+(defn avg [xs]
+  (if (zero? (count xs))
+    0
+    (/ (reduce + 0 xs) (count xs))))
+
+(defn print-times [label times]
+  (println label
+           "runs:" (count times)
+           "avg-ms:" (avg times)
+           "times:" times))
+
+(defn run-times [n f]
+  (loop [i 0 out []]
+    (if (>= i n)
+      out
+      (let [[dt _] (elapsed #(f i))]
+        (recur (inc i) (conj out dt))))))
+
+(defn measure-generate-level [n]
+  (run-times n
+             (fn [i]
+               (terrain/generate-level 79 30 1 {:seed (+ 1000 i)}))))
+
+(defn measure-generate-floor [n]
+  (run-times n
+             (fn [i]
+               (world/generate-floor 79 30 1 (world/make-player) (+ 1000 i)))))
+
+(defn measure-make-world [n]
+  (run-times n
+             (fn [i]
+               (world/make-world 79 30 (+ 1000 i)))))
+
+(defn measure-runes [n]
+  (let [base (world/generate-floor 79 30 1 (world/make-player) 1000)]
+    (run-times n
+               (fn [i]
+                 (runes/generate-rune-table (assoc base :seed (+ 2000 i)))))))
+
+(defn measure-loot [n]
+  (run-times n
+             (fn [i]
+               (items/roll-floor-loot {:seed (+ 3000 i)} 1))))
+
+(def n 5)
+
+(print-times "generate-level" (measure-generate-level n))
+(print-times "generate-floor" (measure-generate-floor n))
+(print-times "make-world" (measure-make-world n))
+(print-times "generate-rune-table" (measure-runes n))
+(print-times "roll-floor-loot" (measure-loot n))

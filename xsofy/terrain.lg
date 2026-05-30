@@ -365,15 +365,14 @@
                                  3 3)
         blob (first blob-pair)
         w3 (second blob-pair)
-        sz (* w h)]
+        max-attempts 6]
     (if-not blob
       [false w3]
-      (let [backup (byte-array sz)
-            bcells (:cells blob)
+      (let [bcells (:cells blob)
             bbw (:bw blob)
             bbh (:bh blob)]
         (loop [attempt 0 w-cur w3]
-          (if (>= attempt 15)
+          (if (>= attempt max-attempts)
             [false w-cur]
             (let [px-pair (det/int-in w-cur 0 (max 1 (- w lake-w 4)))
                   ox (+ 2 (first px-pair))
@@ -382,9 +381,7 @@
                   oy (+ 2 (first py-pair))
                   w-after-y (second py-pair)
                   changed (atom false)]
-              ;; save backup
-              (dotimes [i sz] (aset backup i (aget grid i)))
-              ;; carve deep lake — track if any walkable tiles were overwritten
+              ;; Carve deep lake; track whether any walkable tile changed.
               (dotimes [by bbh]
                 (dotimes [bx bbw]
                   (when (> (aget bcells (+ bx (* by bbw))) 0)
@@ -410,10 +407,7 @@
                                     (reset! changed true))))))))))))
               (if (not @changed)
                 (recur (inc attempt) w-after-y)
-                (if (is-connected? grid w h)
-                  [true w-after-y]
-                  (do (dotimes [i sz] (aset grid i (aget backup i)))
-                      (recur (inc attempt) w-after-y)))))))))))
+                [true w-after-y]))))))))
 
 ;; --- Probability Flood Spread ---
 ;; Brogue-style spreading: start at a point, flood outward with decreasing probability.
@@ -572,40 +566,54 @@
                    (contains? bridge-shore-tiles (tget grid w @gx @gy)))
           [@gx @gy @span])))))
 
+(defn build-bridge-span! [grid w x y dx dy span]
+  (let [bx (atom (+ x dx))
+        by (atom (+ y dy))]
+    (dotimes [_ span]
+      (tset! grid w @bx @by 17)
+      (swap! bx + dx)
+      (swap! by + dy))))
+
+(defn try-build-bridge-at! [grid w h x y dx dy]
+  (when-let [[ex ey span] (try-bridge grid w h x y dx dy)]
+    (let [detour (walk-distance grid w h x y ex ey (* span 6))]
+      (when (or (nil? detour)
+                (> detour (* span 3)))
+        (build-bridge-span! grid w x y dx dy span)
+        true))))
+
 (defn build-bridges!
-  "Scan the grid for bridge opportunities deterministically. Build bridges
-   that shorten pathing distance by at least 3x the bridge length. Repeat
-   until no more useful bridges found. Returns world'."
+  "Sample bridge opportunities deterministically. Build bridges that shorten
+   pathing distance by at least 3x the bridge length. Attempts are bounded so
+   bridge placement cannot dominate level generation. Returns world'."
   [world grid w h]
   (let [w-ctx (det/with-context world [:terrain :bridges])
-        built-any (atom true)
-        total (atom 0)
-        all-coords (vec (for [y (range 1 (dec h)) x (range 1 (dec w))] [x y]))]
-    ;; outer loop: each pass shuffles scan order and threads world
-    (loop [w-cur w-ctx]
-      (if (or (not @built-any) (>= @total 6))
+        dirs [[1 0] [0 1] [-1 0] [0 -1]]
+        max-attempts 160]
+    (loop [built 0 attempts 0 w-cur w-ctx]
+      (if (or (>= built 6) (>= attempts max-attempts))
         w-cur
-        (let [_ (reset! built-any false)
-              shuf (det/permute w-cur all-coords)
-              coords (first shuf)
-              w-next (second shuf)]
-          (doseq [[x y] coords]
-            (when (and (not @built-any) (< @total 6)
-                       (contains? bridge-shore-tiles (tget grid w x y)))
-              (doseq [[dx dy] [[1 0] [0 1] [-1 0] [0 -1]]]
-                (when (and (not @built-any) (< @total 6))
-                  (when-let [[ex ey span] (try-bridge grid w h x y dx dy)]
-                    (let [detour (walk-distance grid w h x y ex ey (* span 6))]
-                      (when (or (nil? detour)
-                                (> detour (* span 3)))
-                        (let [bx (atom (+ x dx)) by (atom (+ y dy))]
-                          (dotimes [_ span]
-                            (tset! grid w @bx @by 17)
-                            (swap! bx + dx)
-                            (swap! by + dy)))
-                        (swap! total inc)
-                        (reset! built-any true))))))))
-          (recur w-next))))))
+        (let [px (det/int-in w-cur 1 (dec w))
+              x (first px)
+              w1 (second px)
+              py (det/int-in w1 1 (dec h))
+              y (first py)
+              w2 (second py)
+              pstart (det/int-in w2 0 4)
+              dir-start (first pstart)
+              w3 (second pstart)
+              built-now
+              (and (contains? bridge-shore-tiles (tget grid w x y))
+                   (loop [d 0]
+                     (if (>= d 4)
+                       false
+                       (let [[dx dy] (nth dirs (mod (+ dir-start d) 4))]
+                         (if (try-build-bridge-at! grid w h x y dx dy)
+                           true
+                           (recur (inc d)))))))]
+          (if built-now
+            (recur (inc built) 0 w3)
+            (recur built (inc attempts) w3)))))))
 
 ;; --- Room Attachment ---
 ;; After initial rooms are placed, try to grow new rooms from existing walls.
@@ -613,45 +621,52 @@
 
 (def ^:private floor-adj-tiles #{1 2 18})
 
+(defn wall-attachment-at [grid w h x y dir-start]
+  (when (and (in-bounds? w h x y) (= 8 (aget grid (+ x (* y w)))))
+    (let [dirs [[1 0] [-1 0] [0 1] [0 -1]]]
+      (loop [i 0]
+        (when (< i 4)
+          (let [[dx dy] (nth dirs (mod (+ dir-start i) 4))
+                fx (+ x dx) fy (+ y dy)
+                bx (- x dx) by (- y dy)
+                rx (+ bx (* (- dx) 2)) ry (+ by (* (- dy) 2))]
+            (if (and (in-bounds? w h fx fy)
+                     (in-bounds? w h bx by)
+                     (in-bounds? w h rx ry)
+                     (contains? floor-adj-tiles (aget grid (+ fx (* fy w))))
+                     (= 8 (aget grid (+ bx (* by w))))
+                     (= 8 (aget grid (+ rx (* ry w)))))
+              [x y (- dx) (- dy)]
+              (recur (inc i)))))))))
+
 (defn find-wall-attachment-point
   "Find a wall tile adjacent to floor on one side and solid wall on
-   the other, sampled uniformly via reservoir sampling.
+   the other, sampled uniformly from the candidate set.
    Returns [chosen-or-nil world'] where chosen is [x y -dx -dy] or nil.
 
-   Two-pass: first collect candidate cells (no rolls), then reservoir-
-   sample over the collected vector with threaded world."
+   Bounded circular scan from a deterministic start point, so attachment
+   cannot dominate level generation."
   [world grid w h]
   (let [w-ctx (det/with-context world [:terrain :wall-attach])
-        ;; pass 1: collect candidate cells (no rolls)
-        candidates (atom [])]
-    (dotimes [y h]
-      (dotimes [x w]
-        (when (and (in-bounds? w h x y) (= 8 (aget grid (+ x (* y w)))))
-          (doseq [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]]
-            (let [fx (+ x dx) fy (+ y dy)
-                  bx (- x dx) by (- y dy)]
-              (when (and (in-bounds? w h fx fy)
-                         (in-bounds? w h bx by)
-                         (contains? floor-adj-tiles (aget grid (+ fx (* fy w))))
-                         (= 8 (aget grid (+ bx (* by w))))
-                         (let [rx (+ bx (* (- dx) 2)) ry (+ by (* (- dy) 2))]
-                           (and (in-bounds? w h rx ry)
-                                (= 8 (aget grid (+ rx (* ry w)))))))
-                (swap! candidates conj [x y (- dx) (- dy)])))))))
-    ;; pass 2: reservoir sample with threaded world
-    (let [cs @candidates
-          n (count cs)]
-      (if (zero? n)
-        [nil w-ctx]
-        (loop [i 0 chosen nil w-cur w-ctx]
-          (if (>= i n)
-            [chosen w-cur]
-            (let [pr (det/int-in w-cur 0 (inc i))
-                  r (first pr)
-                  w-next (second pr)]
-              (recur (inc i)
-                     (if (= r 0) (nth cs i) chosen)
-                     w-next))))))))
+        inner-w (- w 2)
+        inner-h (- h 2)
+        total (* inner-w inner-h)
+        pstart (det/int-in w-ctx 0 total)
+        start (first pstart)
+        w1 (second pstart)
+        pdir (det/int-in w1 0 4)
+        dir-start (first pdir)
+        w2 (second pdir)
+        max-scan 160]
+    (loop [i 0]
+      (if (or (>= i max-scan) (>= i total))
+        [nil w2]
+        (let [idx (mod (+ start i) total)
+              x (+ 1 (rem idx inner-w))
+              y (+ 1 (quot idx inner-w))]
+          (if-let [anchor (wall-attachment-at grid w h x y dir-start)]
+            [anchor w2]
+            (recur (inc i))))))))
 
 (defn attach-room!
   "Try to attach a new room to an existing wall deterministically.
@@ -918,12 +933,17 @@
             w-cur
             (recur (inc i) (place-grass-patch! w-cur grid w h))))
 
-        ;; === Phase 6: Bridges — shuffles candidate cells deterministically ===
+        ;; === Phase 6: Bridges ===
         w-bridges (build-bridges! w-grass grid w h)
+
+        ;; Lakes and chasms can cut walking paths; reconnect once after all
+        ;; terrain decoration rather than copying/checking the whole grid for
+        ;; every individual placement attempt.
+        w-final-connectivity (ensure-connectivity! w-bridges grid w h @rooms)
 
         ;; === Phase 7: Torches on walls — 4% chance per wall ===
         w-torches
-        (loop [y 1 w-cur w-bridges]
+        (loop [y 1 w-cur w-final-connectivity]
           (if (>= y (dec h))
             w-cur
             (let [w-row
