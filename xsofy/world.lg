@@ -1567,7 +1567,9 @@
 
 (defn update-world [world action]
   (dbg/snapshot! world "update-world:enter " action)
-  (case action
+  ;; Actions are either a bare keyword (:up, :wait) or a parameterized map
+  ;; ({:type :use-item :id :potion-7}); dispatch on the type either way.
+  (case (if (map? action) (:type action) action)
     :descend (descend world)
     :ascend (ascend world)
     :messages (assoc world :screen :messages)
@@ -1579,7 +1581,8 @@
     :unequip-menu (assoc world :screen :quick-menu :menu-action :unequip)
     :drop-menu (assoc world :screen :quick-menu :menu-action :drop)
     :use-menu (assoc world :screen :quick-menu :menu-action :use)
-    (let [w (case action
+    (let [w (case (if (map? action) (:type action) action)
+              :use-item (use-item world (:id action))
               :fire (fire-bow world)
               :up    (player-move world 0 -1)
               :down  (player-move world 0 1)

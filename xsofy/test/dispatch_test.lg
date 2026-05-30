@@ -87,3 +87,14 @@
           (is (= (:seed live) (:seed rep)) (str "seed " seed ": final seed identical"))
           (is (= (:entities live) (:entities rep)) (str "seed " seed ": entity state identical"))
           (is (= (:action-log live) (:action-log rep)) (str "seed " seed ": logs identical")))))))
+
+(deftest map-action-payload
+  (testing "parameterized action maps: dispatch by :type, logged whole, keyword path intact"
+    (let [w0  (world/make-world 79 30 5)
+          pid (first (get-in w0 [:entities :player :inventory]))
+          act {:type :use-item :id pid}]
+      (is (= :use-item (dispatch/action-type act)) "map → its :type")
+      (is (= :up (dispatch/action-type :up)) "keyword → itself")
+      (is (dispatch/replay-action? act) "use-item map is a replay action")
+      (is (not (dispatch/replay-action? {:type :inventory})) "UI-typed map is not")
+      (is (= [act] (:action-log (dispatch/dispatch w0 act))) "full action map logged for replay"))))

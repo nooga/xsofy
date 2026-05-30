@@ -17,13 +17,20 @@
     :equip-menu :unequip-menu :drop-menu :use-menu
     :quit})
 
+(defn action-type
+  "The dispatch key for an action: a bare keyword as-is, or the :type of a
+   parameterized action map (e.g. {:type :use-item :id :potion-7}). Lets the
+   simple keyword path stay simple while a few actions carry a payload."
+  [action]
+  (if (map? action) (:type action) action))
+
 (defn replay-action?
   "True if `action` can mutate world state and must therefore be folded
    into the seed and recorded for replay. Everything that is not a pure-UI
    action qualifies (movement, attacks, wait/rest, fire, autoexplore,
-   descend/ascend, pickup)."
+   descend/ascend, pickup, parameterized actions like :use-item)."
   [action]
-  (not (contains? ui-actions action)))
+  (not (contains? ui-actions (action-type action))))
 
 (defn dispatch
   "Resolve one input action against the world. For replay actions, fold the
@@ -33,7 +40,9 @@
   [world action]
   (if (replay-action? action)
     (let [turn   (:turn world)
-          salted (det/advance world [:action turn action])
+          ;; fold the action TYPE into the seed — encode-salt can't take a map;
+          ;; an action's params are reproduced via the recorded :action-log.
+          salted (det/advance world [:action turn (action-type action)])
           w'     (world/update-world salted action)]
       (update w' :action-log conj action))
     (world/update-world world action)))
