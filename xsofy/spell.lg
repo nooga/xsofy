@@ -7,6 +7,7 @@
             [xsofy.util :as u]
             [xsofy.runes :as runes]
             [xsofy.opcontext :as opctx]
+            [xsofy.det :as det]
             [math]))
 
 ;; --- Spell Context ---
@@ -289,19 +290,22 @@
    [:wraith 1]])                                 ;; tier 5 — depth 5-6
 
 (defn- weighted-pick
-  "Pick a key from a vec of [k weight] pairs, biased by weight."
-  [pairs]
+  "Pick a key from a vec of [k weight] pairs, biased by weight.
+   Threads :seed via det/int-in for deterministic conjure rolls.
+   Returns [k world']."
+  [world pairs]
   (let [total (reduce + (map second pairs))
-        roll (rand-int total)]
+        [roll world] (det/int-in world 0 total)]
     (loop [pairs pairs acc 0]
       (let [[k w] (first pairs)
             acc' (+ acc w)]
         (if (> acc' roll)
-          k
+          [k world]
           (recur (rest pairs) acc'))))))
 
 (defn- adjacent-spawn-cell
-  "Random walkable + unoccupied 8-neighbor of pos. nil if none."
+  "Random walkable + unoccupied 8-neighbor of pos. Threads :seed via
+   det/pick. Returns [pos-or-nil world']."
   [world [x y]]
   (let [{:keys [terrain width height]} world
         candidates (vec (for [dx [-1 0 1]
@@ -311,8 +315,9 @@
                               :when (terrain/walkable? terrain width height nx ny)
                               :when (nil? (ent/creature-at world [nx ny]))]
                           [nx ny]))]
-    (when (seq candidates)
-      (nth candidates (rand-int (count candidates))))))
+    (if (empty? candidates)
+      [nil world]
+      (det/pick world candidates))))
 
 (defn r-conjure
   "Summon a random creature next to the caster, weighted toward weaker
@@ -324,10 +329,12 @@
   [ctx]
   (let [world (:world ctx)
         caster-pos (get-in world [:entities (:caster ctx) :pos])
-        pos (when caster-pos (adjacent-spawn-cell world caster-pos))]
+        [pos world] (if caster-pos
+                      (adjacent-spawn-cell world caster-pos)
+                      [nil world])]
     (if (nil? pos)
       (assoc ctx :fizzle {:rune :conjure :reason :no-room})
-      (let [species (weighted-pick conjurable-species)
+      (let [[species world] (weighted-pick world conjurable-species)
             before (set (keys (:entities world)))
             w (ent/spawn world species pos)
             new-id (first (filter #(not (contains? before %))

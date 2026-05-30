@@ -262,8 +262,8 @@
   (testing "generate-runic-program never emits a program the spell
             validator would reject."
     (doseq [tier [:useful :powerful :dangerous :broken]]
-      (dotimes [_ 100]
-        (let [program (items/generate-runic-program 1 tier)
+      (dotimes [n 100]
+        (let [[program _] (items/generate-runic-program {:seed n} 1 :weapon tier)
               steps   (runes/parse-runes (:runes program))]
           (doseq [step steps]
             (cond
