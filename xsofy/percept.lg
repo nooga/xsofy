@@ -1,0 +1,408 @@
+(ns xsofy.percept
+  "Perception layer — derives a structured view of the world from any
+   entity's point of view. Parameterized by entity-id so it works for
+   the player, an NPC agent, or a player-AI for the balance harness.
+
+   The percept is a pure function of (world, entity-id, opts):
+
+     (perceive world :player)
+     (perceive world :goblin-3 {:fov-radius 6})
+
+   What the caller does with the percept is policy. The percept itself
+   takes no side effects, makes no decisions, and is safe to compute
+   for an arbitrary number of entities per turn.
+
+   Shared between:
+     - Balance harness ensouled-agent policies (decides what to do)
+     - NPC AI dispatch (decides which behavior fragment to run)
+     - Future debug overlays (visualize what the agent sees)
+     - Property tests that need a stable view of world state
+
+   Conceptually inspired by the Sims utility-AI percept model: a flat
+   map of named features that a policy can score over."
+  (:require [xsofy.entities :as ent]
+            [xsofy.terrain :as terrain]
+            [xsofy.fov :as fov]
+            [xsofy.fire :as fire]
+            [xsofy.status :as status]
+            [math]))
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(def default-fov-radius 12)
+(def default-threat-radius 16)
+(def default-goal-radius 30)
+
+;; ============================================================================
+;; Position helpers
+;; ============================================================================
+
+(defn- distance [[ax ay] [bx by]]
+  (let [dx (- ax bx) dy (- ay by)]
+    (math/sqrt (+ (* dx dx) (* dy dy)))))
+
+(defn- manhattan [[ax ay] [bx by]]
+  (+ (math/abs (- ax bx)) (math/abs (- ay by))))
+
+(defn- chebyshev [[ax ay] [bx by]]
+  ;; "King-step" distance: max of x-delta and y-delta. This is what
+  ;; the game uses for melee adjacency (see xsofy.util/adjacent?).
+  (max (math/abs (- ax bx)) (math/abs (- ay by))))
+
+;; ============================================================================
+;; FOV — per-entity, not just the player's
+;; ============================================================================
+;;
+;; The player has a precomputed :fov on the world (updated each turn).
+;; NPCs don't get this for free — we compute on demand. Cached per-call
+;; via opts to avoid recomputing during a single perceive pass.
+
+(defn entity-fov
+  "Return the set of cells visible from entity-id's position. For the
+   player, prefers the precomputed :fov on the world. For NPCs, computes
+   fresh."
+  [world entity-id opts]
+  (let [entity (get-in world [:entities entity-id])
+        pos (:pos entity)]
+    (cond
+      (nil? pos) #{}
+      (and (= entity-id :player) (some? (:fov world))) (:fov world)
+      :else
+      (let [[x y] pos
+            radius (or (:fov-radius opts) default-fov-radius)
+            {:keys [terrain width height]} world]
+        (when (and terrain width height)
+          (fov/compute-fov terrain width height x y radius))))))
+
+;; ============================================================================
+;; Threat assessment
+;; ============================================================================
+
+(defn- creature? [entity self-id]
+  (and (:ai entity)
+       (:pos entity)
+       (not= self-id (:id entity))
+       (get-in entity [:body :hp])))
+
+(defn- estimated-damage
+  "Heuristic: expected damage this creature deals per attack."
+  [entity]
+  (let [melee-dmg (or (get-in entity [:spells :melee :damage]) 0)
+        ranged-dmg (or (get-in entity [:spells :ranged :damage]) 0)]
+    (max melee-dmg ranged-dmg)))
+
+(defn- can-attack-from
+  "Heuristic: can this creature damage `target-pos` from `enemy-pos`?
+   Returns max effective range in tiles (adjacent for melee, range
+   for ranged)."
+  [entity]
+  (let [ranged-range (get-in entity [:spells :ranged :range])
+        melee-range 1]
+    (or ranged-range melee-range)))
+
+(defn- threat-score
+  "Compose a single danger number from per-threat features. Higher =
+   more dangerous to me right now. Used by utility-AI policies to
+   rank threats."
+  [dist expected-dmg attack-range los]
+  (let [in-range (<= dist attack-range)
+        proximity-factor (cond
+                           in-range 4.0
+                           (<= dist (* attack-range 1.5)) 2.0
+                           :else (/ 1.0 (max 1.0 dist)))
+        los-factor (if los 1.0 0.3)]
+    (* expected-dmg proximity-factor los-factor)))
+
+(defn- has-clear-line?
+  "Bresenham LOS — duplicate of world.lg's. Living here so percept has
+   no dependency on world.lg. Could be unified later via xsofy.util."
+  [world x1 y1 x2 y2]
+  (let [{:keys [terrain width height]} world
+        dx (math/abs (- x2 x1))
+        dy (- (math/abs (- y2 y1)))
+        sx (if (< x1 x2) 1 -1)
+        sy (if (< y1 y2) 1 -1)
+        err (atom (+ dx dy))
+        cx (atom x1) cy (atom y1)
+        clear (atom true)]
+    (while (and @clear (not (and (= @cx x2) (= @cy y2))))
+      (let [e2 (* 2 @err)]
+        (when (>= e2 dy) (swap! err + dy) (swap! cx + sx))
+        (when (<= e2 dx) (swap! err + dx) (swap! cy + sy)))
+      (when (and @clear (not (and (= @cx x2) (= @cy y2))))
+        (when-not (terrain/transparent? terrain (:width world) (:height world) @cx @cy)
+          (reset! clear false))))
+    @clear))
+
+(defn threats
+  "Vec of threats visible to entity-id. Each entry:
+     {:id        :goblin-3
+      :template  :goblin
+      :pos       [12 8]
+      :dist      4.2
+      :expected-dmg 3
+      :attack-range 1
+      :los       true
+      :in-attack-range? true     ; can it hit me from where it is?
+      :i-can-attack?    true     ; can I hit it from here?
+      :score     12.0}            ; threat-score
+   Ordered by descending :score (most dangerous first)."
+  [world entity-id opts]
+  (let [self (get-in world [:entities entity-id])
+        self-pos (:pos self)
+        self-attack-range (let [m (get-in self [:spells :melee :damage])
+                                r (get-in self [:spells :ranged :range])]
+                            (cond (and r m) r
+                                  r r
+                                  :else 1))
+        fov-set (entity-fov world entity-id opts)
+        radius (or (:threat-radius opts) default-threat-radius)]
+    (if-not self-pos
+      []
+      (let [[sx sy] self-pos]
+        (->> (vals (:entities world))
+             (filterv (fn [e] (creature? e entity-id)))
+             (filterv (fn [e]
+                        (and (contains? fov-set (:pos e))
+                             (<= (distance self-pos (:pos e)) radius))))
+             (mapv (fn [e]
+                     (let [[ex ey] (:pos e)
+                           d (distance self-pos (:pos e))
+                           cheb (chebyshev self-pos (:pos e))
+                           dmg (estimated-damage e)
+                           rng (can-attack-from e)
+                           ;; Melee = king-step adjacent (chebyshev <= 1).
+                           ;; Ranged checks Euclidean distance vs :range.
+                           in-melee (and (<= rng 1) (= cheb 1))
+                           in-ranged (and (> rng 1) (<= d rng))
+                           los (has-clear-line? world sx sy ex ey)]
+                       {:id (:id e)
+                        :template (:template e)
+                        :pos (:pos e)
+                        :dist d
+                        :chebyshev cheb
+                        :expected-dmg dmg
+                        :attack-range rng
+                        :los los
+                        :in-attack-range? (and los (or in-melee in-ranged))
+                        :i-can-attack? (and los (or (and (<= self-attack-range 1)
+                                                         (= cheb 1))
+                                                    (and (> self-attack-range 1)
+                                                         (<= d self-attack-range))))
+                        :score (threat-score d dmg rng los)})))
+             (sort-by (fn [t] (- (:score t))))
+             vec)))))
+
+;; ============================================================================
+;; Resource state
+;; ============================================================================
+
+(defn- inventory-by-template
+  "Bucket the entity's inventory by item template. Returns
+   {:health-potion 2 :arrow 5 ...}."
+  [world entity-id]
+  (let [inv-ids (or (get-in world [:entities entity-id :inventory]) [])]
+    (reduce (fn [m id]
+              (let [item (get-in world [:entities id])
+                    tpl (:template item)
+                    cnt (or (get-in item [:item :count]) 1)]
+                (if tpl
+                  (assoc m tpl (+ (or (get m tpl) 0) cnt))
+                  m)))
+            {}
+            inv-ids)))
+
+(defn- equipment-summary
+  [world entity-id]
+  (let [equip (get-in world [:entities entity-id :equipment] {})]
+    (reduce (fn [m [slot item-id]]
+              (assoc m slot (get-in world [:entities item-id :template])))
+            {}
+            equip)))
+
+(defn- active-statuses
+  "Returns the set of active status keywords on the entity."
+  [world entity-id]
+  (set (keys (or (get-in world [:entities entity-id :statuses]) {}))))
+
+(defn resources
+  "Snapshot of the entity's own state — HP fraction, MP fraction once
+   it exists, inventory, equipment, active statuses. The numbers an
+   agent needs to make survival decisions."
+  [world entity-id _opts]
+  (let [entity (get-in world [:entities entity-id])
+        hp (get-in entity [:body :hp] 0)
+        max-hp (get-in entity [:body :max-hp] hp)
+        mp (get-in entity [:body :mp] 0)
+        max-mp (get-in entity [:body :max-mp] 0)]
+    {:hp hp
+     :max-hp max-hp
+     :hp-frac (if (> max-hp 0) (/ (float hp) (float max-hp)) 1.0)
+     :mp mp
+     :max-mp max-mp
+     :mp-frac (if (> max-mp 0) (/ (float mp) (float max-mp)) 1.0)
+     :strength (get-in entity [:body :strength] 0)
+     :inventory (inventory-by-template world entity-id)
+     :equipment (equipment-summary world entity-id)
+     :statuses (active-statuses world entity-id)
+     :pos (:pos entity)
+     :flying (get-in entity [:properties :flying] false)
+     :burning? (status/has-status? world entity-id :burning)
+     :webbed? (status/has-status? world entity-id :webbed)
+     :frozen? (status/has-status? world entity-id :frozen)
+     :on-fire-tile? (let [pos (:pos entity)
+                          {:keys [terrain width]} world]
+                      (when (and pos terrain)
+                        (let [[x y] pos]
+                          (= 15 (terrain/tget terrain width x y)))))}))
+
+;; ============================================================================
+;; Goal information
+;; ============================================================================
+;;
+;; What does the entity know about reaching some objective?
+;;   - Player wants to descend. :goal looks at stairs-down memory.
+;;   - NPCs typically want to reach the player; :goal points there.
+;;
+;; For simplicity, percept exposes both objectives. The policy picks
+;; which to prioritize.
+
+(defn- memory-positions-of-tile
+  "All remembered positions for a given tile id, derived from
+   (:memory world). Player-only — NPCs don't have a memory map today."
+  [world tile-id]
+  (->> (or (:memory world) {})
+       (filter (fn [[_pos tile]] (= tile tile-id)))
+       (mapv first)))
+
+(defn- nearest-position [from positions]
+  (when (seq positions)
+    (first (sort-by #(distance from %) positions))))
+
+(defn goal-info
+  "Stairs/unexplored/items knowledge for entity-id. Most useful for
+   the player or a player-AI; NPCs would typically use :target-pos
+   in their AI state rather than this."
+  [world entity-id _opts]
+  (let [self (get-in world [:entities entity-id])
+        self-pos (:pos self)
+        stairs-down (memory-positions-of-tile world 13)
+        stairs-up (memory-positions-of-tile world 14)
+        memory (or (:memory world) {})
+        ;; Items the entity has seen sitting on the floor.
+        floor-items (->> (vals (:entities world))
+                         (filterv (fn [e]
+                                    (and (= :item (:entity-type e))
+                                         (:pos e)
+                                         (contains? memory (:pos e)))))
+                         (mapv (fn [e] {:id (:id e)
+                                        :template (:template e)
+                                        :pos (:pos e)})))]
+    {:stairs-down stairs-down
+     :stairs-up stairs-up
+     :nearest-stairs-down (when self-pos (nearest-position self-pos stairs-down))
+     :nearest-stairs-up   (when self-pos (nearest-position self-pos stairs-up))
+     :on-stairs-down?     (when self-pos
+                            (let [{:keys [terrain width]} world
+                                  [x y] self-pos]
+                              (= 13 (terrain/tget terrain width x y))))
+     :on-stairs-up?       (when self-pos
+                            (let [{:keys [terrain width]} world
+                                  [x y] self-pos]
+                              (= 14 (terrain/tget terrain width x y))))
+     :floor-items floor-items
+     :nearest-item-pos    (when (and self-pos (seq floor-items))
+                            (nearest-position self-pos (mapv :pos floor-items)))
+     :memory-size (count memory)}))
+
+;; ============================================================================
+;; Adjacent terrain — for hazard avoidance
+;; ============================================================================
+
+(def ^:private hazard-tiles #{4 6 7 15})  ; deep-water chasm lava fire
+(def ^:private cardinal-dirs [[0 -1] [0 1] [-1 0] [1 0]])
+(def ^:private diagonal-dirs [[-1 -1] [1 -1] [-1 1] [1 1]])
+(def ^:private all-dirs (vec (concat cardinal-dirs diagonal-dirs)))
+
+(defn adjacency
+  "Tile information for the 8 cells around entity-id. Each entry maps a
+   direction-vector to {:tile :hazard? :walkable? :pos}."
+  [world entity-id _opts]
+  (let [self (get-in world [:entities entity-id])
+        self-pos (:pos self)
+        {:keys [terrain width height]} world]
+    (when (and self-pos terrain width height)
+      (let [[sx sy] self-pos]
+        (into {}
+              (mapv (fn [[dx dy]]
+                      (let [nx (+ sx dx) ny (+ sy dy)
+                            in-bounds (and (>= nx 0) (< nx width)
+                                           (>= ny 0) (< ny height))
+                            tile (when in-bounds
+                                   (terrain/tget terrain width nx ny))]
+                        [[dx dy]
+                         {:pos [nx ny]
+                          :tile tile
+                          :in-bounds in-bounds
+                          :hazard? (when tile (contains? hazard-tiles tile))
+                          :walkable? (when in-bounds
+                                       (terrain/walkable? terrain width height nx ny))
+                          :occupied? (when in-bounds
+                                       (some? (ent/creature-at world [nx ny])))}]))
+                    all-dirs))))))
+
+;; ============================================================================
+;; Main entry point
+;; ============================================================================
+
+(defn perceive
+  "Build a percept for entity-id. Returns:
+     {:self        ; entity-id (echo)
+      :turn        ; world turn
+      :depth       ; world depth
+      :threats     ; vec of threats (sorted by descending :score)
+      :resources   ; HP/MP/inventory/equipment/statuses
+      :goals       ; stairs/items knowledge
+      :adjacency   ; 8-direction tile info
+      :fov         ; the visible cell set (for debug overlays)}"
+  ([world entity-id]
+   (perceive world entity-id {}))
+  ([world entity-id opts]
+   (let [fov-set (entity-fov world entity-id opts)
+         opts-with-fov (assoc opts :fov-cache fov-set)]
+     {:self entity-id
+      :turn (or (:turn world) 0)
+      :depth (or (:depth world) 1)
+      :threats (threats world entity-id opts-with-fov)
+      :resources (resources world entity-id opts-with-fov)
+      :goals (goal-info world entity-id opts-with-fov)
+      :adjacency (adjacency world entity-id opts-with-fov)
+      :fov fov-set})))
+
+;; ============================================================================
+;; Convenience accessors — for policies that don't need the full percept
+;; ============================================================================
+
+(defn top-threat
+  "Just the most dangerous threat to entity-id, or nil if none visible."
+  [world entity-id]
+  (first (threats world entity-id {})))
+
+(defn in-danger?
+  "True if the entity's HP fraction is below danger-threshold or it is
+   burning/frozen. Tuned for the player-AI flee decision."
+  ([world entity-id] (in-danger? world entity-id 0.30))
+  ([world entity-id danger-threshold]
+   (let [r (resources world entity-id {})]
+     (or (< (:hp-frac r) danger-threshold)
+         (:burning? r)
+         (:frozen? r)
+         (:on-fire-tile? r)))))
+
+(defn has-melee-target?
+  "True if there is an adjacent enemy the entity can hit on bump."
+  [world entity-id]
+  (let [adj (adjacency world entity-id {})]
+    (some (fn [[_dir info]] (:occupied? info)) adj)))

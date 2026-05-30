@@ -1,0 +1,593 @@
+(ns xsofy.balance
+  "Dungeon-survivability exploration harness.
+
+   Drives synthetic players through real dungeon floors via dispatch/dispatch
+   and reports outcomes. Useful for answering:
+     - At what depth does a starter loadout (dagger + leather) die?
+     - Does adding (runes :damage) to the dagger meaningfully shift
+       death-by-depth?
+     - Which creatures kill the most players, and at what depth?
+     - Does greedy-descend (rush to stairs) outperform greedy-melee
+       (clear every level)?
+
+   This is NOT a property test. It produces statistical evidence, not
+   correctness claims. Run it deliberately when balance-tuning, not on
+   every CI run.
+
+   Usage from REPL:
+     (require '[xsofy.balance :as b])
+     (def report (b/explore {:n-runs 50 :seed 42}))
+     (b/print-report report)
+
+   Usage as script:
+     lg xsofy/test/balance_explore.lg"
+  (:require [xsofy.world :as w]
+            [xsofy.entities :as ent]
+            [xsofy.dispatch :as dispatch]
+            [xsofy.percept :as percept]
+            [xsofy.check :as c]
+            [xsofy.bestiary]
+            [xsofy.items]
+            [xsofy.terrain :as terrain]
+            [xsofy.runes]
+            [string :as str]
+            [math]))
+
+;; --- Loadout generation ---
+;;
+;; A loadout is the player's starting equipment + inventory. It overrides
+;; the defaults that give-starting-items installs.
+;;
+;;   {:weapon       :dagger     ; item template to equip
+;;    :weapon-runes [:damage]   ; rune program to inscribe (or nil)
+;;    :weapon-enchant 0         ; enchant level
+;;    :armor        :leather-armor
+;;    :armor-enchant 0
+;;    :potions      [:health-potion :health-potion]}
+
+(def starter-loadout
+  "The current default: dagger + leather + two health potions."
+  {:weapon :dagger
+   :weapon-runes nil
+   :weapon-enchant 0
+   :armor :leather-armor
+   :armor-enchant 0
+   :potions [:health-potion :health-potion]})
+
+(def dagger-with-damage-rune-loadout
+  "Mirrors the local WIP change: dagger inscribed with (runes :damage)."
+  (assoc starter-loadout :weapon-runes [:damage]))
+
+(def heavy-melee-loadout
+  "Long sword + chain mail. Stronger but heavier — tests whether
+   raw stats overcome the speed cost."
+  {:weapon :long-sword
+   :weapon-runes nil
+   :weapon-enchant 1
+   :armor :chain-mail
+   :armor-enchant 1
+   :potions [:health-potion :health-potion :health-potion]})
+
+(def ranged-loadout
+  "Short bow + arrows + leather. Tests ranged play."
+  {:weapon :short-bow
+   :weapon-runes nil
+   :weapon-enchant 0
+   :armor :leather-armor
+   :armor-enchant 0
+   :potions [:health-potion :health-potion]
+   :ammo [:arrow]})
+
+(def all-loadouts
+  {:starter starter-loadout
+   :starter-with-damage-rune dagger-with-damage-rune-loadout
+   :heavy-melee heavy-melee-loadout
+   :ranged ranged-loadout})
+
+;; --- Loadout application ---
+
+(defn- give-with-enchant
+  "Spawn an item with optional enchant level + rune program, then equip
+   the player with it. Returns [world item-id]."
+  [world item-type {:keys [enchant runes]}]
+  (let [[w id] (w/give-item world item-type :player)]
+    (if id
+      (let [w (if (and enchant (not= 0 enchant))
+                (assoc-in w [:entities id :item :enchant] enchant)
+                w)
+            w (if (seq runes)
+                (assoc-in w [:entities id :runes] (vec runes))
+                w)
+            w (or (ent/equip-item w id :player) w)]
+        [w id])
+      [world nil])))
+
+(defn apply-loadout
+  "Build a world for the given loadout. Replaces give-starting-items'
+   defaults with the loadout's choices."
+  [world loadout]
+  (let [[w _wid] (give-with-enchant world (:weapon loadout)
+                                    {:enchant (:weapon-enchant loadout)
+                                     :runes (:weapon-runes loadout)})
+        [w _aid] (give-with-enchant w (:armor loadout)
+                                    {:enchant (:armor-enchant loadout)})
+        ;; potions stack via pickup-item's :consumable path
+        w (reduce (fn [w pot]
+                    (first (w/give-item w pot :player)))
+                  w
+                  (or (:potions loadout) []))
+        ;; ammo (arrows)
+        w (reduce (fn [w ammo]
+                    (first (w/give-item w ammo :player)))
+                  w
+                  (or (:ammo loadout) []))]
+    w))
+
+(defn make-loadout-world
+  "Construct a fresh world for a synthetic player with `loadout`.
+   Optional :seed for reproducibility."
+  ([width height loadout]
+   (make-loadout-world width height loadout nil))
+  ([width height loadout seed]
+   (let [seed (or seed (mod (try (System/currentTimeMillis) (catch e 1)) 2147483647))]
+     ;; Canonical deterministic world, then override equipment per loadout.
+     (apply-loadout (w/make-world width height seed) loadout))))
+
+;; --- Action policies ---
+;;
+;; A policy is (fn [world] action). Given the current world state, return
+;; the next action to feed to update-world.
+
+(defn- player-hp [world]
+  (or (get-in world [:entities :player :body :hp]) 0))
+
+(defn- player-pos [world]
+  (get-in world [:entities :player :pos]))
+
+(defn- visible-enemy-positions [world]
+  (let [fov (or (:fov world) #{})]
+    (->> (vals (:entities world))
+         (filter (fn [e]
+                   (and (:ai e) (:pos e)
+                        (not= :player (:id e))
+                        (contains? fov (:pos e)))))
+         (map :pos))))
+
+(defn- nearest-visible-enemy-dir
+  "Return [dx dy] step toward the nearest visible enemy, or nil. Guards
+   against transient nil :pos (mid-floor-transition, dead player) and
+   enemies with missing :pos."
+  [world]
+  (let [ppos (player-pos world)
+        enemies (filterv (fn [p]
+                           (and (vector? p)
+                                (number? (first p))
+                                (number? (second p))))
+                         (visible-enemy-positions world))]
+    (when (and (vector? ppos)
+               (number? (first ppos))
+               (number? (second ppos))
+               (seq enemies))
+      (let [[px py] ppos
+            nearest (first (sort-by (fn [[ex ey]]
+                                      (let [dx (- ex px) dy (- ey py)]
+                                        (+ (* dx dx) (* dy dy))))
+                                    enemies))
+            [ex ey] nearest
+            dx (- ex px) dy (- ey py)]
+        [(cond (pos? dx) 1 (neg? dx) -1 :else 0)
+         (cond (pos? dy) 1 (neg? dy) -1 :else 0)]))))
+
+(def directions
+  [:up :down :left :right :up-left :up-right :down-left :down-right])
+
+(defn- dir-action [[dx dy]]
+  (case [dx dy]
+    [0 -1] :up
+    [0 1] :down
+    [-1 0] :left
+    [1 0] :right
+    [-1 -1] :up-left
+    [1 -1] :up-right
+    [-1 1] :down-left
+    [1 1] :down-right
+    :wait))
+
+;; Policy: random walk.
+(defn random-policy [world]
+  (nth directions (rand-int 8)))
+
+(defn- on-stairs-down? [world]
+  (let [{:keys [terrain width]} world
+        ppos (player-pos world)]
+    (when (and terrain ppos)
+      (let [[px py] ppos]
+        (= 13 (xsofy.terrain/tget terrain width px py))))))
+
+(defn- has-seen-stairs? [world]
+  (some (fn [[_pos tile]] (= 13 tile)) (or (:memory world) {})))
+
+;; Policy: greedy melee — step toward the nearest visible enemy. If no
+;; enemy visible: if standing on stairs-down, descend. Otherwise, if any
+;; stairs are remembered route there; else autoexplore.
+(defn greedy-melee-policy [world]
+  (or (when-let [dir (nearest-visible-enemy-dir world)]
+        (dir-action dir))
+      (when (on-stairs-down? world) :descend)
+      (when (has-seen-stairs? world) :descend)
+      :autoexplore))
+
+;; Policy: greedy descend — rush to stairs. Autoexplore until stairs are
+;; remembered, then route to them and descend.
+(defn greedy-descend-policy [world]
+  (cond
+    (on-stairs-down? world) :descend
+    (has-seen-stairs? world) :descend
+    :else :autoexplore))
+
+;; Policy: passive rest — rest in place. For measuring baseline status
+;; effects and starvation.
+(defn passive-rest-policy [world]
+  :rest)
+
+;; Policy: ensouled — perception-driven AI that uses the percept layer.
+;; Prioritizes: flee when in danger, attack nearest threat, use stairs if low health.
+(defn ensouled-policy [world]
+  (let [p (percept/perceive world :player)]
+    (cond
+      ;; In critical danger (burned, frozen, or < 30% HP): flee toward nearest stairs
+      (percept/in-danger? world :player)
+      (if-let [stairs (:nearest-stairs-down p)]
+        (let [[px py] (get-in p [:resources :pos])
+              [sx sy] stairs
+              dx (- sx px) dy (- sy py)]
+          (dir-action [(cond (pos? dx) 1 (neg? dx) -1 :else 0)
+                       (cond (pos? dy) 1 (neg? dy) -1 :else 0)]))
+        :autoexplore)
+
+      ;; Has a nearby threat: attack the top-scored one
+      (when-let [top-threat (first (:threats p))]
+        (when (:in-attack-range? top-threat)
+          (let [[px py] (get-in p [:resources :pos])
+                [tx ty] (:pos top-threat)
+                dx (- tx px) dy (- ty py)]
+            (dir-action [(cond (pos? dx) 1 (neg? dx) -1 :else 0)
+                         (cond (pos? dy) 1 (neg? dy) -1 :else 0)]))))
+
+      ;; On stairs: descend
+      (:on-stairs-down? p) :descend
+
+      ;; Know where stairs are: route to them
+      (:nearest-stairs-down p) :descend
+
+      ;; Otherwise: explore
+      :else :autoexplore)))
+
+(def policies
+  {:random random-policy
+   :greedy-melee greedy-melee-policy
+   :greedy-descend greedy-descend-policy
+   :passive-rest passive-rest-policy
+   :ensouled ensouled-policy})
+
+;; --- Outcome recording ---
+;;
+;; A run-outcome describes what happened:
+;;   {:loadout   :starter
+;;    :policy    :greedy-melee
+;;    :outcome   :died | :reached-target | :stuck
+;;    :turn      127
+;;    :depth     3
+;;    :killed-by :goblin       ; nil if survived
+;;    :hp-final  0
+;;    :final-pos [12 8]
+;;    :seed      42}
+
+(def ^:private death-msg-prefixes
+  ;; Maps a log-message prefix to a heuristic killer source.
+  ;; Order matters: more specific first.
+  [["You die from burning"     :burning]
+   ["You die from poison"      :poison]
+   ["The "                      :creature]    ; "The goblin kills you!" / "The X shoots and kills you!"
+   ["The fire"                 :fire]])
+
+(defn- index-of-space [s]
+  ;; Linear scan since let-go's String may not expose indexOf.
+  (loop [i 0]
+    (cond
+      (>= i (count s)) -1
+      (= (str (nth s i)) " ") i
+      :else (recur (inc i)))))
+
+(defn- creature-from-log-line [line]
+  ;; "The goblin kills you!" -> :goblin
+  ;; "The goblin's arrow kills you!" -> :goblin  (best effort)
+  (let [line (or line "")
+        ;; strip "The " prefix
+        rest (if (and (> (count line) 4) (= "The " (subs line 0 4)))
+               (subs line 4)
+               line)
+        ;; take everything before the next space
+        space (index-of-space rest)
+        name-or-rest (if (>= space 0) (subs rest 0 space) rest)
+        ;; if name-or-rest ends with "'s", strip it
+        name (if (and (>= (count name-or-rest) 2)
+                      (= "'s" (subs name-or-rest (- (count name-or-rest) 2))))
+               (subs name-or-rest 0 (- (count name-or-rest) 2))
+               name-or-rest)]
+    (when (and name (> (count name) 0))
+      (keyword name))))
+
+(defn- infer-killer
+  "Look at the message log for the death-cause. Prefers specific killer
+   identifications ('The goblin kills you!') over generic ones
+   ('You die...'). The generic 'You die' line is appended last by
+   update-world, so we scan all recent entries for a specific match
+   before falling back."
+  [world]
+  (let [log (or (:log world) [])
+        last-line (fn [entry]
+                    (cond
+                      (string? entry) entry
+                      (map? entry) (:msg entry)
+                      :else nil))
+        recent (vec (take-last 12 log))
+        ;; first try: a specific killer line
+        specific (some (fn [entry]
+                         (let [line (last-line entry)]
+                           (cond
+                             (nil? line) nil
+                             (str/includes? line "shoots and kills you")
+                             (creature-from-log-line line)
+                             (str/includes? line "kills you")
+                             (creature-from-log-line line)
+                             :else nil)))
+                       recent)]
+    (or specific
+        ;; fallback: any "You die" / "You die from X"
+        (some (fn [entry]
+                (let [line (last-line entry)]
+                  (when (and line (str/includes? line "You die"))
+                    :status-or-environment)))
+              recent))))
+
+(defn- record-outcome [world loadout-key policy-key starting-seed target-depth]
+  (let [player (get-in world [:entities :player])
+        alive (and player (> (player-hp world) 0))
+        cause-of-death (get world :cause-of-death)]
+    {:loadout loadout-key
+     :policy policy-key
+     :outcome (cond
+                (not alive) :died
+                (>= (or (:depth world) 1) target-depth) :reached-target
+                :else :stuck)
+     :turn (or (:turn world) 0)
+     :depth (or (:depth world) 1)
+     :killed-by (when (not alive)
+                  (or
+                    ;; precise: the production cause-of-death field
+                    (when (keyword? cause-of-death)
+                      (get-in world [:entities cause-of-death :template] cause-of-death))
+                    ;; fallback: scan log
+                    (infer-killer world)))
+     :hp-final (or (player-hp world) 0)
+     :final-pos (player-pos world)
+     :seed (:seed-input world)
+     :action-log (or (:action-log world) [])}))
+
+;; --- Run loop ---
+
+(def default-max-turns 2000)
+(def default-target-depth 9)
+(def default-world-width 50)
+(def default-world-height 30)
+
+(defn simulate-run
+  "Run one simulation: build a world with `loadout`, drive it with
+   `policy-fn` until the player dies, reaches target depth, or hits
+   the turn cap. Returns an outcome record."
+  ([loadout policy-key]
+   (simulate-run loadout policy-key {}))
+  ([loadout policy-key {:keys [max-turns target-depth width height seed]
+                        :or {max-turns default-max-turns
+                             target-depth default-target-depth
+                             width default-world-width
+                             height default-world-height}}]
+   (let [policy-fn (get policies policy-key random-policy)
+         seed (or seed (mod (try (System/currentTimeMillis) (catch e 1)) 2147483647))
+         loadout-key (cond
+                       (= loadout starter-loadout) :starter
+                       (= loadout dagger-with-damage-rune-loadout) :starter-with-damage-rune
+                       (= loadout heavy-melee-loadout) :heavy-melee
+                       (= loadout ranged-loadout) :ranged
+                       :else :custom)
+         world (make-loadout-world width height loadout seed)]
+     (loop [w world
+            turn 0
+            stall-count 0]
+       (let [player-alive (and (get-in w [:entities :player])
+                               (> (player-hp w) 0))
+             depth (or (:depth w) 1)]
+         (cond
+           ;; died
+           (not player-alive)
+           (record-outcome w loadout-key policy-key seed target-depth)
+
+           ;; reached target depth
+           (>= depth target-depth)
+           (record-outcome w loadout-key policy-key seed target-depth)
+
+           ;; hit turn cap
+           (>= turn max-turns)
+           (record-outcome (assoc w :stuck true) loadout-key policy-key seed target-depth)
+
+           :else
+           (let [;; Anti-stall: if the policy has produced 5 consecutive
+                 ;; actions that didn't advance the world turn, override
+                 ;; with :rest to break out. Saves runs that would
+                 ;; otherwise burn the entire turn budget repeating a
+                 ;; blocked move.
+                 action (if (>= stall-count 5)
+                          :rest
+                          (policy-fn w))
+                 w' (try (dispatch/dispatch w action)
+                         (catch e w))   ;; defensive: if action crashes, end run
+                 advanced (> (or (:turn w') 0) (or (:turn w) 0))]
+             (recur w'
+                    (inc turn)
+                    (if advanced 0 (inc stall-count))))))))))
+
+;; --- Aggregation ---
+
+(defn- count-by [f coll]
+  (reduce (fn [m x]
+            (let [k (f x)]
+              (assoc m k (inc (or (get m k) 0)))))
+          {}
+          coll))
+
+(defn aggregate
+  "Fold a vector of outcomes into a summary report.
+
+   Report shape:
+     {:n-runs N
+      :by-loadout {:starter {:died 45 :reached-target 5}}
+      :death-by-depth {:starter {1 12, 2 18, 3 15}}
+      :death-by-creature {:starter {:rat 5, :goblin 20}}
+      :mean-turns {:starter 89.4}
+      :reach-rate {:starter 0.10}}"
+  [outcomes]
+  (let [by-loadout (group-by :loadout outcomes)]
+    {:n-runs (count outcomes)
+     :by-loadout (into {}
+                   (map (fn [[lk lo]]
+                          [lk (count-by :outcome lo)])
+                        by-loadout))
+     :death-by-depth (into {}
+                       (map (fn [[lk lo]]
+                              [lk (count-by :depth
+                                            (filterv #(= :died (:outcome %)) lo))])
+                            by-loadout))
+     :death-by-creature (into {}
+                          (map (fn [[lk lo]]
+                                 [lk (count-by :killed-by
+                                               (filterv #(= :died (:outcome %)) lo))])
+                               by-loadout))
+     :mean-turns (into {}
+                   (map (fn [[lk lo]]
+                          [lk (if (seq lo)
+                                (float (/ (reduce + (mapv :turn lo))
+                                          (count lo)))
+                                0.0)])
+                        by-loadout))
+     :reach-rate (into {}
+                   (map (fn [[lk lo]]
+                          [lk (if (seq lo)
+                                ;; let-go quirk: (count (filter ...)) over an
+                                ;; empty match returns 1, not 0. Force vec.
+                                (float (/ (count (filterv #(= :reached-target (:outcome %)) lo))
+                                          (count lo)))
+                                0.0)])
+                        by-loadout))}))
+
+;; --- Top-level ---
+
+(defn explore
+  "Run a balance exploration sweep.
+
+   Options:
+     :n-runs       — total simulations across all combinations (default 40)
+     :loadouts     — vector of loadout keys to test (default: all)
+     :policies     — vector of policy keys to test (default: :greedy-melee)
+     :max-turns    — turns-per-run cap
+     :target-depth — depth at which a run is considered a 'win'
+     :seed         — optional reproducible seed; each run gets seed+i
+
+   Returns an aggregate report. The raw outcomes are also in :outcomes."
+  ([] (explore {}))
+  ([{:keys [n-runs loadouts policies max-turns target-depth width height seed]
+     :or {n-runs 40
+          loadouts [:starter :starter-with-damage-rune :heavy-melee :ranged]
+          policies [:greedy-melee]
+          max-turns default-max-turns
+          target-depth default-target-depth
+          width default-world-width
+          height default-world-height}}]
+   (let [combos (for [lk loadouts pk policies] [lk pk])
+         runs-per-combo (max 1 (quot n-runs (count combos)))
+         run-specs (vec (for [[lk pk] combos _ (range runs-per-combo)] [lk pk]))
+         total-runs (count run-specs)
+         outcomes (vec
+                    (map-indexed
+                      (fn [i [lk pk]]
+                        (let [loadout (get all-loadouts lk)
+                              run-seed (when seed (+ seed i))
+                              outcome (simulate-run loadout pk {:max-turns max-turns
+                                                               :target-depth target-depth
+                                                               :width width
+                                                               :height height
+                                                               :seed run-seed})]
+                          ;; Progress output: show completion as each run finishes
+                          (println (str "[" (inc i) "/" total-runs "] "
+                                       (name lk) "/" (name pk) " -> "
+                                       (:outcome outcome) " (turn " (:turn outcome)
+                                       ", depth " (:depth outcome)
+                                       (when (:killed-by outcome)
+                                         (str ", killed-by " (name (:killed-by outcome))))
+                                       ")"))
+                          outcome))
+                      run-specs))]
+     (assoc (aggregate outcomes) :outcomes outcomes))))
+
+;; --- Reporting ---
+
+(defn- index-of-dot [s]
+  (loop [i 0]
+    (cond
+      (>= i (count s)) -1
+      (= (str (nth s i)) ".") i
+      :else (recur (inc i)))))
+
+(defn- format-float [f precision]
+  (let [s (str f)
+        dot (index-of-dot s)]
+    (if (>= dot 0)
+      (let [end (min (count s) (+ dot precision 1))]
+        (subs s 0 end))
+      s)))
+
+(defn- format-loadout-row [report loadout-key]
+  (let [outcomes (get-in report [:by-loadout loadout-key] {})
+        died (or (get outcomes :died) 0)
+        reached (or (get outcomes :reached-target) 0)
+        stuck (or (get outcomes :stuck) 0)
+        total (+ died reached stuck)
+        reach-rate (get-in report [:reach-rate loadout-key] 0.0)
+        mean-turns (get-in report [:mean-turns loadout-key] 0.0)]
+    (str "  " (name loadout-key) ": "
+         total " runs, "
+         died " died, " reached " reached, " stuck " stuck. "
+         "reach-rate=" (format-float reach-rate 2) " "
+         "mean-turns=" (format-float mean-turns 1))))
+
+(defn print-report
+  "Pretty-print a balance report to stdout."
+  [report]
+  (println "=== Balance exploration report ===")
+  (println (str "Total runs: " (:n-runs report)))
+  (println)
+  (println "Per-loadout outcomes:")
+  (doseq [lk (sort (keys (:by-loadout report)))]
+    (println (format-loadout-row report lk)))
+  (println)
+  (println "Death by depth (loadout -> depth -> count):")
+  (doseq [lk (sort (keys (:death-by-depth report)))]
+    (println (str "  " (name lk) ":"))
+    (doseq [[depth n] (sort-by first (get (:death-by-depth report) lk))]
+      (println (str "    depth " depth ": " n))))
+  (println)
+  (println "Death by creature (loadout -> creature -> count):")
+  (doseq [lk (sort (keys (:death-by-creature report)))]
+    (println (str "  " (name lk) ":"))
+    (doseq [[creature n] (sort-by (fn [[_ c]] (- c)) (get (:death-by-creature report) lk))]
+      (println (str "    " (if creature (name creature) "<unknown>") ": " n)))))

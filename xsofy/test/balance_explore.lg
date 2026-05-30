@@ -1,0 +1,25 @@
+(ns xsofy.test.balance-explore
+  "Standalone script: runs a balance-exploration sweep and prints the
+   report. Not part of the regular test runner — invoke directly:
+
+     lg xsofy/test/balance_explore.lg
+
+   Adjust the call to b/explore below to vary loadouts, policies, run
+   count, etc. See xsofy/balance.lg for available knobs.
+
+   This script uses SMALL parameters (n-runs=6, max-turns=200) for quick
+   smoke testing. For a full balance sweep, increase n-runs to 40+ and
+   max-turns to 2000, but expect ~30 minutes of runtime."
+  (:require [xsofy.balance :as b]))
+
+(println "Running balance sweep (small params: 6 runs per policy, should finish in ~30s)...")
+(let [report (b/explore {:n-runs 6
+                         :loadouts [:starter :starter-with-damage-rune]
+                         :policies [:greedy-melee :ensouled]
+                         :max-turns 200
+                         :target-depth 3
+                         :width 40
+                         :height 25
+                         :seed 42})]
+  (println)
+  (b/print-report report))
