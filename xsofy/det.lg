@@ -83,9 +83,13 @@
   [world lo hi]
   (if (<= hi lo)
     [lo world]
-    (let [[seed w'] (step world [:int-in lo hi])
-          span (unchecked-subtract hi lo)]
-      [(unchecked-add lo (mod seed span)) w'])))
+    ;; Layer-1 fold: precompute the :int-in prefix bytes at compile time, so
+    ;; the per-roll hot path encodes only lo/hi. Value-identical to combine
+    ;; (with-folded-salt ≡ (h/combine seed [:int-in lo hi])).
+    (let [new-seed (h/with-folded-salt (or (:seed world) 0) [:int-in lo hi])
+          span     (unchecked-subtract hi lo)]
+      [(unchecked-add lo (mod new-seed span))
+       (assoc world :seed new-seed)])))
 
 (defn pick
   "Pick an element from coll. Returns [nil world] if coll is empty.
@@ -118,8 +122,10 @@
    Named unit (not float) to avoid shadowing clojure.core/float. The
    'unit' refers to the unit interval [0, 1)."
   [world]
-  (let [[seed w'] (step world [:unit])]
-    [(/ (mod seed 1000000) 1000000.0) w']))
+  ;; Layer-1 fold: [:unit] is fully literal → entire salt is precomputed at
+  ;; compile time, eliminating runtime encode-salt. Value-identical to combine.
+  (let [new-seed (h/with-folded-salt (or (:seed world) 0) [:unit])]
+    [(/ (mod new-seed 1000000) 1000000.0) (assoc world :seed new-seed)]))
 
 (defn permute
   "Permute coll. Returns [vector world'].
