@@ -149,39 +149,82 @@
 (def wander-chance 30)    ;; % chance to wander each turn when sleeping
 (def investigate-turns 6) ;; turns to search last known position
 
-(defn can-see-player? [world entity]
-  (let [fov (:fov world)
-        pos (:pos entity)]
-    ;; simplified: if entity is in player's FOV, assume mutual visibility
-    (contains? fov pos)))
+(defn in-fov?
+  "Is this position in the player's current FOV? Friendlies share the
+   player's awareness — see docs/ai-design.md for the design call.
+   Used as the visibility proxy in find-target and the state machine."
+  [world pos]
+  (contains? (or (:fov world) #{}) pos))
+
+(defn find-target
+  "Return the entity this actor should target, or nil. Friendlies seek
+   the nearest visible hostile; hostiles seek the player, or the
+   nearest visible friendly if one is closer. Actor itself must be in
+   FOV — mutual-visibility gate, same as the old can-see-player?
+   semantics. Returns nil when the actor has no eligible quarry, which
+   the state machine treats as 'idle' (fall through to sleep/wander).
+
+   Ties on chebyshev distance break on (str :id) so equidistant
+   candidates are picked deterministically from (seed, action-log).
+   Same discipline as the rest of the engine."
+  [world entity]
+  (let [pos (:pos entity)]
+    (when (and pos (in-fov? world pos))
+      (let [es (vals (:entities world))
+            dist-to (fn [e] (distance pos (:pos e)))]
+        (if (ent/friendly? entity)
+          (->> es
+               (filter (fn [e]
+                         (and (ent/hostile-to-player? e)
+                              (:pos e)
+                              (in-fov? world (:pos e)))))
+               (sort-by (juxt dist-to (comp str :id)))
+               first)
+          (let [player (get-in world [:entities :player])
+                friendly (->> es
+                              (filter (fn [e]
+                                        (and (ent/friendly? e)
+                                             (:pos e)
+                                             (in-fov? world (:pos e)))))
+                              (sort-by (juxt dist-to (comp str :id)))
+                              first)]
+            (cond
+              (and player friendly (:pos player)
+                   (< (dist-to friendly) (dist-to player)))
+              friendly
+              (and player (:pos player)) player
+              :else friendly)))))))
 
 ;; --- AI State Machine ---
 ;; States: :sleep, :wander, :hunt, :investigate, :flee
 ;;
-;; :sleep     — standing still, might wander or wake on seeing player
-;; :wander    — roaming randomly, alert to player presence
-;; :hunt      — chasing the player, attacks when adjacent
-;; :investigate — moving to last known player position, then searching
-;; :flee      — running away from player (low HP)
+;; :sleep     — standing still, might wander or wake on spotting target
+;; :wander    — roaming randomly, alert to target presence
+;; :hunt      — chasing target, attacks when adjacent
+;; :investigate — moving to last known target position, then searching
+;; :flee      — running away from target (low HP / burning)
+;;
+;; "Target" is the player for hostiles, the nearest hostile for
+;; friendlies. find-target above does the lookup; everything else here
+;; treats target uniformly. Pre-faction code hardcoded :player.
 
 (defn update-ai-state [world entity-id]
   (let [entity (get-in world [:entities entity-id])
-        player (get-in world [:entities :player])]
-    (if (or (nil? entity) (nil? player) (nil? (:pos entity)) (nil? (:pos player)))
+        target (when entity (find-target world entity))]
+    (if (or (nil? entity) (nil? (:pos entity)))
       world
       (let [ai (:ai entity)
             state (get ai :state :sleep)
             pos (:pos entity)
-            player-pos (:pos player)
-            dist (distance pos player-pos)
-            sees-player (can-see-player? world entity)
+            target-pos (:pos target)
+            sees-target (some? target)
+            dist (when target-pos (distance pos target-pos))
             hp (get-in entity [:body :hp] 1)
             max-hp (get-in entity [:body :max-hp] 1)
             behavior (or (:behavior ai) :hunter)
             low-hp (< (/ (float hp) max-hp) flee-hp-pct)
-            ;; ranged creatures also flee when player gets too close
             ranged-too-close (and (= behavior :ranged)
-                                  sees-player
+                                  sees-target
                                   (< dist 3)
                                   (= state :hunt))]
         (cond
@@ -190,8 +233,8 @@
                (not (get-in entity [:properties :fire-immune])))
           (assoc-in world [:entities entity-id :ai :state] :flee)
 
-          ;; --- From any state: flee if low HP and can see player ---
-          (or (and low-hp sees-player (< dist chase-radius) (not= state :flee))
+          ;; --- From any state: flee if low HP and can see target ---
+          (or (and low-hp sees-target (< dist chase-radius) (not= state :flee))
               ranged-too-close)
           (-> world
               (assoc-in [:entities entity-id :ai :state] :flee))
@@ -199,12 +242,10 @@
           ;; --- SLEEP ---
           (= state :sleep)
           (cond
-            ;; see player nearby → hunt
-            (and sees-player (< dist wake-radius))
+            (and sees-target (< dist wake-radius))
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
-                (assoc-in [:entities entity-id :ai :target] player-pos))
-            ;; random chance to start wandering — deterministic roll
+                (assoc-in [:entities entity-id :ai :target] target-pos))
             :else
             (let [w-ctx (det/with-context world [:ai :sleep-wake entity-id])
                   pair (det/percent? w-ctx wander-chance)
@@ -217,12 +258,10 @@
           ;; --- WANDER ---
           (= state :wander)
           (cond
-            ;; see player → hunt
-            (and sees-player (< dist wake-radius))
+            (and sees-target (< dist wake-radius))
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
-                (assoc-in [:entities entity-id :ai :target] player-pos))
-            ;; random chance to go back to sleep — deterministic roll
+                (assoc-in [:entities entity-id :ai :target] target-pos))
             :else
             (let [w-ctx (det/with-context world [:ai :wander-sleep entity-id])
                   pair (det/percent? w-ctx 10)
@@ -235,25 +274,21 @@
           ;; --- HUNT ---
           (= state :hunt)
           (cond
-            ;; lost sight and out of range → investigate last known pos
-            (and (not sees-player) (> dist chase-radius))
+            (and (not sees-target) (or (nil? dist) (> dist chase-radius)))
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :investigate)
                 (assoc-in [:entities entity-id :ai :search-turns] investigate-turns))
-            ;; update target if we can see player
-            sees-player
-            (assoc-in world [:entities entity-id :ai :target] player-pos)
+            sees-target
+            (assoc-in world [:entities entity-id :ai :target] target-pos)
             :else world)
 
           ;; --- INVESTIGATE ---
           (= state :investigate)
           (cond
-            ;; spotted player again → hunt
-            (and sees-player (< dist chase-radius))
+            (and sees-target (< dist chase-radius))
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
-                (assoc-in [:entities entity-id :ai :target] player-pos))
-            ;; ran out of search turns → sleep
+                (assoc-in [:entities entity-id :ai :target] target-pos))
             (<= (get ai :search-turns 0) 0)
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :sleep)
@@ -264,19 +299,16 @@
           ;; --- FLEE ---
           (= state :flee)
           (cond
-            ;; player far away or not visible → sleep
-            (or (> dist chase-radius) (not sees-player))
+            (or (nil? dist) (> dist chase-radius) (not sees-target))
             (assoc-in world [:entities entity-id :ai :state] :sleep)
-            ;; HP recovered → hunt instead
             (not low-hp)
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
-                (assoc-in [:entities entity-id :ai :target] player-pos))
-            ;; ranged: got to safe distance → back to hunt (kiting)
+                (assoc-in [:entities entity-id :ai :target] target-pos))
             (and (= behavior :ranged) (>= dist (or (:preferred-range ai) 5)))
             (-> world
                 (assoc-in [:entities entity-id :ai :state] :hunt)
-                (assoc-in [:entities entity-id :ai :target] player-pos))
+                (assoc-in [:entities entity-id :ai :target] target-pos))
             :else world)
 
           :else world)))))
@@ -284,16 +316,17 @@
 ;; --- AI Actions ---
 
 (defn hunt-melee
-  "Standard melee hunt: approach and attack when adjacent."
-  [world entity-id pos player-pos attack-fn]
-  (if (adjacent? pos player-pos)
-    (attack-fn world entity-id :player)
-    (let [[dx dy] (step-toward pos player-pos)]
+  "Standard melee hunt: approach and attack when adjacent to target."
+  [world entity-id pos target-id target-pos attack-fn]
+  (if (adjacent? pos target-pos)
+    (attack-fn world entity-id target-id)
+    (let [[dx dy] (step-toward pos target-pos)]
       (try-move world entity-id dx dy))))
 
 (defn hunt-ranged
-  "Ranged hunt: maintain preferred distance. Shoot when in range + LOS.
-   Flee if too close, approach if too far, sidestep if no LOS.
+  "Ranged hunt: maintain preferred distance from target. Shoot when in
+   range + LOS. Flee if too close, approach if too far, sidestep if
+   no LOS.
 
    The fire-chance roll fires deterministically whenever we evaluate the
    shoot branch's gating condition (in-range + LOS). Even if the chance
@@ -301,23 +334,18 @@
    has been consumed — this matches the original semantics: cond
    short-circuits, so the rand-int only fired when the in-range+LOS
    prerequisites were met."
-  [world entity-id pos player-pos attack-fn ranged-attack-fn]
+  [world entity-id pos target-id target-pos attack-fn ranged-attack-fn]
   (let [entity (get-in world [:entities entity-id])
         ai (:ai entity)
         pref-range (or (:preferred-range ai) 5)
         spell-data (get-in entity [:spells :ranged])
         max-range (or (:range spell-data) 6)
-        dist (distance pos player-pos)
-        [px py] player-pos
+        dist (distance pos target-pos)
+        [tx ty] target-pos
         [ex ey] pos
-        los (has-clear-line? world ex ey px py)
+        los (has-clear-line? world ex ey tx ty)
         too-close (< dist (- pref-range 1))
         in-range-with-los (and (<= dist max-range) los)
-        ;; Pre-roll fire-chance only when the cond would have evaluated it.
-        ;; In the original, the rand-int was inside branch 2's predicate,
-        ;; which is only reached if branch 1 (too close) is false AND
-        ;; the and-clause short-circuits past the (<= dist max-range) and
-        ;; los checks. So we fire iff (not too-close) AND in-range-with-los.
         fire-pair (if (and (not too-close) in-range-with-los)
                     (det/percent? (det/with-context world [:ai :ranged-fire entity-id])
                                   (or (:fire-chance spell-data) 100))
@@ -325,43 +353,42 @@
         fires-now (first fire-pair)
         world (second fire-pair)]
     (cond
-      ;; too close — back away
       (< dist (- pref-range 1))
-      (let [w (let [[dx dy] (step-away pos player-pos)]
+      (let [w (let [[dx dy] (step-away pos target-pos)]
                 (try-move world entity-id dx dy))]
-        ;; if couldn't move (cornered), melee
         (if (= (get-in w [:entities entity-id :pos]) pos)
-          (if (adjacent? pos player-pos)
-            (attack-fn world entity-id :player)
+          (if (adjacent? pos target-pos)
+            (attack-fn world entity-id target-id)
             w)
           w))
 
-      ;; in range and has LOS and rolled to fire — shoot
       (and in-range-with-los fires-now)
-      (ranged-attack-fn world entity-id :player)
+      (ranged-attack-fn world entity-id target-id)
 
-      ;; in range but no LOS — approach to get angle
       (<= dist max-range)
-      (let [[dx dy] (step-toward pos player-pos)]
+      (let [[dx dy] (step-toward pos target-pos)]
         (try-move world entity-id dx dy))
 
-      ;; too far — approach
       :else
-      (let [[dx dy] (step-toward pos player-pos)]
+      (let [[dx dy] (step-toward pos target-pos)]
         (try-move world entity-id dx dy)))))
 
 (defn ai-act [world entity-id attack-fn ranged-attack-fn]
-  (let [entity (get-in world [:entities entity-id])
-        player (get-in world [:entities :player])]
-    (if (or (nil? entity) (nil? player))
+  (let [entity (get-in world [:entities entity-id])]
+    (if (nil? entity)
       world
       (let [ai (:ai entity)
             state (get ai :state :sleep)
             behavior (or (:behavior ai) :hunter)
             pos (:pos entity)
-            player-pos (:pos player)
-            target (get ai :target)]
-        (if (or (nil? pos) (nil? player-pos))
+            target (find-target world entity)
+            target-id (:id target)
+            target-pos (:pos target)
+            ;; :investigate uses the LAST KNOWN position from :ai :target,
+            ;; not the live find-target lookup (the whole point is searching
+            ;; somewhere we no longer see them).
+            last-known (get ai :target)]
+        (if (nil? pos)
           world
           (case state
             :sleep world
@@ -370,41 +397,46 @@
             (random-step world entity-id)
 
             :hunt
-            (case behavior
-              :ranged (hunt-ranged world entity-id pos player-pos attack-fn ranged-attack-fn)
-              ;; :hunter, :pack, :aggressive — all melee for now
-              (hunt-melee world entity-id pos player-pos attack-fn))
+            (if (nil? target)
+              ;; lost target this turn (e.g. friendly killed last hostile) —
+              ;; idle this tick, update-ai-state will rotate to investigate
+              ;; or sleep on the next pass.
+              world
+              (case behavior
+                :ranged (hunt-ranged world entity-id pos target-id target-pos
+                                     attack-fn ranged-attack-fn)
+                (hunt-melee world entity-id pos target-id target-pos attack-fn)))
 
             :investigate
-            (if (and target (not= pos target))
-              (let [[dx dy] (step-toward pos target)]
+            (if (and last-known (not= pos last-known))
+              (let [[dx dy] (step-toward pos last-known)]
                 (try-move world entity-id dx dy))
               (random-step world entity-id))
 
             :flee
-            (let [dist (distance pos player-pos)
-                  [ex ey] pos [px py] player-pos]
-              (cond
-                ;; ranged creatures try to shoot while fleeing
-                (and (= behavior :ranged)
-                     (let [spell-data (get-in entity [:spells :ranged])
-                           max-range (or (:range spell-data) 6)]
-                       (and (<= dist max-range)
-                            (has-clear-line? world ex ey px py))))
-                (ranged-attack-fn world entity-id :player)
+            (if (nil? target)
+              (if (status/has-status? world entity-id :burning)
+                (random-step world entity-id)
+                world)
+              (let [dist (distance pos target-pos)
+                    [ex ey] pos [tx ty] target-pos]
+                (cond
+                  (and (= behavior :ranged)
+                       (let [spell-data (get-in entity [:spells :ranged])
+                             max-range (or (:range spell-data) 6)]
+                         (and (<= dist max-range)
+                              (has-clear-line? world ex ey tx ty))))
+                  (ranged-attack-fn world entity-id target-id)
 
-                ;; cornered — fight back
-                (adjacent? pos player-pos)
-                (attack-fn world entity-id :player)
+                  (adjacent? pos target-pos)
+                  (attack-fn world entity-id target-id)
 
-                ;; run — random if burning (panic), away from player otherwise
-                :else
-                (if (status/has-status? world entity-id :burning)
-                  (random-step world entity-id)
-                  (let [[dx dy] (step-away pos player-pos)]
-                    (try-move world entity-id dx dy)))))
+                  :else
+                  (if (status/has-status? world entity-id :burning)
+                    (random-step world entity-id)
+                    (let [[dx dy] (step-away pos target-pos)]
+                      (try-move world entity-id dx dy))))))
 
-            ;; default
             world))))))
 
 ;; --- Process All Creatures ---

@@ -344,15 +344,15 @@
             (assoc :last-conjured-id new-id))))))
 
 (defn r-friend
-  "Stub. Faction-aware AI doesn't exist yet — the AI in xsofy.ai always
-   targets the player — so a creature marked :friendly would still
-   attack the caster and the player would be summoning a confusingly-
-   named enemy. Until the faction work lands as a separate PR, :friend
-   stays in the rune vocabulary as a no-op so inscriptions don't
-   backfire (that was the original bug in nooga/xsofy#32), it just
-   doesn't do anything visible. Per #32 review (Oakwhisper)."
+  "Mark the last conjured creature as :friendly. xsofy.ai/find-target
+   reads the flag — friendlies seek the nearest hostile instead of the
+   player, hostiles treat friendlies as candidate targets. Without a
+   prior conjure in this spell, no-op."
   [ctx]
-  ctx)
+  (let [id (:last-conjured-id ctx)]
+    (if (and id (get-in ctx [:world :entities id]))
+      (assoc-in ctx [:world :entities id :friendly] true)
+      ctx)))
 
 (def rune-primitives
   {:self     r-self

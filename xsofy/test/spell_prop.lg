@@ -230,19 +230,18 @@
                  (<= (math/abs (- ny py)) 1)
                  (not (and (= nx px) (= ny py)))))))))
 
-(deftest conjure-then-friend-stub-is-noop-until-faction-ai
-  (testing "[:conjure :friend] runs cleanly without backfire — the original
-            #32 bug — but the :friend stub deliberately leaves the conjured
-            creature unmarked until faction-aware AI lands. Per #32 review
-            (Oakwhisper). When faction work lands, flip this assertion to
-            check (:friendly entity)."
+(deftest conjure-then-friend-marks-summon-friendly
+  (testing "[:conjure :friend] runs cleanly without backfire (the
+            original #32 bug) and flips :friendly true on the conjured
+            creature. xsofy.ai/find-target then routes the new entity
+            against hostiles instead of the player."
     (let [world  (player-in-room [4 4])
           result (spell/eval-spell world :player [4 4] [:conjure :friend])
           w'     (:world result)
           new-id (first (filter #(not= % :player) (keys (:entities w'))))]
       (is (nil? (:error result)))
       (is (= (inc (count (:entities world))) (count (:entities w'))))
-      (is (nil? (get-in w' [:entities new-id :friendly]))))))
+      (is (true? (get-in w' [:entities new-id :friendly]))))))
 
 (deftest friend-without-prior-conjure-is-a-quiet-noop
   (testing "Bare :friend before any conjure must not backfire — no error,
