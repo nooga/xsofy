@@ -4,8 +4,7 @@
   (:require [test :refer [deftest is testing]]
             [xsofy.check :as c]
             [xsofy.world :as world]
-            [xsofy.dispatch :as dispatch]
-            ))
+            [xsofy.dispatch :as dispatch]))
 
 (deftest make-world-is-reproducible
   (testing "same seed → identical world; different seed → different world"
@@ -98,3 +97,6 @@
       (is (dispatch/replay-action? act) "use-item map is a replay action")
       (is (not (dispatch/replay-action? {:type :inventory})) "UI-typed map is not")
       (is (= [act] (:action-log (dispatch/dispatch w0 act))) "full action map logged for replay"))))
+
+;; Game-state-level dispatch (dispatch-gs / replay-gs) now lives in xsofy.dag;
+;; its tests are in dag_test.

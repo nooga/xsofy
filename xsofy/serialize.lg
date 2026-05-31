@@ -1,0 +1,152 @@
+(ns xsofy.serialize
+  "Canonical, type-tagged byte serialization of EDN-shaped values for
+   content-addressing. Stable under map key order; injective on shape.")
+
+(def ^:private TAG-NIL   0x00)
+(def ^:private TAG-KW    0x01)
+(def ^:private TAG-INT   0x02)
+(def ^:private TAG-STR   0x03)
+(def ^:private TAG-VEC   0x04)
+(def ^:private TAG-MAP   0x05)
+(def ^:private TAG-TRUE  0x06)
+(def ^:private TAG-FALSE 0x07)
+(def ^:private TAG-FLOAT 0x08)
+(def ^:private TAG-SET   0x09)
+(def ^:private TAG-ARRAY 0x0A)
+
+(defn- u64-shr
+  "Logical right shift by n bits. Zero-fills high bits."
+  [x n]
+  (unsigned-bit-shift-right x n))
+
+(defn- u32-be
+  "Big-endian byte encoding of a 32-bit unsigned int as a length-4 vector
+   of int byte values [0, 255]."
+  [n]
+  [(bit-and (u64-shr n 24) 0xFF)
+   (bit-and (u64-shr n 16) 0xFF)
+   (bit-and (u64-shr n 8) 0xFF)
+   (bit-and n 0xFF)])
+
+(defn- i64-be
+  "Big-endian byte encoding of a 64-bit signed int as a length-8 vector
+   of int byte values [0, 255]."
+  [n]
+  (mapv (fn [shift] (bit-and (u64-shr n shift) 0xFF))
+        [56 48 40 32 24 16 8 0]))
+
+(defn- codepoint->utf8
+  "Encode a single Unicode codepoint as a vector of 1-4 int byte values
+   per the UTF-8 spec (RFC 3629). let-go iterates strings as runes
+   (codepoints), so to produce canonical UTF-8 bytes we re-encode
+   each codepoint explicitly."
+  [cp]
+  (assert (and (>= cp 0) (<= cp 0x10FFFF)
+               (not (and (>= cp 0xD800) (<= cp 0xDFFF))))
+          (str "codepoint->utf8: invalid codepoint " cp))
+  (cond
+    (< cp 0x80)
+    [cp]
+
+    (< cp 0x800)
+    [(bit-or 0xC0 (bit-and (u64-shr cp 6) 0x1F))
+     (bit-or 0x80 (bit-and cp 0x3F))]
+
+    (< cp 0x10000)
+    [(bit-or 0xE0 (bit-and (u64-shr cp 12) 0x0F))
+     (bit-or 0x80 (bit-and (u64-shr cp 6) 0x3F))
+     (bit-or 0x80 (bit-and cp 0x3F))]
+
+    :else
+    [(bit-or 0xF0 (bit-and (u64-shr cp 18) 0x07))
+     (bit-or 0x80 (bit-and (u64-shr cp 12) 0x3F))
+     (bit-or 0x80 (bit-and (u64-shr cp 6) 0x3F))
+     (bit-or 0x80 (bit-and cp 0x3F))]))
+
+(defn- utf8-bytes
+  "Convert a let-go string to its UTF-8 byte representation as a vector of
+   int byte values. let-go strings iterate as runes (codepoints), so we
+   re-encode each codepoint through codepoint->utf8 rather than relying on
+   any Java-interop call."
+  [s]
+  (reduce (fn [acc c] (into acc (codepoint->utf8 (int c)))) [] s))
+
+(declare emit)
+
+(defn- emit-into
+  "Accumulate bytes for a value into the accumulator vector."
+  [acc v]
+  (cond
+    (nil? v)
+    (conj acc TAG-NIL)
+
+    (= v true)
+    (conj acc TAG-TRUE)
+
+    (= v false)
+    (conj acc TAG-FALSE)
+
+    (keyword? v)
+    (let [nm (name v)
+          name-bytes (utf8-bytes nm)]
+      (into (into (conj acc TAG-KW) (u32-be (count name-bytes)))
+            name-bytes))
+
+    (string? v)
+    (let [b (utf8-bytes v)]
+      (into (into (conj acc TAG-STR) (u32-be (count b)))
+            b))
+
+    (integer? v)
+    (into (conj acc TAG-INT) (i64-be v))
+
+    (float? v)
+    ;; Encode float as string representation for stability
+    (let [s (str v)
+          b (utf8-bytes s)]
+      (into (into (conj acc TAG-FLOAT) (u32-be (count b)))
+            b))
+
+    (map? v)
+    ;; Sort map entries by their canonical key bytes for stability. Encode each
+    ;; key ONCE — the sort key is the same byte vector we write — instead of
+    ;; emitting it again during the reduce.
+    (let [pairs (sort-by first (map (fn [[k val]] [(emit k) val]) (seq v)))]
+      (reduce (fn [a [kb val]] (emit-into (into a kb) val))
+              (into (conj acc TAG-MAP) (u32-be (count pairs)))
+              pairs))
+
+    (set? v)
+    ;; Sets are unordered: encode each element once, sort by those bytes for
+    ;; stability, and reuse the bytes (no second emit pass).
+    (let [sorted-bytes (sort (map emit v))]
+      (reduce into
+              (into (conj acc TAG-SET) (u32-be (count sorted-bytes)))
+              sorted-bytes))
+
+    (sequential? v)
+    (reduce emit-into
+            (into (conj acc TAG-VEC) (u32-be (count v)))
+            v)
+
+    :else
+    ;; Try to handle seq-able-but-not-sequential values (like Array)
+    (if (try (seq v) (catch Exception _ false))
+      (let [seq-v (seq v)]
+        (reduce emit-into
+                (into (conj acc TAG-ARRAY) (u32-be (count seq-v)))
+                seq-v))
+      (throw (ex-info "serialize: unsupported value" {:value v :type (type v)})))))
+
+(defn emit
+  "Emit the canonical byte vector for a value."
+  [v]
+  (emit-into [] v))
+
+(defn canonical-bytes
+  "Return the canonical byte vector for a world (or any EDN-shaped value).
+   This vector is stable (logically equal maps always produce identical bytes
+   regardless of key insertion order) and injective on shape (different value
+   shapes produce different bytes)."
+  [v]
+  (emit v))
