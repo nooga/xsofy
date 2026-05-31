@@ -498,23 +498,14 @@
         (if found found (recur (inc y)))))))
 
 ;; --- Stairs-follow: pending allies queue ---
-;; When the player takes stairs, every :friendly entity on the floor
-;; is lifted off into :pending-allies on the player, each with a
-;; per-entry :delay = max(1, chebyshev(ally-pos, player-pos)). The
-;; queue rides with the player across floors via inject-player. On
-;; each player turn, decrement every delay; entries whose delay hits
-;; 0 materialize on the current floor near :last-arrival-pos (the
-;; tile the player most recently spawned on). If the player bounces
-;; back to the origin floor before a delay expires, the ally arrives
-;; on whichever floor the player happens to be on — see
-;; nooga/xsofy#37 for the design discussion.
+;; :friendly entities ride with the player across floors with a
+;; chebyshev-distance delay. Queue lives on the player entity (so it
+;; bounces back automatically). See nooga/xsofy#37.
 
 (defn extract-friendlies-to-player
-  "Pull every :friendly entity off :entities, stash on the player as
-   :pending-allies with chebyshev-distance delays from the player's
-   current position. Existing pending entries are preserved (chain
-   descents accumulate). No-op when there's no player (test fixtures
-   without one, post-death state)."
+  "Pull every :friendly off :entities, stash on the player as
+   :pending-allies with chebyshev-distance delays. Existing pending
+   entries preserved across chain descents. No-op without a player."
   [world]
   (if-let [player-pos (get-in world [:entities :player :pos])]
     (let [existing (or (get-in world [:entities :player :pending-allies]) [])
@@ -533,15 +524,14 @@
     world))
 
 (defn find-spawn-near
-  "Ring-BFS outward from origin for the first walkable + unoccupied
-   tile, up to chebyshev radius 8. Returns [pos world'] — pos is nil
-   if no cell is found, world' is world unchanged in that case. The
-   adjacent 8-neighbor case is covered at r=1; broader rings handle
-   crowded stairs (corridors, packed rooms).
+  "First walkable + unoccupied tile within chebyshev radius 8 of
+   origin. Returns [pos world'] — pos is nil if no cell found, world'
+   carries the seed advance from the ring pick. r=1 covers the
+   8-neighbor case; broader rings for crowded stairs.
 
-   Routes the ring pick through det/pick (salted on radius r so each
-   fallback ring gets a distinct sub-chain) — without this, ally
-   materialization couldn't replay from (seed, action-log)."
+   Ring pick routes through det/pick (salted on r so each fallback
+   ring is its own sub-chain) — without this, ally materialization
+   can't replay from (seed, action-log)."
   [world origin]
   (let [{:keys [terrain width height]} world
         [ox oy] origin]
@@ -561,12 +551,11 @@
             (recur (inc r))))))))
 
 (defn materialize-pending-ally
-  "Place a single pending-allies entry back into :entities at a spawn
-   tile near the player's :last-arrival-pos. Returns the world with
-   :seed advanced for the ring pick (and the entry placed if a spawn
-   cell was found). When the search radius is exhausted with no
-   candidate, returns the world unchanged — caller will retry next
-   turn by holding the entry at delay 0."
+  "Place an entry back into :entities near the player's
+   :last-arrival-pos. Returns world with :seed advanced for the ring
+   pick (and the entry placed if a spawn cell was found). If the search
+   radius is exhausted, world comes back unchanged — caller retries
+   next turn by holding the entry at delay 0."
   [world entry]
   (let [arrival (or (get-in world [:entities :player :last-arrival-pos])
                     (get-in world [:entities :player :pos]))
@@ -575,9 +564,8 @@
       w
       (let [ent (-> (:entity entry)
                     (assoc :pos spawn-pos)
-                    ;; Inherit player's ticks so the new arrival slots
-                    ;; into the scheduler normally — same reason
-                    ;; r-conjure does this.
+                    ;; Inherit player ticks so the arrival slots into
+                    ;; the scheduler (same reason as r-conjure).
                     (assoc :ticks (or (get-in w [:entities :player :ticks]) 0)))
             ename (or (:template ent) (:id entry))]
         (-> w
@@ -585,10 +573,8 @@
             (log-msg (str "Your " (name ename) " catches up to you.")))))))
 
 (defn tick-pending-allies
-  "Decrement every pending ally's delay. Entries whose delay reaches 0
-   try to materialize this turn; if their spawn cell is blocked, they
-   stay at delay 0 and retry next turn. Called once per player turn.
-   No-op when there's no player or no pending queue."
+  "Decrement every pending ally's delay; entries hitting 0 try to
+   materialize, hold at 0 if blocked. Called once per player turn."
   [world]
   (let [pending (get-in world [:entities :player :pending-allies])]
     (if (or (nil? (get-in world [:entities :player])) (empty? pending))
@@ -1537,18 +1523,13 @@
               update-fov
               (log-msg "You open the door.")))
 
-      ;; Bumping a friendly: swap places (Brogue-style) when both cells
-      ;; are safe, log a block otherwise. Avoids friendly-fire melee and
-      ;; prevents the player from getting stuck behind their own summon
-      ;; in narrow passages. Friendlies on hazard tiles can't be swapped
-      ;; into — player would fall in.
+      ;; Bumping a friendly: swap places (Brogue-style) when walkable;
+      ;; log a block on hazards (player would fall in).
       ;;
-      ;; Charge the swapped friendly its own per-turn cost too. Without
-      ;; this the swap moves the ally one tile but leaves their :ticks
-      ;; untouched, so run-until-player-turn gives them an immediate
-      ;; full turn — net effect is a 2-tile move per single player
-      ;; step. (quot move-cost speed) preserves speed-2 allies'
-      ;; advantage.
+      ;; Charge the ally (quot move-cost speed) — without this their
+      ;; :ticks stay put and run-until-player-turn gives them a free
+      ;; turn (net: 2-tile ally move per player step). /speed preserves
+      ;; speed-2 allies' advantage.
       (let [c (ent/creature-at world [nx ny])]
         (and c (:friendly c)))
       (let [bump (ent/creature-at world [nx ny])
