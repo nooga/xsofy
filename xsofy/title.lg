@@ -4,35 +4,35 @@
 
 ;; --- Procedural Title Generation ---
 
-(def xs ["Catacombs" "Crypts" "Depths" "Vaults" "Hollows" "Abysses"
-         "Dungeons" "Barrows" "Sanctums" "Citadels" "Spires" "Tombs"
-         "Labyrinths" "Oubliettes" "Sepulchres" "Chasms" "Warrens"
-         "Dominions" "Reaches" "Passages" "Chambers" "Shrines"
-         "Tunnels" "Caves" "Caverns" "Cloisters" "Casemates" "Halls" "Chambers"
-         "Shrines" "Temples" "Cisterns" "Containers" "Hells" "Coils"
-         "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"
-         "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos" "Realms" "Dimensions"
-         "Mazes"])
+(def xs ["Abysses" "Backrooms" "Barrows" "Basements" "Casemates"
+         "Catacombs" "Caverns" "Caves" "Cellars" "Cells" "Chambers"
+         "Chambers" "Chambers" "Chasms" "Cisterns" "Citadels" "Cloisters"
+         "Coils" "Cons" "Containers" "Crypts" "Depths" "Dimensions"
+         "Domains" "Dominions" "Dungeons" "Gazebos" "Halls" "Hells"
+         "Hollows" "Labyrinths" "Mazes" "Oubliettes" "Passages" "Pitfalls"
+         "Pits" "Reaches" "Realms" "Sanctums" "Sepulchres" "Sewers"
+         "Shrines" "Shrines" "Spires" "Strata" "Structures" "Temples"
+         "Tombs" "Tunnels" "Vaults" "Voids" "Warrens"])
 
-(def ys ["Recursion" "Nil" "Off-By-One" "Eval" "Nesting"
-         "Garbage Collection" "Structural Sharing" "Eventual Consistency"
-         "Persistence" "Premature Optimization" "Scope Creep"
-         "Stack Overflow" "Undefined Behavior" "Mutable State"
-         "Diminishing Returns" "Plausible Deniability" "Mild Peril"
-         "Hindsight" "Hubris" "Regret" "Ennui" "Inevitability" "Pedantry"
-         "Shrubbery" "Pickles" "Time" "Damnation" "Forgetting"
-         "Dumplings" "Squelching" "Muttering" "Fumbling"
-         "Consternation" "Lament" "Mounting Dread" "Subtlety"
-         "Subterfuge" "Jeopardy" "Trouble" "Melancholy"
-         "Bewilderment" "Perplexity" "Iron" "Steel" "Felt" "Infinity"
-         "Moderate Discomfort" "Lingering Suspicion" "Lazy Evaluation"
-         "Early Return" "Technical Debt" "Dependency Hell" "Loose Coupling"
-         "Side Effect" "Deadlock" "Decay" "Lukewarm Tea" "Loud Chewing"
-         "Tuesday" "Trepidation" "Darkness" "Drab" "Beige" "Questionable Beauty"
-         "Mildew" "Moisture" "Understandable Nature" "Varying Utility" "Grotesque"
-         "Terror" "Labyrinthine Design" "Boredom" "Bondage" "Procrastination"
-         "Polite Enquiry" "Measured Response" "Madness" "Inconvenience"
-         "Rage Quitting"])
+(def ys ["Beige" "Bewilderment" "Bondage" "Boredom" "Consternation"
+         "Damnation" "Darkness" "Deadlock" "Decay" "Dependency Hell"
+         "Diminishing Returns" "Drab" "Dumplings" "Early Return" "Ennui"
+         "Eval" "Eventual Consistency" "Felt" "Forgetting" "Fumbling"
+         "Garbage Collection" "Grotesque" "Hindsight" "Hubris"
+         "Inconvenience" "Inevitability" "Infinity" "Iron" "Jeopardy"
+         "Labyrinthine Design" "Lament" "Lazy Evaluation"
+         "Lingering Suspicion" "Loose Coupling" "Loud Chewing"
+         "Lukewarm Tea" "Madness" "Measured Response" "Melancholy"
+         "Mild Peril" "Mildew" "Moderate Discomfort" "Moisture"
+         "Mounting Dread" "Mutable State" "Muttering" "Nesting" "Nil"
+         "Off-By-One" "Pedantry" "Perplexity" "Persistence" "Pickles"
+         "Plausible Deniability" "Polite Enquiry" "Premature Optimization"
+         "Procrastination" "Questionable Beauty" "Rage Quitting"
+         "Recursion" "Regret" "Scope Creep" "Shrubbery" "Side Effect"
+         "Squelching" "Stack Overflow" "Steel" "Structural Sharing"
+         "Subterfuge" "Subtlety" "Technical Debt" "Terror" "Time"
+         "Trepidation" "Trouble" "Tuesday" "Undefined Behavior"
+         "Understandable Nature" "Varying Utility"])
 
 (defn generate-title []
   (str (nth xs (rand-int (count xs)))
@@ -42,25 +42,22 @@
 ;; --- Quest Objective ---
 
 (def quest-ps
-  ["Amulet" "Gauntlet" "Chalice" "Scepter" "Orb" "Crown"
-   "Tiara" "Helm" "Boots" "Cloak" "Rod" "Tome"
-   "Blade" "Sceptre" "Trinket" "Trophy" "Artifact" "Relic" "Treasure"
-   "Grimoire" "Codex"  "Book" "Journal"
-   "Pendant" "Brazier"  "Codpiece" "Paren" "Chalice" "Crystal"
-   "Ladle" "Bucket" "Spatula" "Sock" "Pamphlet" "Invoice"
-   "Cummerbund" "Umbrella" "Gazebo" "Chain" "Seq" "Map" "Key"
-   "Toothpick" "Comb" "Can"])
+  ["Amulet" "Artifact" "Blade" "Book" "Boots" "Brazier" "Bucket" "Can"
+   "Chain" "Chalice" "Chalice" "Cloak" "Codex" "Codpiece" "Comb" "Crown"
+   "Crystal" "Cummerbund" "Gauntlet" "Gazebo" "Grimoire" "Helm" "Invoice"
+   "Journal" "Key" "Ladle" "Map" "Orb" "Pamphlet" "Paren" "Pendant" "Relic"
+   "Rod" "Scepter" "Sceptre" "Seq" "Sock" "Spatula" "Tiara" "Tome"
+   "Toothpick" "Treasure" "Trinket" "Trophy" "Umbrella"])
 
 (def quest-qs
-  ["Yendor" "Splendor" "Closing" "Concern" "Radiance"
-   "Adequate Wine" "Moderate Significance" "Your Cousin"
-   "Selective Hearing" "Early Returns" "Marginal Value"
-   "Questionable Fame" "Pickles" "Good Looks" "Dumb Luck"
-   "Plausible Authority" "Borrowed Confidence" "Forgotten Knowledge"
-   "Vague Importance" "Terms and Conditions" "Pointed Remarks"
-   "Strongly Worded Letters" "Unsorted Collections" "Limited Shelf Life"
-   "Infinite Loops" "Unmatched Delimiters" "Lost Semicolons" "Futility"
-   "Parens"])
+  ["Adequate Wine" "Borrowed Confidence" "Closing" "Concern" "Dumb Luck"
+   "Early Returns" "Forgotten Knowledge" "Futility" "Good Looks"
+   "Infinite Loops" "Limited Shelf Life" "Lost Semicolons" "Marginal Value"
+   "Moderate Significance" "Parens" "Pickles" "Plausible Authority"
+   "Pointed Remarks" "Questionable Fame" "Radiance" "Selective Hearing"
+   "Splendor" "Strongly Worded Letters" "Terms and Conditions"
+   "Unmatched Delimiters" "Unsorted Collections" "Vague Importance"
+   "Yendor" "Your Cousin"])
 
 (def gate-messages
   ["The gate slams shut behind you. No going back."
