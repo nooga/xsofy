@@ -6,13 +6,13 @@
 
 (def xs ["Abysses" "Backrooms" "Barrows" "Basements" "Casemates"
          "Catacombs" "Caverns" "Caves" "Cellars" "Cells" "Chambers"
-         "Chambers" "Chambers" "Chasms" "Cisterns" "Citadels" "Cloisters"
-         "Coils" "Cons" "Containers" "Crypts" "Depths" "Dimensions"
-         "Domains" "Dominions" "Dungeons" "Gazebos" "Halls" "Hells"
-         "Hollows" "Labyrinths" "Mazes" "Oubliettes" "Passages" "Pitfalls"
-         "Pits" "Reaches" "Realms" "Sanctums" "Sepulchres" "Sewers"
-         "Shrines" "Shrines" "Spires" "Strata" "Structures" "Temples"
-         "Tombs" "Tunnels" "Vaults" "Voids" "Warrens"])
+         "Chasms" "Cisterns" "Citadels" "Cloisters" "Coils" "Cons"
+         "Containers" "Crypts" "Depths" "Dimensions" "Domains" "Dominions"
+         "Dungeons" "Gazebos" "Halls" "Hells" "Hollows" "Labyrinths"
+         "Mazes" "Oubliettes" "Passages" "Pitfalls" "Pits" "Reaches"
+         "Realms" "Sanctums" "Sepulchres" "Sewers" "Shrines" "Spires"
+         "Strata" "Structures" "Temples" "Tombs" "Tunnels" "Vaults" "Voids"
+         "Warrens"])
 
 (def ys ["Beige" "Bewilderment" "Bondage" "Boredom" "Consternation"
          "Damnation" "Darkness" "Deadlock" "Decay" "Dependency Hell"
@@ -43,11 +43,11 @@
 
 (def quest-ps
   ["Amulet" "Artifact" "Blade" "Book" "Boots" "Brazier" "Bucket" "Can"
-   "Chain" "Chalice" "Chalice" "Cloak" "Codex" "Codpiece" "Comb" "Crown"
-   "Crystal" "Cummerbund" "Gauntlet" "Gazebo" "Grimoire" "Helm" "Invoice"
-   "Journal" "Key" "Ladle" "Map" "Orb" "Pamphlet" "Paren" "Pendant" "Relic"
-   "Rod" "Scepter" "Sceptre" "Seq" "Sock" "Spatula" "Tiara" "Tome"
-   "Toothpick" "Treasure" "Trinket" "Trophy" "Umbrella"])
+   "Chain" "Chalice" "Cloak" "Codex" "Codpiece" "Comb" "Crown" "Crystal"
+   "Cummerbund" "Gauntlet" "Gazebo" "Grimoire" "Helm" "Invoice" "Journal"
+   "Key" "Ladle" "Map" "Orb" "Pamphlet" "Paren" "Pendant" "Relic" "Rod"
+   "Scepter" "Sceptre" "Seq" "Sock" "Spatula" "Tiara" "Tome" "Toothpick"
+   "Treasure" "Trinket" "Trophy" "Umbrella"])
 
 (def quest-qs
   ["Adequate Wine" "Borrowed Confidence" "Closing" "Concern" "Dumb Luck"
