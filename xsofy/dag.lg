@@ -1,0 +1,205 @@
+(ns xsofy.dag
+  "Commit DAG over a deterministic world, stored as an ACTION LOG (not worlds).
+
+   The playthrough is fully determined by input, so a commit need only record
+   the keypress that produced it; any past world is regenerated on demand by
+   replaying its action chain from the origin checkpoint (~0.35s for a level —
+   cheap because the world is pure data over (seed-input, action-log)). This
+   avoids storing or content-hashing a full world every turn (~65ms each).
+
+   - commit-id  = the world's rolling :seed hash (already advanced per turn by
+                  det/advance; O(1), no per-turn full-world walk).
+   - :nodes      = {commit-id → {:parent :action :turn}} — metadata only.
+   - :origin     = {:world <checkpoint> :commit-id id} — the replay base. GC
+                  advances it forward; commits before it are forgotten.
+   - materialize = replay the action chain from :origin to a commit.
+   - checkpoint-hash = OPTIONAL full content hash, only at non-history merges."
+  (:require [xsofy.hash :as hash]
+            [xsofy.serialize :as ser]
+            [xsofy.world :as world]
+            [xsofy.dispatch :as dispatch]))
+
+(def default-budget
+  "Retention budget: max commits kept on HEAD's chain before GC advances the
+   origin checkpoint and forgets older history."
+  {:max-nodes 1000 :evict-policy :oldest-by-turn})
+
+(defn commit-id
+  "Per-turn content address of a world: its rolling :seed hash. det/advance
+   folds every action into :seed via xxh3-64, so :seed already identifies a
+   world within a game (same seed-input + action-log ⇒ same :seed). O(1)."
+  [world]
+  (or (:seed world) 0))
+
+(defn checkpoint-hash
+  "OPTIONAL full content hash: xxh3-64 of the world's canonical bytes (~65ms on
+   a full floor — see tools/). NOT for per-turn identity (that's commit-id).
+   Compute only when non-history-derived state is merged into a world (save/load
+   reconstruction, external injection) to re-anchor/verify content :seed can't
+   account for."
+  [world]
+  (hash/xxh3-64 (ser/canonical-bytes world)))
+
+(defn make-game-state
+  "Wrap an initial world as a fresh game-state. The world becomes the replay
+   origin checkpoint and HEAD."
+  [world]
+  (let [id (commit-id world)]
+    {:world  world
+     :head   id
+     :nodes  {id {:parent nil :action nil :turn (:turn world)}}
+     :origin {:world world :commit-id id}
+     :refs   {}
+     :budget default-budget}))
+
+(defn head-world
+  "The current (HEAD) live world — kept materialized, no replay needed."
+  [gs]
+  (:world gs))
+
+(defn parent-id
+  "Parent commit-id of a commit (nil for the origin / root)."
+  [gs id]
+  (get-in gs [:nodes id :parent]))
+
+(defn- actions-from-origin
+  "Actions to replay from the origin checkpoint to reach `id`, in replay order,
+   or nil if the chain is broken (a node was forgotten by GC)."
+  [gs id]
+  (let [origin-id (:commit-id (:origin gs))]
+    (loop [cur id, acc ()]
+      (cond
+        (= cur origin-id) (vec acc)
+        (nil? cur) nil
+        :else (if-let [node (get-in gs [:nodes cur])]
+                (recur (:parent node) (cons (:action node) acc))
+                nil)))))
+
+(defn materialize
+  "Regenerate the world at commit-id. HEAD is live; the origin is the stored
+   checkpoint; any other commit is replayed from the origin. Returns nil if the
+   id is unknown or its chain to the origin was forgotten by GC."
+  [gs id]
+  (cond
+    (= id (:head gs))               (:world gs)
+    (= id (:commit-id (:origin gs))) (:world (:origin gs))
+    (contains? (:nodes gs) id)
+    (when-let [actions (actions-from-origin gs id)]
+      (reduce dispatch/dispatch (:world (:origin gs)) actions))
+    :else nil))
+
+(defn peek
+  "Read the world at commit-id (regenerating it by replay if needed), or nil if
+   forgotten/unknown. Alias for materialize."
+  [gs id]
+  (materialize gs id))
+
+(defn switch-head
+  "Move HEAD to target-id, materializing its world. No-op if target is unknown
+   or forgotten."
+  [gs target-id]
+  (if-let [w (materialize gs target-id)]
+    (assoc gs :head target-id :world w)
+    gs))
+
+(defn walk-parents
+  "The commit-id n steps back from HEAD along parent links, or nil if the chain
+   runs out — root reached or the nth ancestor was forgotten by GC."
+  [gs n]
+  (loop [id (:head gs) k n]
+    (cond
+      (nil? id) nil
+      (zero? k) (when (contains? (:nodes gs) id) id)
+      :else (recur (parent-id gs id) (dec k)))))
+
+(defn commit
+  "Record HEAD --action--> world' as a new metadata node and advance HEAD. No
+   world is stored (only HEAD's live :world). Returns game-state'."
+  [gs action world']
+  (let [id (commit-id world')]
+    (-> gs
+        (assoc-in [:nodes id] {:parent (:head gs)
+                               :action action
+                               :turn (:turn world')})
+        (assoc :head id :world world'))))
+
+(defn dispatch-gs
+  "Game-state-level dispatch. Resolve `action` against HEAD's world via the
+   world-level dispatch. Replay (state-mutating) actions append a node and
+   advance HEAD. UI actions (which set :screen / :menu-action) do NOT log a
+   node, but their world update IS propagated into :world so the screen toggle
+   takes effect. Returns game-state'. (GC is explicit — see `gc` — not run per
+   turn: forward play never creates unreachable nodes, and re-walking the chain
+   every turn would be O(turns²).)"
+  [gs action]
+  (let [w' (dispatch/dispatch (:world gs) action)]
+    (if (dispatch/replay-action? action)
+      (commit gs action w')
+      (assoc gs :world w'))))
+
+(defn replay-gs
+  "Rebuild a game-state by dispatching `actions` on a fresh deterministic world."
+  [w h seed actions]
+  (reduce dispatch-gs
+          (make-game-state (world/make-world w h seed))
+          actions))
+
+(defn branch
+  "From the commit at target-id, take `action` (a real keypress), creating a new
+   child commit — both timelines stay in the log. Materializes target by replay.
+   No-op (returns gs) if target is unknown or forgotten. Pure; no ! suffix."
+  [gs target-id action]
+  (if-let [base (materialize gs target-id)]
+    (let [w' (dispatch/dispatch base action)]
+      (commit (assoc gs :head target-id :world base) action w'))
+    gs))
+
+(defn- chain-to-origin
+  "Set of commit-ids on `id`'s ancestor chain back to (and including) the
+   origin. Stops at the origin or a missing node. This is exactly what
+   `materialize` needs to replay `id`."
+  [gs id]
+  (let [origin-id (:commit-id (:origin gs))]
+    (loop [cur id acc #{}]
+      (cond
+        (nil? cur) acc
+        (contains? acc cur) acc
+        (not (contains? (:nodes gs) cur)) acc
+        (= cur origin-id) (conj acc cur)
+        :else (recur (parent-id gs cur) (conj acc cur))))))
+
+(defn reachable-ids
+  "Commit-ids needed to materialize HEAD and every named ref: the union of each
+   one's ancestor chain back to the origin. Everything else is an abandoned
+   branch (a rewind + different action that HEAD later left, with no ref)."
+  [gs]
+  (reduce (fn [acc start] (into acc (chain-to-origin gs start)))
+          #{}
+          (cons (:head gs) (vals (:refs gs)))))
+
+(defn gc
+  "Prune unreachable branches: keep only commits on the ancestor chain of HEAD
+   or a named ref; drop the rest. Reclaims abandoned what-if branches; named
+   refs pin their timelines. Safe by construction — a pruned node has no
+   surviving descendant, so no reachable commit ever loses its replay chain, and
+   common parents (on a reachable chain) are always kept.
+
+   NOTE: this is the ONLY safe history removal in the replay-from-origin model.
+   Removing *reachable* history — origin advancement (forgetting) or a 'burn the
+   past' mechanic — severs the replay chain of every descendant of the cut. Any
+   such operation MUST first anchor the surviving branches: materialize and
+   store a world checkpoint at the cut point, so a common parent doesn't become
+   unreachable-without-an-anchor. That (plus an inactivity/budget policy) is
+   deferred; the action log is tiny, so reachability pruning alone suffices for now."
+  [gs]
+  (let [keep (reachable-ids gs)]
+    (update gs :nodes (fn [m] (select-keys m keep)))))
+
+(defn undo
+  "Dev-only: move HEAD back one commit (the undone commit stays in the log,
+   re-branchable). No-op at the origin. Lives here, not in debug — it's a DAG
+   operation, not crash/logging plumbing."
+  [gs]
+  (if-let [p (walk-parents gs 1)]
+    (switch-head gs p)
+    gs))

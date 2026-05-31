@@ -53,3 +53,7 @@
    the seed chain is reproduced exactly, this equals the original live play."
   [w h seed actions]
   (reduce dispatch (world/make-world w h seed) actions))
+
+;; Game-state-level dispatch (dispatch-gs / replay-gs) lives in xsofy.dag — it
+;; layers the commit DAG over this world-level dispatch. Keeping it there avoids
+;; a dispatch↔dag require cycle (dag depends on dispatch for replay-on-demand).

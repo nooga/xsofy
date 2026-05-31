@@ -1,0 +1,60 @@
+(ns xsofy.test.serialize-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.serialize :as ser]
+            [xsofy.world :as world]))
+
+(deftest stable-across-map-key-order
+  (testing "logically equal maps serialize to identical bytes regardless of key order"
+    (let [a {:b 2 :a 1 :c 3}
+          b {:c 3 :a 1 :b 2}]
+      (is (= (vec (ser/canonical-bytes a)) (vec (ser/canonical-bytes b)))))))
+
+(deftest shape-is-injective
+  (testing "different scalar types with same printed form differ"
+    (is (not= (vec (ser/canonical-bytes [:a "b"]))
+              (vec (ser/canonical-bytes [:a :b])))))
+  (testing "nesting differs from flat"
+    (is (not= (vec (ser/canonical-bytes [1 [2 3]]))
+              (vec (ser/canonical-bytes [1 2 3])))))
+  (testing "nil, false, and 0 are distinct"
+    (is (not= (vec (ser/canonical-bytes nil)) (vec (ser/canonical-bytes false))))
+    (is (not= (vec (ser/canonical-bytes false)) (vec (ser/canonical-bytes 0))))))
+
+(deftest deterministic-for-worldish-map
+  (testing "a nested world-shaped map serializes identically on repeat calls"
+    (let [w {:turn 3 :seed 42 :seed-input 42 :action-log [:move :wait]
+             :entities {:player {:hp 10 :pos [2 3]} :rat-1 {:hp 4 :pos [5 5]}}
+             :gold 0 :floors {}}]
+      (is (= (vec (ser/canonical-bytes w)) (vec (ser/canonical-bytes w)))))))
+
+(deftest sets-serialize-order-independently
+  (testing "sets with same elements in different insertion order serialize identically"
+    (let [s1 #{[1 2] [3 4] [5 6]}
+          s2 #{[5 6] [1 2] [3 4]}]
+      (is (= (vec (ser/canonical-bytes s1)) (vec (ser/canonical-bytes s2))))))
+  (testing "set and vector of same elements differ (shape is injective)"
+    (let [s #{1 2 3}
+          v [1 2 3]]
+      (is (not= (vec (ser/canonical-bytes s)) (vec (ser/canonical-bytes v))))))
+  (testing "sets with different elements differ"
+    (let [s1 #{[1 2] [3 4]}
+          s2 #{[1 2] [3 4] [5 6]}]
+      (is (not= (vec (ser/canonical-bytes s1)) (vec (ser/canonical-bytes s2)))))))
+
+(deftest arrays-serialize-deterministically
+  (testing "array serializes deterministically"
+    (let [arr (byte-array [1 2 3 4 5])]
+      (is (= (vec (ser/canonical-bytes arr)) (vec (ser/canonical-bytes arr))))))
+  (testing "arrays with different content differ"
+    (let [a1 (byte-array [1 2 3])
+          a2 (byte-array [1 2 4])]
+      (is (not= (vec (ser/canonical-bytes a1)) (vec (ser/canonical-bytes a2))))))
+  (testing "array and vector differ (shape is injective)"
+    (let [arr (byte-array [1 2 3])
+          v [1 2 3]]
+      (is (not= (vec (ser/canonical-bytes arr)) (vec (ser/canonical-bytes v)))))))
+
+(deftest canonical-bytes-handles-full-world
+  (testing "full world with terrain and fov serializes without throwing"
+    (let [w (world/make-world 40 20 12345)]
+      (is (some? (ser/canonical-bytes w))))))
