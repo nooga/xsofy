@@ -4,20 +4,21 @@
 
 ;; --- Procedural Title Generation ---
 
-(def xs ["Abysses" "Backrooms" "Barrows" "Basements" "Casemates"
+(def xs ["Abysses" "Alleys" "Backrooms" "Barrows" "Basements" "Casemates"
          "Catacombs" "Caverns" "Caves" "Cellars" "Cells" "Chambers"
          "Chasms" "Cisterns" "Citadels" "Cloisters" "Coils" "Cons"
-         "Containers" "Crypts" "Depths" "Dimensions" "Domains" "Dominions"
-         "Dungeons" "Gazebos" "Halls" "Hells" "Hollows" "Labyrinths"
-         "Mazes" "Oubliettes" "Passages" "Pitfalls" "Pits" "Reaches"
-         "Realms" "Sanctums" "Sepulchres" "Sewers" "Shrines" "Spires"
-         "Strata" "Structures" "Temples" "Tombs" "Tunnels" "Vaults" "Voids"
-         "Warrens"])
+         "Containers" "Corridors" "Crypts" "Cycles" "Depths" "Dimensions"
+         "Domains" "Dominions" "Dungeons" "Gazebos" "Halls" "Hells"
+         "Hollows" "Labyrinths" "Mazes" "Oubliettes" "Passages" "Pitfalls"
+         "Pits" "Planes" "Reaches" "Realms" "Sanctums" "Sepulchres"
+         "Sewers" "Shrines" "Spires" "Strata" "Structures" "Temples"
+         "Tombs" "Tunnels" "Vaults" "Voids" "Warrens"])
 
 (def ys ["Beige" "Bewilderment" "Bondage" "Boredom" "Consternation"
-         "Damnation" "Darkness" "Deadlock" "Decay" "Dependency Hell"
-         "Diminishing Returns" "Drab" "Dumplings" "Early Return" "Ennui"
-         "Eval" "Eventual Consistency" "Felt" "Forgetting" "Fumbling"
+         "Cosmic Insignificance" "Damnation" "Darkness" "Deadlock" "Decay"
+         "Deferred Maintenance" "Dependency Hell" "Diminishing Returns"
+         "Drab" "Dumplings" "Early Return" "Ennui" "Eval"
+         "Eventual Consistency" "Felt" "Forgetting" "Fumbling"
          "Garbage Collection" "Grotesque" "Hindsight" "Hubris"
          "Inconvenience" "Inevitability" "Infinity" "Iron" "Jeopardy"
          "Labyrinthine Design" "Lament" "Lazy Evaluation"
