@@ -11,7 +11,8 @@
          "Tunnels" "Caves" "Caverns" "Cloisters" "Casemates" "Halls" "Chambers"
          "Shrines" "Temples" "Cisterns" "Containers" "Hells" "Coils"
          "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"
-         "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos" "Realms" "Dimensions"])
+         "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos" "Realms" "Dimensions"
+         "Mazes"])
 
 (def ys ["Recursion" "Nil" "Off-By-One" "Eval" "Nesting"
          "Garbage Collection" "Structural Sharing" "Eventual Consistency"
