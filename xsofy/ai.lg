@@ -150,23 +150,18 @@
 (def investigate-turns 6) ;; turns to search last known position
 
 (defn in-fov?
-  "Is this position in the player's current FOV? Friendlies share the
-   player's awareness — see docs/ai-design.md for the design call.
-   Used as the visibility proxy in find-target and the state machine."
+  "Pos in the player's current FOV. Friendlies share the player's
+   awareness — see docs/ai-design.md."
   [world pos]
   (contains? (or (:fov world) #{}) pos))
 
 (defn find-target
-  "Return the entity this actor should target, or nil. Friendlies seek
-   the nearest visible hostile; hostiles seek the player, or the
-   nearest visible friendly if one is closer. Actor itself must be in
-   FOV — mutual-visibility gate, same as the old can-see-player?
-   semantics. Returns nil when the actor has no eligible quarry, which
-   the state machine treats as 'idle' (fall through to sleep/wander).
+  "Entity this actor should target, or nil. Friendlies seek nearest
+   visible hostile; hostiles seek the player, or the nearest visible
+   friendly if closer. Actor must be in FOV.
 
    Ties on chebyshev distance break on (str :id) so equidistant
-   candidates are picked deterministically from (seed, action-log).
-   Same discipline as the rest of the engine."
+   candidates are picked deterministically from (seed, action-log)."
   [world entity]
   (let [pos (:pos entity)]
     (when (and pos (in-fov? world pos))
@@ -204,9 +199,8 @@
 ;; :investigate — moving to last known target position, then searching
 ;; :flee      — running away from target (low HP / burning)
 ;;
-;; "Target" is the player for hostiles, the nearest hostile for
-;; friendlies. find-target above does the lookup; everything else here
-;; treats target uniformly. Pre-faction code hardcoded :player.
+;; "Target" = find-target's return value. Player for hostiles, nearest
+;; hostile for friendlies.
 
 (defn update-ai-state [world entity-id]
   (let [entity (get-in world [:entities entity-id])
@@ -384,9 +378,9 @@
             target (find-target world entity)
             target-id (:id target)
             target-pos (:pos target)
-            ;; :investigate uses the LAST KNOWN position from :ai :target,
-            ;; not the live find-target lookup (the whole point is searching
-            ;; somewhere we no longer see them).
+            ;; :investigate uses LAST KNOWN from :ai :target, not the
+            ;; live find-target lookup (whole point is searching where
+            ;; we no longer see).
             last-known (get ai :target)]
         (if (nil? pos)
           world
@@ -398,9 +392,8 @@
 
             :hunt
             (if (nil? target)
-              ;; lost target this turn (e.g. friendly killed last hostile) —
-              ;; idle this tick, update-ai-state will rotate to investigate
-              ;; or sleep on the next pass.
+              ;; lost target (e.g. friendly killed last hostile); idle,
+              ;; update-ai-state rotates state next pass.
               world
               (case behavior
                 :ranged (hunt-ranged world entity-id pos target-id target-pos

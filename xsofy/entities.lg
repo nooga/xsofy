@@ -222,15 +222,13 @@
   (> (get-in entity [:body :hp] 0) 0))
 
 (defn friendly?
-  "Conjured allies / pets carry :friendly true. Used by the AI to choose
-   whether to chase or ignore an entity, and by player-move / fire-bow
-   to skip them. See xsofy.ai/find-target."
+  "Conjured allies / pets. AI chases hostiles-of-faction; player-move
+   and fire-bow skip them."
   [entity]
   (true? (:friendly entity)))
 
 (defn hostile-to-player?
-  "An :ai-bearing entity that is neither the player nor friendly. AoE
-   spells and creature targeting use this to filter candidate enemies."
+  "An :ai entity that is neither the player nor friendly."
   [entity]
   (and (:ai entity)
        (not= :player (:id entity))
@@ -405,9 +403,7 @@
                     (assoc-in [:entities clone-id :body :hp] half-hp)
                     (assoc-in [:entities clone-id :body :max-hp] half-hp)
                     (assoc-in [:entities clone-id :ticks] parent-ticks)
-                    ;; Inherit :friendly — without this, a friendly slime
-                    ;; that gets hit spawns hostile clones in :hunt state
-                    ;; right next to the player. Surfaced in playtest.
+                    ;; Friendly slime spawns hostile clones without this.
                     (assoc-in [:entities clone-id :friendly] (:friendly entity))
                     (assoc-in [:entities clone-id :ai :state] :hunt)))))))
       nil)))
