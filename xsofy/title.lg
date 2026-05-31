@@ -10,7 +10,7 @@
          "Dominions" "Reaches" "Passages" "Chambers" "Shrines"
          "Tunnels" "Caves" "Caverns" "Cloisters" "Casemates" "Halls" "Chambers"
          "Shrines" "Temples" "Cisterns" "Containers" "Hells" "Coils"
-         "Labirynths" "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"
+         "Pitfalls" "Pits" "Cells" "Sewers" "Domains" "Voids" "Cons"
          "Chambers" "Cellars" "Backrooms" "Basements" "Strata" "Structures" "Gazebos" "Realms" "Dimensions"])
 
 (def ys ["Recursion" "Nil" "Off-By-One" "Eval" "Nesting"
@@ -22,14 +22,14 @@
          "Shrubbery" "Pickles" "Time" "Damnation" "Forgetting"
          "Dumplings" "Squelching" "Muttering" "Fumbling"
          "Consternation" "Lament" "Mounting Dread" "Subtlety"
-         "Subterfuge" "Jeopardy" "Trouble" "Melanholy"
+         "Subterfuge" "Jeopardy" "Trouble" "Melancholy"
          "Bewilderment" "Perplexity" "Iron" "Steel" "Felt" "Infinity"
          "Moderate Discomfort" "Lingering Suspicion" "Lazy Evaluation"
          "Early Return" "Technical Debt" "Dependency Hell" "Loose Coupling"
          "Side Effect" "Deadlock" "Decay" "Lukewarm Tea" "Loud Chewing"
          "Tuesday" "Trepidation" "Darkness" "Drab" "Beige" "Questionable Beauty"
          "Mildew" "Moisture" "Understandable Nature" "Varying Utility" "Grotesque"
-         "Terror" "Labirynthian Design" "Boredom" "Bondage" "Procrastination"
+         "Terror" "Labyrinthine Design" "Boredom" "Bondage" "Procrastination"
          "Polite Enquiry" "Measured Response" "Madness" "Inconvenience"
          "Rage Quitting"])
 
@@ -69,7 +69,7 @@
    "The way back vanishes into solid rock."
    "Your guide disappears into the mist. You hear \"Solong, sucker!\" in the distance."
    "Old man shuts the gate behind you. You hear him mutter \"every time, I swear...\""
-   "You wake up hangover on a stone slab. No way out."
+   "You wake up hung over on a stone slab. No way out."
    "You just got here. You don't feel like going back yet."])
 
 (defn generate-quest []

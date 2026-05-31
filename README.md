@@ -2,7 +2,7 @@
 
 A roguelike written in my [lisp](https://github.com/nooga/let-go), where the magic system is a lisp. 
 
-> Note: This is not finished! It's playable but mild peril and uscheduled explosions are to be expected.
+> Note: This is not finished! It's playable but mild peril and unscheduled explosions are to be expected.
 
 **[Play in your browser](https://nooga.github.io/xsofy/)**
 
