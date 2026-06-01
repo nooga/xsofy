@@ -10,7 +10,7 @@
             [xsofy.status :as status]
             [xsofy.runes :as runes]
             [xsofy.input :as input]
-            [xsofy.title :as title]
+            [xsofy.screenfx :as sfx]
             [xsofy.ui :as ui]))
 
 ;; --- Color Helpers ---
@@ -524,7 +524,7 @@
           (term/flush))
         ;; render current vfx overlay
         (render-vfx-frame (assoc world :vfx vfx) r)
-        (ui/pause! (vfx-frame-delay vfx))
+        (sfx/pause! (vfx-frame-delay vfx))
         (let [next-vfx (tick-vfx vfx)]
           (if (seq next-vfx)
             (recur next-vfx cur-dirty)
@@ -858,19 +858,24 @@
    ["So long and"    "thanks for"      "the fish"]
    ["No refunds"     "for the deceased"]])
 
-(defn render-death-screen [world scroll-offset frame]
+(defn death-runes
+  "Scatter the death-screen's background runes once. They stay fixed across
+   frames — the render loop only pulses their brightness, never re-scatters.
+   Re-scattering every frame churned the runes and the per-frame allocation
+   triggered periodic GC-pause flicker."
+  [tw th]
+  (sfx/scatter-runes tw th 30 [200 50 30]))  ;; crimson runes
+
+(defn render-death-screen [world runes scroll-offset frame]
   (let [[tw th] (term/size)
         cx (quot tw 2)
         cy (quot th 2)
-        scheme [200 50 30]  ;; crimson runes
-        runes (title/scatter-runes tw th 30 scheme)
         seed (or (:turn world) 0)]
-    ;; clear to black
-    (title/clear-screen tw th)
     ;; draw runes in background — pulse over `frame` so they keep flickering
-    ;; while the screen waits for input (was a static brightness before).
+    ;; while the screen waits for input. The caller scatters `runes` and clears
+    ;; the screen ONCE; this repaints only the (stable) rune cells each frame.
     (doseq [r runes]
-      (let [b (max 0.1 (title/rune-brightness (:phase r) frame))
+      (let [b (max 0.1 (sfx/rune-brightness (:phase r) frame))
             [cr cg cb] (:color r)]
         (term/move-cursor (:x r) (:y r))
         (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))

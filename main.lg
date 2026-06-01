@@ -12,6 +12,7 @@
             [xsofy.ui :as ui]
             [xsofy.runes :as runes]
             [xsofy.title :as title]
+            [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]))
 
@@ -428,13 +429,16 @@
                      (recur w w (term/size))))))
 
          :death
-         (let [poll! (title/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
+         (let [[tw th] (term/size)
+               runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
+               poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
+               _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
                result (loop [scroll 0 frame 0]
                         ;; animate the death screen continuously; the runes keep
                         ;; pulsing while we wait for a key instead of freezing.
-                        (let [[k nf] (title/drive-until-key
+                        (let [[k nf] (sfx/drive-until-key
                                        frame
-                                       (fn [f] (render/render-death-screen world scroll f))
+                                       (fn [f] (render/render-death-screen world runes scroll f))
                                        poll!)]
                           (cond
                             (or (= k "n") (= k "\r") (= k "\n") (= k " "))

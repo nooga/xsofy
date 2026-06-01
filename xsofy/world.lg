@@ -20,6 +20,38 @@
             [xsofy.util :as u]
             [math]))
 
+;; --- World invariants ---
+;; World owns what a valid world is. snapshot! also stashes the world + a
+;; checkpoint thunk into debug's crash atoms (debug owns crash-dump state).
+
+(defn verify-world! [world checkpoint-fn]
+  "Assert player invariants. Throws if violated; checkpoint-fn is only
+   called to name the failure site."
+  (let [player (get-in world [:entities :player])]
+    (when player
+      (when (nil? (:pos player))
+        (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
+                    ": :player exists but :pos is nil. player keys = "
+                    (keys player))))
+      (let [[x y] (:pos player)]
+        (when (or (nil? x) (nil? y))
+          (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
+                      ": :player :pos contains nil coord: " (:pos player)))))
+      (when (nil? (get-in player [:body :hp]))
+        (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
+                    ": :player :body :hp is nil"))))))
+
+(defmacro snapshot! [world & checkpoint-parts]
+  "Stash world for crash dumping and run invariants. The checkpoint
+   string is only constructed if an invariant fails or a crash dump
+   is later written — every-turn overhead is just two atom resets."
+  `(let [w# ~world
+         ckpt# (fn [] (str ~@checkpoint-parts))]
+     (reset! xsofy.debug/latest-world w#)
+     (reset! xsofy.debug/last-checkpoint ckpt#)
+     (xsofy.world/verify-world! w# ckpt#)
+     w#))
+
 (declare player-move log-msg melee-attack ranged-attack update-fov autoexplore-step bfs-path spawn-runestones)
 
 (def view-radius 12)
@@ -1214,12 +1246,12 @@
     (when best (get best :id))))
 
 (defn creature-turn [world creature-id]
-  (dbg/snapshot! world "creature-turn:enter " creature-id)
+  (snapshot! world "creature-turn:enter " creature-id)
   (let [entity (get-in world [:entities creature-id])]
     (if (nil? entity) world
       (let [;; tick status effects (burning damage, poison, etc.)
             w (status/tick-entity-statuses world creature-id)
-            _ (dbg/snapshot! w "creature-turn:after-status-tick " creature-id)]
+            _ (snapshot! w "creature-turn:after-status-tick " creature-id)]
         (if (nil? (get-in w [:entities creature-id]))
           w  ;; died from status damage
           (if (not (status/can-act? w creature-id))
@@ -1686,7 +1718,7 @@
 ;; --- Turn Processing ---
 
 (defn update-world [world action]
-  (dbg/snapshot! world "update-world:enter " action)
+  (snapshot! world "update-world:enter " action)
   ;; Actions are either a bare keyword (:up, :wait) or a parameterized map
   ;; ({:type :use-item :id :potion-7}); dispatch on the type either way.
   (case (if (map? action) (:type action) action)
@@ -1740,7 +1772,7 @@
                          (log-msg "You rest."))
               :quit  (assoc world :screen :confirm-quit)
               world)
-          _ (dbg/snapshot! w "update-world:after-player-action " action)
+          _ (snapshot! w "update-world:after-player-action " action)
           acted (> (:turn w) (:turn world))
           w (if acted
               (if *perf-detail*
@@ -1754,7 +1786,7 @@
                 (let [t0 (System/currentTimeMillis)
                       w (tick-pending-allies w)
                       w2 (run-until-player-turn w)
-                      _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
+                      _ (snapshot! w2 "update-world:after-run-until-player-turn")
                       t1 (System/currentTimeMillis)
                       w3 (fire/step-fire w2)
                       t2 (System/currentTimeMillis)
@@ -1774,7 +1806,7 @@
                           :fov    (- t5 t4)}))
                 (let [w (tick-pending-allies w)
                       w2 (run-until-player-turn w)
-                      _ (dbg/snapshot! w2 "update-world:after-run-until-player-turn")
+                      _ (snapshot! w2 "update-world:after-run-until-player-turn")
                       ;; fire simulation + burning entities ignite terrain + water drift
                       w3 (-> w2 fire/step-fire fire/burning-entities-ignite drift-water-items)]
                   (if (get-in w3 [:entities :player])

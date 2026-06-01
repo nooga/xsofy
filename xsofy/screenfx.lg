@@ -1,0 +1,105 @@
+(ns xsofy.screenfx
+  "Shared screen-animation primitives for the full-screen effects used by both
+   the title/descending screens (xsofy.title) and the death screen
+   (xsofy.render): a frame-pacing pause, the rune glyph set, scattered pulsing
+   runes, the rune brightness curve, and a screen clear. Lives here so render
+   (core) doesn't reach up into title (a menu screen) for them, and so pause!
+   isn't duplicated."
+  (:require [term]
+            [async]))
+
+(defn pause!
+  "Block ~ms between animation frames (clamped to >=30ms under WASM)."
+  [ms]
+  (async/<!! (async/timeout (if *in-wasm* (max ms 30) ms))))
+
+;; --- Non-blocking input for animated screens ---
+;; `term/read-key` is blocking, so a screen that calls it directly freezes its
+;; animation until a key is pressed. To keep particles running, we read keys on
+;; a goroutine and select between that channel and a frame timer.
+;;
+;; The reader is ONE-SHOT: it reads a single key, delivers it, and exits. A
+;; goroutine blocked inside `read-key` cannot be cancelled, so a looping reader
+;; would survive past the screen and steal the next keypress from the game loop.
+;; One-shot + lazy re-arming guarantees at most one reader is ever blocked on
+;; stdin, and none is left behind once a screen exits on a key.
+
+(defn read-key-chan
+  "Spawn a goroutine that reads exactly one key and delivers it on the returned
+   channel, then exits. EOF (nil from read-key) is delivered as :eof."
+  []
+  (let [ch (async/chan)]
+    (go (async/>! ch (or (term/read-key) :eof)))
+    ch))
+
+(defn make-key-poller
+  "Return a 0-arg poll fn for animation loops. Each call waits up to `ms` for a
+   keypress: returns the key string, :eof, or nil if none arrived in time.
+   Arms a one-shot reader lazily and disarms once a key is delivered, so when a
+   screen stops polling (after its terminating key) no reader is left blocked."
+  [ms]
+  (let [armed (atom nil)]
+    (fn []
+      (when (nil? @armed)
+        (reset! armed (read-key-chan)))
+      (let [[v _] (async/alts! [@armed (async/timeout ms)])]
+        (when (some? v)
+          (reset! armed nil))
+        v))))
+
+(defn drive-until-key
+  "Animation control loop. Render successive frames starting at `start-frame`,
+   calling (render! frame) then (poll!) after each. (poll!) returns a key (the
+   loop ends) or nil (keep animating — frame advances). Returns [key next-frame]
+   so callers can resume animation continuously across handled keypresses.
+   Pure with respect to the injected render!/poll! — the seam tested in
+   title_test."
+  [start-frame render! poll!]
+  (loop [frame start-frame]
+    (render! frame)
+    (let [k (poll!)]
+      (if (some? k)
+        [k (inc frame)]
+        (recur (inc frame))))))
+
+(def rune-glyphs
+  ["ᚠ" "ᚢ" "ᚦ" "ᚨ" "ᚱ" "ᚲ" "ᚷ" "ᚹ" "ᚺ" "ᚾ" "ᛁ" "ᛃ"
+   "ᛇ" "ᛈ" "ᛉ" "ᛊ" "ᛋ" "ᛏ" "ᛒ" "ᛖ" "ᛗ" "ᛚ" "ᛜ" "ᛞ" "ᛟ"])
+
+(defn scatter-runes
+  "n runes scattered (center-biased) across a w×h screen, tinted near
+   base-color, each with a random pulse phase."
+  [w h n base-color]
+  (let [[br bg bb] base-color]
+    (vec (filter some?
+                 (mapv (fn [_]
+                         ;; gaussian-ish: average of two randoms biases toward center
+                         (let [x (quot (+ (rand-int w) (rand-int w)) 2)
+                               y (quot (+ (rand-int h) (rand-int h)) 2)
+                               ;; color variation: +-30 per channel
+                               v (- (rand-int 60) 30)]
+                           {:x (max 1 (min (dec w) x))
+                            :y (max 1 (min (dec h) y))
+                            :glyph (nth rune-glyphs (rand-int (count rune-glyphs)))
+                            :color [(max 30 (min 255 (+ br v)))
+                                    (max 30 (min 255 (+ bg v)))
+                                    (max 30 (min 255 (+ bb v)))]
+                            :phase (rand-int 60)}))
+                       (range n))))))
+
+(defn rune-brightness
+  "Triangle-wave brightness in [0,1] for a rune at the given pulse phase/frame."
+  [phase frame]
+  (let [t (rem (+ phase frame) 60)
+        v (if (< t 30) t (- 60 t))]
+    (/ (float v) 30.0)))
+
+(defn clear-screen
+  "Paint the whole tw×th screen the dark background colour."
+  [tw th]
+  (term/set-bg 10 10 10)
+  (term/set-fg 10 10 10)
+  (dotimes [y th]
+    (term/move-cursor 1 (inc y))
+    (term/write (apply str (repeat tw " "))))
+  (term/flush))
