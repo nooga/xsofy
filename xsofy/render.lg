@@ -374,8 +374,9 @@
         (render-status-bars r (inc row) c)))))
 
 (defn render-sidebar [world r]
-  (ui/clear-rect r)
-  (when-let [player (get-in world [:entities :player])]
+  (when r
+    (ui/clear-rect r)
+    (when-let [player (get-in world [:entities :player])]
     (let [hp (or (get-in player [:body :hp]) 0)
           max-hp (or (get-in player [:body :max-hp]) 1)
           str_ (or (get-in player [:body :strength]) 0)
@@ -437,7 +438,7 @@
         (doseq [c creatures]
           (when (< @row (:h r))
             (let [next-row (render-creature-entry r @row c)]
-              (reset! row (or next-row (+ @row 2))))))))))
+              (reset! row (or next-row (+ @row 2)))))))))))
 
 ;; --- Log Panel ---
 
@@ -468,21 +469,22 @@
   (:max-scroll (message-log-window (:log world) visible-lines (:message-scroll world))))
 
 (defn render-log [world r]
-  (ui/clear-rect r)
-  (let [log (vec (or (:log world) []))
-        n (:h r)
-        recent (if (> (count log) n) (subvec log (- (count log) n)) log)
-        cnt (count recent)]
-    (dotimes [i cnt]
-      (let [entry (nth recent i)
-            msg (format-log-entry entry)
-            age (- cnt i 1)
-            brightness (max 60 (- 220 (* age 50)))]
-        (ui/write-line r (+ (- n cnt) i) (str " " msg)
-                       [brightness
-                        (max 60 (- brightness 20))
-                        (max 40 (- brightness 80))]
-                       ui/bg)))))
+  (when r
+    (ui/clear-rect r)
+    (let [log (vec (or (:log world) []))
+          n (:h r)
+          recent (if (> (count log) n) (subvec log (- (count log) n)) log)
+          cnt (count recent)]
+      (dotimes [i cnt]
+        (let [entry (nth recent i)
+              msg (format-log-entry entry)
+              age (- cnt i 1)
+              brightness (max 60 (- 220 (* age 50)))]
+          (ui/write-line r (+ (- n cnt) i) (str " " msg)
+                         [brightness
+                          (max 60 (- brightness 20))
+                          (max 40 (- brightness 80))]
+                         ui/bg))))))
 
 ;; --- VFX Rendering ---
 ;; line-cells lives in xsofy.util now (use u/line-cells).
