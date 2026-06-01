@@ -1,7 +1,6 @@
 (ns xsofy.render
   (:require [term]
             [math]
-            [async :refer [timeout <!!]]
             [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
             [xsofy.combat :as combat]
@@ -13,9 +12,6 @@
             [xsofy.input :as input]
             [xsofy.title :as title]
             [xsofy.ui :as ui]))
-
-(defn pause! [ms]
-  (<!! (timeout (if *in-wasm* (max ms 30) ms))))
 
 ;; --- Color Helpers ---
 
@@ -364,23 +360,7 @@
                        ui/bg)))))
 
 ;; --- VFX Rendering ---
-
-(defn line-cells [x0 y0 x1 y1]
-  (let [dx (math/abs (- x1 x0))
-        dy (math/abs (- y1 y0))
-        sx (if (< x0 x1) 1 -1)
-        sy (if (< y0 y1) 1 -1)]
-    (loop [x x0 y y0 err (- dx dy) cells []]
-      (let [cells (conj cells [x y])]
-        (if (and (= x x1) (= y y1))
-          cells
-          (let [e2 (* 2 err)
-                adj-x (>= e2 (- dy))
-                adj-y (<= e2 dx)]
-            (recur (if adj-x (+ x sx) x)
-                   (if adj-y (+ y sy) y)
-                   (+ err (if adj-x (- dy) 0) (if adj-y dx 0))
-                   cells)))))))
+;; line-cells lives in xsofy.util now (use u/line-cells).
 
 (def boost-color u/lerp)
 
@@ -394,7 +374,7 @@
             cells (case (:type event)
                     :bolt (let [[x0 y0] (:from event)
                                 [x1 y1] (:to event)]
-                            (line-cells x0 y0 x1 y1))
+                            (u/line-cells x0 y0 x1 y1))
                     :projectile (let [path (or (:path event) [])
                                       step (or (:step event) 0)]
                                   (if (< step (count path))
@@ -456,7 +436,7 @@
             :bolt
             (let [[x0 y0] (:from event)
                   [x1 y1] (:to event)
-                  cells (line-cells x0 y0 x1 y1)
+                  cells (u/line-cells x0 y0 x1 y1)
                   tint (or (:color event) [140 160 255])
                   white [255 255 255]
                   i2 (* intensity intensity)]
@@ -544,7 +524,7 @@
           (term/flush))
         ;; render current vfx overlay
         (render-vfx-frame (assoc world :vfx vfx) r)
-        (pause! (vfx-frame-delay vfx))
+        (ui/pause! (vfx-frame-delay vfx))
         (let [next-vfx (tick-vfx vfx)]
           (if (seq next-vfx)
             (recur next-vfx cur-dirty)

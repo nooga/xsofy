@@ -33,6 +33,46 @@
         dy (math/abs (- y2 y1))]
     (and (<= dx 1) (<= dy 1) (not (and (= dx 0) (= dy 0))))))
 
+(defn line-cells
+  "Bresenham line from (x0,y0) to (x1,y1) as a vec of [x y] cells, inclusive of
+   both endpoints. Pure — used for projectile paths and VFX traces."
+  [x0 y0 x1 y1]
+  (let [dx (math/abs (- x1 x0))
+        dy (math/abs (- y1 y0))
+        sx (if (< x0 x1) 1 -1)
+        sy (if (< y0 y1) 1 -1)]
+    (loop [x x0 y y0 err (- dx dy) cells []]
+      (let [cells (conj cells [x y])]
+        (if (and (= x x1) (= y y1))
+          cells
+          (let [e2 (* 2 err)
+                adj-x (>= e2 (- dy))
+                adj-y (<= e2 dx)]
+            (recur (if adj-x (+ x sx) x)
+                   (if adj-y (+ y sy) y)
+                   (+ err (if adj-x (- dy) 0) (if adj-y dx 0))
+                   cells)))))))
+
+;; ==========================================================
+;; Weighted Selection
+;; ==========================================================
+
+(defn weighted-scan
+  "Cumulative-weight selection. Walks `coll` summing (weight-fn item) and returns
+   the first item whose running total passes `roll` — strictly (`>`) when
+   `strict?`, else inclusively (`>=`). Returns nil for an empty coll.
+
+   The RNG stays with the caller (pass a precomputed `roll`) so each caller keeps
+   its exact deterministic seed chain — this extracts only the shared scan loop."
+  [coll weight-fn roll strict?]
+  (loop [remaining coll acc 0]
+    (when (seq remaining)
+      (let [x   (first remaining)
+            acc (+ acc (weight-fn x))]
+        (if (if strict? (> acc roll) (>= acc roll))
+          x
+          (recur (rest remaining) acc))))))
+
 ;; ==========================================================
 ;; Direction Constants
 ;; ==========================================================

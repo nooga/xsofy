@@ -228,7 +228,7 @@
                                     world)]
                         [world])
                       ;; pushable tile (walkable + hazards like lava/chasm/deep water)
-                      (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                      (and (terrain/in-grid? width height nx ny)
                            (contains? pushable-tiles dest-tile))
                       [(assoc-in world [:entities (:id e) :pos] [nx ny])]
                       ;; wall or void — can't push
@@ -296,12 +296,9 @@
   [world pairs]
   (let [total (reduce + (map second pairs))
         [roll world] (det/int-in world 0 total)]
-    (loop [pairs pairs acc 0]
-      (let [[k w] (first pairs)
-            acc' (+ acc w)]
-        (if (> acc' roll)
-          [k world]
-          (recur (rest pairs) acc'))))))
+    ;; strict? = true preserves the original (> acc roll) selection exactly;
+    ;; RNG (det/int-in) stays here so the seed chain is unchanged.
+    [(first (u/weighted-scan pairs second roll true)) world]))
 
 (defn- adjacent-spawn-cell
   "Random walkable + unoccupied 8-neighbor of pos. Threads :seed via

@@ -25,6 +25,7 @@
             [xsofy.fov :as fov]
             [xsofy.fire :as fire]
             [xsofy.status :as status]
+            [xsofy.util :as u]
             [math]))
 
 ;; ============================================================================
@@ -39,17 +40,8 @@
 ;; Position helpers
 ;; ============================================================================
 
-(defn- distance [[ax ay] [bx by]]
-  (let [dx (- ax bx) dy (- ay by)]
-    (math/sqrt (+ (* dx dx) (* dy dy)))))
-
-(defn- manhattan [[ax ay] [bx by]]
-  (+ (math/abs (- ax bx)) (math/abs (- ay by))))
-
-(defn- chebyshev [[ax ay] [bx by]]
-  ;; "King-step" distance: max of x-delta and y-delta. This is what
-  ;; the game uses for melee adjacency (see xsofy.util/adjacent?).
-  (max (math/abs (- ax bx)) (math/abs (- ay by))))
+;; Distance metrics (distance / manhattan / chebyshev) live in xsofy.util now —
+;; use u/distance and u/chebyshev.
 
 ;; ============================================================================
 ;; FOV — per-entity, not just the player's
@@ -115,26 +107,9 @@
         los-factor (if los 1.0 0.3)]
     (* expected-dmg proximity-factor los-factor)))
 
-(defn- has-clear-line?
-  "Bresenham LOS — duplicate of world.lg's. Living here so percept has
-   no dependency on world.lg. Could be unified later via xsofy.util."
-  [world x1 y1 x2 y2]
-  (let [{:keys [terrain width height]} world
-        dx (math/abs (- x2 x1))
-        dy (- (math/abs (- y2 y1)))
-        sx (if (< x1 x2) 1 -1)
-        sy (if (< y1 y2) 1 -1)
-        err (atom (+ dx dy))
-        cx (atom x1) cy (atom y1)
-        clear (atom true)]
-    (while (and @clear (not (and (= @cx x2) (= @cy y2))))
-      (let [e2 (* 2 @err)]
-        (when (>= e2 dy) (swap! err + dy) (swap! cx + sx))
-        (when (<= e2 dx) (swap! err + dx) (swap! cy + sy)))
-      (when (and @clear (not (and (= @cx x2) (= @cy y2))))
-        (when-not (terrain/transparent? terrain (:width world) (:height world) @cx @cy)
-          (reset! clear false))))
-    @clear))
+;; has-clear-line? now lives in xsofy.terrain (use terrain/has-clear-line?).
+;; percept already depends on terrain, so the old "no dependency on world.lg"
+;; workaround is gone.
 
 (defn threats
   "Vec of threats visible to entity-id. Each entry:
@@ -166,18 +141,18 @@
              (filterv (fn [e] (creature? e entity-id)))
              (filterv (fn [e]
                         (and (contains? fov-set (:pos e))
-                             (<= (distance self-pos (:pos e)) radius))))
+                             (<= (u/distance self-pos (:pos e)) radius))))
              (mapv (fn [e]
                      (let [[ex ey] (:pos e)
-                           d (distance self-pos (:pos e))
-                           cheb (chebyshev self-pos (:pos e))
+                           d (u/distance self-pos (:pos e))
+                           cheb (u/chebyshev self-pos (:pos e))
                            dmg (estimated-damage e)
                            rng (can-attack-from e)
                            ;; Melee = king-step adjacent (chebyshev <= 1).
                            ;; Ranged checks Euclidean distance vs :range.
                            in-melee (and (<= rng 1) (= cheb 1))
                            in-ranged (and (> rng 1) (<= d rng))
-                           los (has-clear-line? world sx sy ex ey)]
+                           los (terrain/has-clear-line? world sx sy ex ey)]
                        {:id (:id e)
                         :template (:template e)
                         :pos (:pos e)
@@ -279,7 +254,7 @@
 
 (defn- nearest-position [from positions]
   (when (seq positions)
-    (first (sort-by #(distance from %) positions))))
+    (first (sort-by #(u/distance from %) positions))))
 
 (defn goal-info
   "Stairs/unexplored/items knowledge for entity-id. Most useful for
@@ -338,8 +313,7 @@
         (into {}
               (mapv (fn [[dx dy]]
                       (let [nx (+ sx dx) ny (+ sy dy)
-                            in-bounds (and (>= nx 0) (< nx width)
-                                           (>= ny 0) (< ny height))
+                            in-bounds (terrain/in-grid? width height nx ny)
                             tile (when in-bounds
                                    (terrain/tget terrain width nx ny))]
                         [[dx dy]

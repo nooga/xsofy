@@ -1,6 +1,6 @@
 (ns xsofy.title
   (:require [term]
-            [async]))
+            [xsofy.ui :as ui]))
 
 ;; --- Procedural Title Generation ---
 
@@ -95,8 +95,6 @@
    [70 200 200]    ;; teal
    [220 120 50]])  ;; amber
 
-(defn pause! [ms]
-  (async/<!! (async/timeout (if *in-wasm* (max ms 30) ms))))
 
 ;; --- Non-blocking input for animated screens ---
 ;; `term/read-key` is blocking, so a screen that calls it directly freezes its
@@ -294,4 +292,4 @@
         (term/set-bg 10 10 10)
         (term/write msg))
       (term/flush)
-      (pause! 60)))))
+      (ui/pause! 60)))))

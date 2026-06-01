@@ -432,7 +432,7 @@
                                 (let [nx (+ cx dx) ny (+ cy dy)
                                       npos [nx ny]
                                       tile (terrain/tget terrain width nx ny)]
-                                  (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                                  (if (and (terrain/in-grid? width height nx ny)
                                            (not (contains? visited npos))
                                            (or (terrain/walkable? terrain width height nx ny)
                                                (= tile 11)))
@@ -752,7 +752,7 @@
                     w)]
             w)
           ;; pushable tile and empty
-          (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+          (and (terrain/in-grid? width height nx ny)
                (contains? pushable-tiles dest-tile))
           (let [w (assoc-in world [:entities entity-id :pos] [nx ny])]
             (if (get-in w [:entities entity-id])
@@ -825,54 +825,8 @@
                   (log-msg world (str "The " atk-name " misses you."))
                   world)))))))))
 
-;; --- Bresenham Line ---
-
-(defn line-cells [x0 y0 x1 y1]
-  (let [dx (math/abs (- x1 x0))
-        dy (math/abs (- y1 y0))
-        sx (if (< x0 x1) 1 -1)
-        sy (if (< y0 y1) 1 -1)]
-    (loop [x x0 y y0 err (- dx dy) cells []]
-      (let [cells (conj cells [x y])]
-        (if (and (= x x1) (= y y1))
-          cells
-          (let [e2 (* 2 err)
-                adj-x (>= e2 (- dy))
-                adj-y (<= e2 dx)]
-            (recur (if adj-x (+ x sx) x)
-                   (if adj-y (+ y sy) y)
-                   (+ err (if adj-x (- dy) 0) (if adj-y dx 0))
-                   cells)))))))
-
-;; --- Line of Sight (Bresenham) ---
-
-(defn has-clear-line? [world x1 y1 x2 y2]
-  "Check if there's a clear line of sight between two points.
-   Transparent tiles allow passage. Start and end tiles are excluded from checks."
-  (let [{:keys [terrain width height]} world
-        dx (math/abs (- x2 x1))
-        dy (- (math/abs (- y2 y1)))
-        sx (if (< x1 x2) 1 -1)
-        sy (if (< y1 y2) 1 -1)]
-    (loop [err (+ dx dy)
-           cx x1
-           cy y1
-           clear true]
-      (if (or (not clear) (and (= cx x2) (= cy y2)))
-        clear
-        (let [e2 (* 2 err)
-              [err cx] (if (>= e2 dy)
-                         [(+ err dy) (+ cx sx)]
-                         [err cx])
-              [err cy] (if (<= e2 dx)
-                         [(+ err dx) (+ cy sy)]
-                         [err cy])
-              ;; check intermediate tiles (not start or end)
-              clear (if (and (not (and (= cx x2) (= cy y2)))
-                             (not (terrain/transparent? terrain width height cx cy)))
-                      false
-                      clear)]
-          (recur err cx cy clear))))))
+;; --- Bresenham Line / Line of Sight ---
+;; line-cells -> xsofy.util ; has-clear-line? -> xsofy.terrain (deduped).
 
 ;; --- Ranged Attack ---
 
@@ -920,7 +874,7 @@
    opts: :damage, :glyph, :color, :flash-color, :accuracy (0-100, default 80)"
   (let [ax (first origin) ay (second origin)
         tx (first target-pos) ty (second target-pos)
-        full-path (line-cells ax ay tx ty)
+        full-path (u/line-cells ax ay tx ty)
         flight-path (vec (rest full-path))
         glyph (or (:glyph opts) (projectile-glyph ax ay tx ty))
         color (or (:color opts) [200 180 120])
@@ -1380,7 +1334,7 @@
                     [px py] player-pos
                     [tx ty] tgt-pos]
                 ;; check LOS
-                (if-not (has-clear-line? world px py tx ty)
+                (if-not (terrain/has-clear-line? world px py tx ty)
                   (log-msg world "No clear line of fire.")
                   ;; resolve damage using combat system
                   (let [ra-pair (combat/resolve-attack-det world :player (:id target))
@@ -1482,7 +1436,7 @@
                             [dx dy] (nth [[1 0] [-1 0] [0 1] [0 -1]] idx)
                             nx (+ x dx) ny (+ y dy)
                             ntile (terrain/tget terrain width nx ny)]
-                        (if (and (>= nx 0) (< nx width) (>= ny 0) (< ny height)
+                        (if (and (terrain/in-grid? width height nx ny)
                                  (or (= ntile 4) (= ntile 3)
                                      (contains? terrain/walkable-tiles ntile)))
                           (assoc-in w [:entities (:id item) :pos] [nx ny])

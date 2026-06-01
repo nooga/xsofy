@@ -1,6 +1,13 @@
 (ns xsofy.ui
   (:require [term]
+            [async :refer [timeout <!!]]
             [xsofy.util :as u]))
+
+;; --- Timing ---
+;; Shared frame/animation pause. Floors the delay under wasm so the event loop
+;; gets a chance to yield. Used by both render VFX and the title screen.
+(defn pause! [ms]
+  (<!! (timeout (if *in-wasm* (max ms 30) ms))))
 
 ;; --- Rect ---
 

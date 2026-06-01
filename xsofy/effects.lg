@@ -84,7 +84,7 @@
 
 (defn gas-passable? [terrain w h x y]
   "Can gas flow into this cell?"
-  (and (>= x 0) (< x w) (>= y 0) (< y h)
+  (and (terrain/in-grid? w h x y)
        (terrain/transparent? terrain w h x y)))
 
 (defn step-gases [world]

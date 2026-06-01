@@ -66,7 +66,7 @@
                     (reduce
                       (fn [w-inner [dx dy]]
                         (let [nx (+ x dx) ny (+ y dy)]
-                          (if-not (and (>= nx 0) (< nx width) (>= ny 0) (< ny height))
+                          (if-not (terrain/in-grid? width height nx ny)
                             w-inner
                             (let [ntile (terrain/tget terrain width nx ny)]
                               (if-not (contains? terrain/flammable-tiles ntile)
