@@ -43,6 +43,22 @@
     (is (not (dispatch/replay-action? :quit)))
     (is (not (dispatch/replay-action? :equip-menu)))))
 
+(deftest ignored-actions-are-noops
+  (testing "unknown / resize / nil inputs touch neither world, seed, nor log"
+    (let [w0 (world/make-world 79 30 7)
+          s0 (:seed w0)]
+      (doseq [a [:unknown :resize nil]]
+        (let [w1 (dispatch/dispatch w0 a)]
+          (is (= s0 (:seed w1)) (str a ": seed unchanged"))
+          (is (= [] (:action-log w1)) (str a ": nothing logged"))
+          (is (nil? (:screen w1)) (str a ": no screen change"))))))
+  (testing "ignored-action? predicate"
+    (is (dispatch/ignored-action? :unknown))
+    (is (dispatch/ignored-action? :resize))
+    (is (dispatch/ignored-action? nil))
+    (is (not (dispatch/ignored-action? :up)))
+    (is (not (dispatch/ignored-action? :inventory)))))
+
 (deftest dispatch-folds-and-logs
   (testing "a replay action advances the seed and is logged"
     (let [w0 (world/make-world 79 30 7)
