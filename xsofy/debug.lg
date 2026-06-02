@@ -23,33 +23,8 @@
 
 ;; --- Invariants ---
 
-(defn verify-world! [world checkpoint-fn]
-  "Assert player invariants. Throws if violated; checkpoint-fn is only
-   called to name the failure site."
-  (let [player (get-in world [:entities :player])]
-    (when player
-      (when (nil? (:pos player))
-        (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
-                    ": :player exists but :pos is nil. player keys = "
-                    (keys player))))
-      (let [[x y] (:pos player)]
-        (when (or (nil? x) (nil? y))
-          (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
-                      ": :player :pos contains nil coord: " (:pos player)))))
-      (when (nil? (get-in player [:body :hp]))
-        (throw (str "INVARIANT FAIL @ " (checkpoint-fn)
-                    ": :player :body :hp is nil"))))))
-
-(defmacro snapshot! [world & checkpoint-parts]
-  "Stash world for crash dumping and run invariants. The checkpoint
-   string is only constructed if an invariant fails or a crash dump
-   is later written — every-turn overhead is just two atom resets."
-  `(let [w# ~world
-         ckpt# (fn [] (str ~@checkpoint-parts))]
-     (reset! xsofy.debug/latest-world w#)
-     (reset! xsofy.debug/last-checkpoint ckpt#)
-     (xsofy.debug/verify-world! w# ckpt#)
-     w#))
+;; World invariants (verify-world! / snapshot!) live in xsofy.world — world
+;; owns its own validity. snapshot! still writes the crash atoms below.
 
 ;; --- Crash Dump ---
 

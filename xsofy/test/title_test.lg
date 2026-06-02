@@ -1,6 +1,6 @@
 (ns xsofy.test.title-test
   (:require [test :refer [deftest is testing]]
-            [xsofy.title :as title]))
+            [xsofy.screenfx :as sfx]))
 
 ;; nooga/xsofy — particle screens (title + death) must keep animating
 ;; independently of input. The control seam is `drive-until-key`: it renders
@@ -18,9 +18,9 @@
                   (let [v (first @remaining)]
                     (swap! remaining rest)
                     v))
-          [k next-frame] (title/drive-until-key 0
-                                                (fn [frame] (swap! rendered conj frame))
-                                                poll!)]
+          [k next-frame] (sfx/drive-until-key 0
+                                              (fn [frame] (swap! rendered conj frame))
+                                              poll!)]
       ;; the key that arrived is returned
       (is (= "x" k))
       ;; frames 0,1,2,3 were all rendered — animation advanced without input
@@ -31,9 +31,9 @@
 (deftest drive-until-key-stops-immediately-when-key-already-ready
   (testing "a key available on the first poll ends after one rendered frame"
     (let [rendered (atom [])
-          [k next-frame] (title/drive-until-key 7
-                                                (fn [frame] (swap! rendered conj frame))
-                                                (fn [] "q"))]
+          [k next-frame] (sfx/drive-until-key 7
+                                              (fn [frame] (swap! rendered conj frame))
+                                              (fn [] "q"))]
       (is (= "q" k))
       (is (= [7] @rendered))
       (is (= 8 next-frame)))))
