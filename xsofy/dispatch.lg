@@ -17,12 +17,26 @@
     :equip-menu :unequip-menu :drop-menu :use-menu
     :quit})
 
+;; Non-actions: input that maps to no game action at all — an unbound key
+;; (:unknown), a terminal-resize wake byte (:resize), or nil. Unlike UI actions
+;; these don't even touch :screen. They MUST short-circuit before update-world,
+;; or a stray keystroke or a window resize would advance the seed and grow the
+;; :action-log, silently breaking (seed, action-log) replay determinism.
+(def ^:private ignored-actions
+  #{:unknown :resize})
+
 (defn action-type
   "The dispatch key for an action: a bare keyword as-is, or the :type of a
    parameterized action map (e.g. {:type :use-item :id :potion-7}). Lets the
    simple keyword path stay simple while a few actions carry a payload."
   [action]
   (if (map? action) (:type action) action))
+
+(defn ignored-action?
+  "True if `action` should be dropped entirely — no world update, no seed fold,
+   no log entry. Covers nil and the non-action keywords in `ignored-actions`."
+  [action]
+  (or (nil? action) (contains? ignored-actions (action-type action))))
 
 (defn replay-action?
   "True if `action` can mutate world state and must therefore be folded
@@ -33,18 +47,26 @@
   (not (contains? ui-actions (action-type action))))
 
 (defn dispatch
-  "Resolve one input action against the world. For replay actions, fold the
-   action into the seed (keyed by the pre-action :turn so the fold is stable),
-   resolve via world/update-world, and append the action to :action-log.
-   UI actions are passed through unchanged. Returns world'."
+  "Resolve one input action against the world:
+     - ignored actions (unbound key, resize wake, nil) → world unchanged;
+     - replay actions → fold into the seed (keyed by the pre-action :turn so the
+       fold is stable), resolve via world/update-world, append to :action-log;
+     - UI actions → world/update-world unchanged (sets :screen, no fold/log).
+   Returns world'."
   [world action]
-  (if (replay-action? action)
+  (cond
+    (ignored-action? action)
+    world
+
+    (replay-action? action)
     (let [turn   (:turn world)
           ;; fold the action TYPE into the seed — encode-salt can't take a map;
           ;; an action's params are reproduced via the recorded :action-log.
           salted (det/advance world [:action turn (action-type action)])
           w'     (world/update-world salted action)]
       (update w' :action-log conj action))
+
+    :else
     (world/update-world world action)))
 
 (defn replay
