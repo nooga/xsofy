@@ -60,9 +60,17 @@
 
     (replay-action? action)
     (let [turn   (:turn world)
+          ;; Copy-on-write the terrain: gameplay edits (door-open, fire spread,
+          ;; trample) mutate the byte-array in place via tset!/trample!. Cloning
+          ;; it here keeps those edits on this turn's own grid, so dispatch is a
+          ;; pure fn of its input — re-dispatching or branching from the same
+          ;; world can't be corrupted by a prior turn's in-place mutation.
+          fresh  (if-let [t (:terrain world)]
+                   (assoc world :terrain (aclone t))
+                   world)
           ;; fold the action TYPE into the seed — encode-salt can't take a map;
           ;; an action's params are reproduced via the recorded :action-log.
-          salted (det/advance world [:action turn (action-type action)])
+          salted (det/advance fresh [:action turn (action-type action)])
           w'     (world/update-world salted action)]
       (update w' :action-log conj action))
 

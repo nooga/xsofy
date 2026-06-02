@@ -318,8 +318,7 @@
   (when pos
     (let [[x y] pos]
       (and (some? x) (some? y) (integer? x) (integer? y)
-           (>= x 0) (< x width)
-           (>= y 0) (< y height)))))
+           (terrain/in-grid? width height x y)))))
 
 (defn- entity-shape-ok? [e]
   ;; an entity must have :id and :template; anything without them is a

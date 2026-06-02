@@ -2,6 +2,7 @@
   (:require [xsofy.entities :refer [defitem visual weapon armor ring
                                      consumable item-name item-desc drops runes]]
             [xsofy.det :as det]
+            [xsofy.util :as u]
             [math]))
 
 ;; --- Gold ---
@@ -261,16 +262,11 @@
     (let [total (reduce (fn [sum e] (+ sum (:eff-weight e))) 0.0 entries)]
       (if-not (> total 0)
         [nil world]
-        (let [[u world'] (det/unit world)
-              roll (* u total)]
-          (loop [remaining entries acc 0.0]
-            (if-not (seq remaining)
-              [nil world']
-              (let [e (first remaining)
-                    acc (+ acc (:eff-weight e))]
-                (if (>= acc roll)
-                  [e world']
-                  (recur (rest remaining) acc))))))))))
+        (let [[un world'] (det/unit world)
+              roll (* un total)]
+          ;; strict? = false preserves the original (>= acc roll) selection;
+          ;; RNG (det/unit) stays here so the seed chain is unchanged.
+          [(u/weighted-scan entries :eff-weight roll false) world'])))))
 
 ;; --- Enchantment ---
 
@@ -313,14 +309,9 @@
   [world pool]
   (let [total (reduce (fn [s e] (+ s (:weight e))) 0 pool)
         [roll world'] (det/int-in world 0 total)]
-    (loop [remaining pool acc 0]
-      (if-not (seq remaining)
-        [nil world']
-        (let [e (first remaining)
-              acc (+ acc (:weight e))]
-          (if (>= acc roll)
-            [e world']
-            (recur (rest remaining) acc)))))))
+    ;; strict? = false preserves the original (>= acc roll) selection;
+    ;; RNG (det/int-in) stays here so the seed chain is unchanged.
+    [(u/weighted-scan pool :weight roll false) world']))
 
 ;; Runic templates by quality tier
 (defn generate-runic-program

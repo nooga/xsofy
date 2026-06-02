@@ -103,25 +103,7 @@
             :else world))))))
 
 ;; --- Line of Sight ---
-
-(defn has-clear-line? [world x1 y1 x2 y2]
-  "Bresenham line check — are all intermediate tiles transparent?"
-  (let [{:keys [terrain width height]} world
-        dx (math/abs (- x2 x1))
-        dy (- (math/abs (- y2 y1)))
-        sx (if (< x1 x2) 1 -1)
-        sy (if (< y1 y2) 1 -1)
-        err (atom (+ dx dy))
-        cx (atom x1) cy (atom y1)
-        clear (atom true)]
-    (while (and @clear (not (and (= @cx x2) (= @cy y2))))
-      (let [e2 (* 2 @err)]
-        (when (>= e2 dy) (swap! err + dy) (swap! cx + sx))
-        (when (<= e2 dx) (swap! err + dx) (swap! cy + sy)))
-      (when (and @clear (not (and (= @cx x2) (= @cy y2))))
-        (when-not (terrain/transparent? terrain width height @cx @cy)
-          (reset! clear false))))
-    @clear))
+;; has-clear-line? lives in xsofy.terrain now (use terrain/has-clear-line?).
 
 ;; --- Random Walk ---
 
@@ -337,7 +319,7 @@
         dist (distance pos target-pos)
         [tx ty] target-pos
         [ex ey] pos
-        los (has-clear-line? world ex ey tx ty)
+        los (terrain/has-clear-line? world ex ey tx ty)
         too-close (< dist (- pref-range 1))
         in-range-with-los (and (<= dist max-range) los)
         fire-pair (if (and (not too-close) in-range-with-los)
@@ -418,7 +400,7 @@
                        (let [spell-data (get-in entity [:spells :ranged])
                              max-range (or (:range spell-data) 6)]
                          (and (<= dist max-range)
-                              (has-clear-line? world ex ey tx ty))))
+                              (terrain/has-clear-line? world ex ey tx ty))))
                   (ranged-attack-fn world entity-id target-id)
 
                   (adjacent? pos target-pos)

@@ -38,7 +38,7 @@
                   (do
                     (let [ddx (- ax cx) ddy (- ay cy)]
                       (when (and (<= (+ (* ddx ddx) (* ddy ddy)) r2)
-                                 (>= ax 0) (< ax w) (>= ay 0) (< ay h))
+                                 (terrain/in-grid? w h ax ay))
                         (swap! visible conj [ax ay])))
                     (let [wall (blocked? grid w h ax ay)]
                       (if wall
@@ -71,7 +71,7 @@
     (when (<= i radius)
       (let [x (+ ox (* i dx))
             y (+ oy (* i dy))]
-        (when (and (>= x 0) (< x w) (>= y 0) (< y h))
+        (when (terrain/in-grid? w h x y)
           (swap! result conj [x y])
           (when (terrain/transparent? grid w h x y)
             (recur (inc i))))))))

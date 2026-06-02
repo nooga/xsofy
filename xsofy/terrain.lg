@@ -1,5 +1,6 @@
 (ns xsofy.terrain
-  (:require [xsofy.det :as det]))
+  (:require [xsofy.det :as det]
+            [math]))
 
 ;; --- Tile Definitions ---
 
@@ -77,17 +78,53 @@
 (defn tset! [grid w x y v]
   (aset grid (+ x (* y w)) v))
 
+;; Interior bounds — excludes the border ring (level generation keeps a solid
+;; wall frame). NOT the same as `in-grid?` below; don't substitute one for the other.
 (defn in-bounds? [w h x y]
   (and (>= x 1) (< x (dec w)) (>= y 1) (< y (dec h))))
 
+;; Full grid bounds — every addressable cell, border included. This is what the
+;; inlined `(>= x 0) (< x w) ...` checks across the codebase actually mean.
+(defn in-grid? [w h x y]
+  (and (>= x 0) (< x w) (>= y 0) (< y h)))
+
 (defn walkable? [grid w h x y]
-  (when (and (>= x 0) (< x w) (>= y 0) (< y h))
+  (when (in-grid? w h x y)
     (contains? walkable-tiles (tget grid w x y))))
 
 (defn transparent? [grid w h x y]
-  (if (and (>= x 0) (< x w) (>= y 0) (< y h))
+  (if (in-grid? w h x y)
     (contains? transparent-tiles (tget grid w x y))
     false))
+
+(defn has-clear-line?
+  "Bresenham line-of-sight between two points in `world`. Intermediate tiles
+   must be transparent; the start and end tiles are excluded. The single home
+   for what was triplicated across world/ai/percept."
+  [world x1 y1 x2 y2]
+  (let [{:keys [terrain width height]} world
+        dx (math/abs (- x2 x1))
+        dy (- (math/abs (- y2 y1)))
+        sx (if (< x1 x2) 1 -1)
+        sy (if (< y1 y2) 1 -1)]
+    (loop [err (+ dx dy)
+           cx x1
+           cy y1
+           clear true]
+      (if (or (not clear) (and (= cx x2) (= cy y2)))
+        clear
+        (let [e2 (* 2 err)
+              [err cx] (if (>= e2 dy)
+                         [(+ err dy) (+ cx sx)]
+                         [err cx])
+              [err cy] (if (<= e2 dx)
+                         [(+ err dx) (+ cy sy)]
+                         [err cy])
+              clear (if (and (not (and (= cx x2) (= cy y2)))
+                             (not (transparent? terrain width height cx cy)))
+                      false
+                      clear)]
+          (recur err cx cy clear))))))
 
 ;; --- Trampling ---
 
@@ -313,7 +350,7 @@
                     t (loop [di 0 t tail]
                         (if (>= di 4) t
                           (let [nx (+ cx (aget dir-dx di)) ny (+ cy (aget dir-dy di))]
-                            (if (and (>= nx 0) (< nx w) (>= ny 0) (< ny h))
+                            (if (in-grid? w h nx ny)
                               (let [ni (+ nx (* ny w))]
                                 (if (and (= (aget visited ni) 0)
                                          (contains? floor-tiles (aget grid ni)))
@@ -525,7 +562,7 @@
                         (if (>= di 4) t
                           (let [nx (+ cx (aget dir-dx di)) ny (+ cy (aget dir-dy di))
                                 ni (+ nx (* ny w))]
-                            (if (and (>= nx 0) (< nx w) (>= ny 0) (< ny h)
+                            (if (and (in-grid? w h nx ny)
                                      (= (aget visited ni) 0)
                                      (contains? walkable-tiles (aget grid ni)))
                               (do (aset visited ni 1)

@@ -116,3 +116,16 @@
 
 ;; Game-state-level dispatch (dispatch-gs / replay-gs) now lives in xsofy.dag;
 ;; its tests are in dag_test.
+
+(deftest dispatch-does-not-mutate-input-terrain
+  (testing "dispatch is a pure fn of its input — in-place terrain edits (a
+            creature opening a door this turn) don't alias the caller's world,
+            so dispatching the same world twice gives identical results"
+    (let [w (world/make-world 40 20 7)   ;; seed 7 has a creature open a door turn 1
+          terrain-before (vec (seq (:terrain w)))
+          a (dispatch/dispatch w :wait)
+          b (dispatch/dispatch w :wait)]
+      (is (= terrain-before (vec (seq (:terrain w)))) "input terrain untouched")
+      (is (= (vec (seq (:terrain a))) (vec (seq (:terrain b)))) "results' terrain identical")
+      (is (= (:log a) (:log b)) "results' log identical")
+      (is (= (:seed a) (:seed b)) "results' seed identical"))))
