@@ -6,6 +6,7 @@
             [xsofy.world :as world]
             [xsofy.render :as render]
             [xsofy.ui :as ui]
+            [xsofy.ui-bridge :as bridge]
             [xsofy.dispatch :as dispatch]))
 
 ;; --- Play loop (poll-based; #56) ------------------------------------------
@@ -78,6 +79,7 @@
   [state world key]
   (let [prev (:world state)
         new-world (apply-auto-stops (dispatch/dispatch world key) world)
+        _ (bridge/emit-stats new-world)
         cur-size (term/size)
         resized (not= cur-size (:size state))
         floor-changed (not= (:depth new-world) (:depth prev))]
