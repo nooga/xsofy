@@ -9,7 +9,19 @@ permissions:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - letgo: v1.9.0
+            label: "pinned (deploy floor)"
+            required: true
+          - letgo: latest
+            label: "latest (upstream smoke test)"
+            required: false
+    name: ${{ matrix.label }}
     runs-on: ubuntu-latest
+    continue-on-error: ${{ !matrix.required }}
     steps:
       - uses: actions/checkout@v4
 
@@ -18,8 +30,13 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Install let-go
-        run: go install github.com/nooga/let-go@latest
+      - name: Install let-go ${{ matrix.letgo }}
+        run: go install github.com/nooga/let-go@${{ matrix.letgo }}
+
+      - name: Print let-go info
+        run: |
+          which let-go
+          let-go --version 2>/dev/null || true
 
       - name: Run tests
         run: let-go xsofy/test/run.lg
