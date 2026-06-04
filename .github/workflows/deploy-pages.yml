@@ -37,6 +37,29 @@ jobs:
       - name: Patch COI startup guard
         run: let-go tools/patch_wasm_coi.lg
 
+      - name: Set up Node (smoke gate)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install smoke dependencies
+        working-directory: tests/browser
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Browser smoke (must boot to title screen)
+        working-directory: tests/browser
+        run: node smoke.mjs --dir ../../dist
+
+      - name: Upload smoke failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure
+          path: tests/browser/smoke-failure.png
+          if-no-files-found: ignore
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
