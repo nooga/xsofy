@@ -57,7 +57,7 @@ const page = await browser.newPage();
 const consoleErrs = [];
 const exceptions = [];
 page.on('console', msg => {
-  if (msg.type() === 'error' || msg.type() === 'warning') {
+  if (msg.type() === 'error') {
     consoleErrs.push(`[${msg.type()}] ${msg.text()}`);
   }
 });

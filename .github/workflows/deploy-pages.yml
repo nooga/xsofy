@@ -45,7 +45,7 @@ jobs:
       - name: Install smoke dependencies
         working-directory: tests/browser
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
       - name: Browser smoke (must boot to title screen)
