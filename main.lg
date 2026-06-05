@@ -7,10 +7,10 @@
             [string]
             [xsofy.world :as world]
             [xsofy.entities :as ent]
-            [xsofy.input :as input]
             [xsofy.render :as render]
             [xsofy.ui :as ui]
             [xsofy.runes :as runes]
+            [xsofy.play :as play]
             [xsofy.title :as title]
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
@@ -547,71 +547,12 @@
                  (recur w w (term/size)))
                w)))
 
-         ;; default: game screen
-         (let [;; determine auto-action or wait for input
-               auto-key0 (cond
-                           (:resting world) :wait
-                           (:running-dir world) (let [[dx dy] (:running-dir world)]
-                                                  (cond (and (= dx 0) (< dy 0)) :up
-                                                        (and (= dx 0) (> dy 0)) :down
-                                                        (and (< dx 0) (= dy 0)) :left
-                                                        (and (> dx 0) (= dy 0)) :right
-                                                        :else nil))
-                           (:autoexploring world) :autoexplore
-                           (:auto-target world) :auto-target-step
-                           :else nil)
-               ;; queued keystroke cancels in-flight auto-action
-               interrupting (and auto-key0 (term/key-pending?))
-               world (if interrupting
-                       (dissoc world :resting :running-dir :autoexploring :auto-target)
-                       world)
-               auto-key (when (not interrupting) auto-key0)
-               key (or auto-key (input/parse-key (term/read-key)))
-               new-world (dispatch/dispatch world key)
-               ;; check if auto-mode should stop
-               new-world (if (or (:resting new-world) (:running-dir new-world) (:autoexploring new-world) (:auto-target new-world))
-                           (let [player (get-in new-world [:entities :player])
-                                 hp (get-in player [:body :hp] 0)
-                                 max-hp (get-in player [:body :max-hp] 1)
-                                 fov (or (:fov new-world) #{})
-                                 enemies (some (fn [e]
-                                                 (and (:ai e)
-                                                      (not= :player (:id e))
-                                                      (:pos e)
-                                                      (contains? fov (:pos e))
-                                                      (contains? #{:hunt :investigate :flee} (get-in e [:ai :state]))))
-                                               (vals (:entities new-world)))
-                                 ;; running stops at walls/doors/items
-                                 run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
-                                                  (= (:turn new-world) (:turn world)))
-                                 dead (nil? player)]
-                             (cond
-                               dead (dissoc new-world :resting :running-dir :autoexploring :auto-target)
-                               enemies (-> new-world
-                                           (dissoc :resting :running-dir :autoexploring :auto-target)
-                                           (world/log-msg "You stop — enemy spotted!"))
-                               (and (:resting new-world) (>= hp max-hp))
-                               (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
-                               run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
-                               (:inventory-full new-world)
-                               (-> new-world
-                                   (dissoc :autoexploring :auto-target :inventory-full))
-                               :else new-world))
-                           new-world)
-               cur-size (term/size)
-               resized (not= cur-size prev-size)
-               floor-changed (not= (:depth new-world) (:depth world))]
-           (if (or floor-changed resized (:screen new-world))
-             (do (when-not (:screen new-world)
-                   (render/render-full new-world))
-                 (recur new-world new-world cur-size))
-             (do (render/render-dirty new-world world)
-                 ;; animate vfx between turns
-                 (when (seq (:vfx new-world))
-                   (let [[tw th] cur-size
-                         panels (ui/layout tw th)]
-                     (render/animate-vfx! new-world (:map panels))))
-                 (recur (dissoc new-world :vfx) world cur-size)))))))))
+         ;; default: game screen — the poll-based turn loop (input +
+         ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         (let [result (play/run-play-loop world prev-size)]
+           (if (:running result)
+             (recur result result (term/size))
+             result)))))))
 
 (defn -main []
   (init-terminal)
