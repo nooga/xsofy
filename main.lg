@@ -56,65 +56,37 @@
     (when (and (>= sel 0) (< sel (count inv)))
       (nth inv sel nil))))
 
+;; The inventory-screen item actions, like the quick-menu, route world-mutating
+;; actions through dispatch (seed + :action-log) — guards/messages live in
+;; world's *-action handlers — and only manage the :inventory screen state here.
+
 (defn inv-equip [world]
   (if-let [item-id (sel-item-id world)]
-    (let [item (get-in world [:entities item-id])
-          slot (get-in item [:item :slot])
-          iname (get-item-name world item-id)]
-      (if (and slot (not= slot :consumable))
-        (-> (ent/equip-item world item-id :player)
-            (world/log-msg (str "You equip the " iname "."))
-            (assoc :screen :inventory))
-        (assoc world :screen :inventory)))
+    (-> (dispatch/dispatch world {:type :equip :id item-id})
+        (assoc :screen :inventory))
     (assoc world :screen :inventory)))
 
 (defn inv-unequip [world]
   (if-let [item-id (sel-item-id world)]
-    (let [item (get-in world [:entities item-id])
-          slot (get-in item [:item :slot])
-          iname (get-item-name world item-id)]
-      (if slot
-        (if (ent/cursed? world item-id)
-          (-> world
-              (world/log-msg (str "The " iname " is cursed! You can't remove it."))
-              (assoc :screen :inventory))
-          (-> (ent/unequip-item world :player slot)
-              (world/log-msg (str "You remove the " iname "."))
-              (assoc :screen :inventory)))
-        (assoc world :screen :inventory)))
+    (-> (dispatch/dispatch world {:type :unequip :id item-id})
+        (assoc :screen :inventory))
     (assoc world :screen :inventory)))
 
 (defn inv-drop [world]
   (if-let [item-id (sel-item-id world)]
-    (let [iname (get-item-name world item-id)
-          equipment (or (get-in world [:entities :player :equipment]) {})
-          slot (get-in world [:entities item-id :item :slot])
-          equipped-id (when slot (get equipment slot))
-          ;; can't drop equipped cursed items
-          is-equipped-cursed (and (= equipped-id item-id) (ent/cursed? world item-id))]
-      (if is-equipped-cursed
-        (-> world
-            (world/log-msg (str "The " iname " is cursed! You can't remove it."))
-            (assoc :screen :inventory))
-        (let [w (if (= equipped-id item-id)
-                  (ent/unequip-item world :player slot)
-                  world)]
-          (-> (ent/drop-item w item-id :player)
-              (world/log-msg (str "You drop the " iname "."))
-              (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world))))))))
+    (-> (dispatch/dispatch world {:type :drop :id item-id})
+        (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world)))))
     (assoc world :screen :inventory)))
 
 (defn inv-use [world]
   (if-let [item-id (sel-item-id world)]
-    (let [item (get-in world [:entities item-id])
-          slot (get-in item [:item :slot])]
-      (if (= slot :consumable)
-        (let [result (world/use-item world item-id)]
-          ;; if use-item opened a submenu (enchant), keep its screen
-          (if (:screen result)
-            (dissoc result :inv-sel)
-            (dissoc result :screen :inv-sel)))
-        (assoc world :screen :inventory)))
+    (if (= :consumable (get-in world [:entities item-id :item :slot]))
+      (let [result (dispatch/dispatch world {:type :use-item :id item-id})]
+        ;; if use-item opened a submenu (enchant), keep its screen
+        (if (:screen result)
+          (dissoc result :inv-sel)
+          (dissoc result :screen :inv-sel)))
+      (assoc world :screen :inventory))
     (assoc world :screen :inventory)))
 
 (defn inv-inscribe [world]
@@ -229,45 +201,26 @@
         old-screen (:screen world)]
     (if (nil? item-id)
       world
-      (let [iname (get-item-name world item-id)
-            equipment (or (get-in world [:entities :player :equipment]) {})
-            item (get-in world [:entities item-id])
-            slot (get-in item [:item :slot])
+      (let [slot (get-in world [:entities item-id :item :slot])
             result (case action
-                     :equip
-                     (if (and slot (not= slot :consumable))
-                       (-> (ent/equip-item world item-id :player)
-                           (world/log-msg (str "You equip the " iname ".")))
-                       world)
-
-                     :unequip
-                     (if slot
-                       (if (ent/cursed? world item-id)
-                         (world/log-msg world (str "The " iname " is cursed! You can't remove it."))
-                         (-> (ent/unequip-item world :player slot)
-                             (world/log-msg (str "You remove the " iname "."))))
-                       world)
-
-                     :drop
-                     (let [equipped-id (when slot (get equipment slot))
-                           is-cursed (and (= equipped-id item-id) (ent/cursed? world item-id))]
-                       (if is-cursed
-                         (world/log-msg world (str "The " iname " is cursed! You can't remove it."))
-                         (let [w (if (= equipped-id item-id)
-                                   (ent/unequip-item world :player slot)
-                                   world)]
-                           (-> (ent/drop-item w item-id :player)
-                               (world/log-msg (str "You drop the " iname "."))))))
+                     ;; world-mutating menu actions go through dispatch so they
+                     ;; fold into the seed + :action-log and replay identically.
+                     ;; Guards/messages live in world's *-action handlers.
+                     :equip   (dispatch/dispatch world {:type :equip :id item-id})
+                     :unequip (dispatch/dispatch world {:type :unequip :id item-id})
+                     :drop    (dispatch/dispatch world {:type :drop :id item-id})
 
                      :use
                      (if (= slot :consumable)
-                       (world/use-item world item-id)
+                       (dispatch/dispatch world {:type :use-item :id item-id})
                        world)
 
                      :enchant
                      (let [scroll-id (:enchant-scroll-id world)]
                        (if scroll-id
-                         (-> (world/enchant-item world item-id scroll-id)
+                         ;; dispatch the assembled (target, scroll) action so the
+                         ;; enchant + scroll-consume fold into the seed + log
+                         (-> (dispatch/dispatch world {:type :enchant :id item-id :scroll-id scroll-id})
                              (dissoc :enchant-scroll-id))
                          world))
 
