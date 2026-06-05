@@ -101,7 +101,7 @@
 ;; clear-screen, rune-glyphs) live in xsofy.screenfx, shared with the death
 ;; screen.
 
-(defn draw-frame [runes title subtitle tw th frame]
+(defn draw-frame [runes title subtitle tw th frame seed]
   (let [cx (quot tw 2)
         cy (quot th 2)
         tx (max 1 (- cx (quot (count title) 2)))
@@ -137,17 +137,26 @@
         (term/set-fg bright bright bright)
         (term/set-bg 10 10 10)
         (term/write subtitle)))
+    ;; seed — dim, under the subtitle. Note it to replay this run via ?seed=.
+    (when (and seed (> frame 30))
+      (let [sline (str "seed " seed)
+            ssx (max 1 (- cx (quot (count sline) 2)))]
+        (term/move-cursor ssx (+ cy 4))
+        (term/set-fg 90 85 70)
+        (term/set-bg 10 10 10)
+        (term/write sline)))
     (term/flush)))
 
 (defn show-title-screen [rng]
-  (let [[tw th] (or (term/size) [100 36])
+  (let [seed (:seed rng)   ;; capture before picks advance the rng — this is the run seed
+        [tw th] (or (term/size) [100 36])
         [title rng]  (generate-title rng)
         subtitle "Press any key"
         [scheme rng] (pick-scheme rng)
         runes (sfx/scatter-runes tw th 40 scheme)]
     (sfx/clear-screen tw th)
     (sfx/drive-until-key 0
-                         (fn [frame] (draw-frame runes title subtitle tw th frame))
+                         (fn [frame] (draw-frame runes title subtitle tw th frame seed))
                          (sfx/make-key-poller 120))
     {:title title :scheme scheme :rng rng}))
 

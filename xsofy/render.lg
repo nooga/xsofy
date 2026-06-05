@@ -301,6 +301,9 @@
       ;; depth
       (ui/write-line r @row (str " Depth " (:depth world)) [100 100 100] ui/bg)
       (swap! row inc)
+      ;; seed — enables ?seed= reproducible runs (#44)
+      (ui/write-line r @row (str " Seed " (:seed-input world)) [80 80 95] ui/bg)
+      (swap! row inc)
       ;; separator
       (ui/write-line r @row (apply str (repeat (:w r) "-")) [40 40 40] ui/bg)
       (swap! row inc)
@@ -972,7 +975,15 @@
           (term/move-cursor (max 1 (- cx (quot (count dmsg) 2))) msg-y)
           (term/set-fg 200 60 40)
           (term/set-bg 10 10 10)
-          (term/write dmsg))))
+          (term/write dmsg)
+          ;; seed line — note/share to replay this exact run via ?seed=
+          (let [sd (:seed-input world)
+                sline (str "seed " sd "  ·  ?seed=" sd " to replay")
+                sy (min (- th 1) (+ msg-y 2))]
+            (term/move-cursor (max 1 (- cx (quot (count sline) 2))) sy)
+            (term/set-fg 110 105 90)
+            (term/set-bg 10 10 10)
+            (term/write sline)))))
     ;; message log — scrollable
     (let [log (or (:log world) [])
           log-count (count log)

@@ -10,9 +10,9 @@
 
 ;; Title: two animation ticks must differ (frozen-title guard).
 (let [runes (sfx/scatter-runes 80 24 30 [200 50 30])]
-  (title/draw-frame runes "SMOKE TITLE" "subtitle" 80 24 0)
+  (title/draw-frame runes "SMOKE TITLE" "subtitle" 80 24 0 12345)
   (println "\n@@T0@@")
-  (title/draw-frame runes "SMOKE TITLE" "subtitle" 80 24 50)
+  (title/draw-frame runes "SMOKE TITLE" "subtitle" 80 24 50 12345)
   (println "\n@@T50@@"))
 
 ;; Game screen renders, then survives a few scripted turns and re-renders.
