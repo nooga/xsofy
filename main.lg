@@ -15,7 +15,8 @@
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
-            [xsofy.seed :as seed]))
+            [xsofy.seed :as seed]
+            [xsofy.replay :as replay]))
 
 
 (defn init-terminal []
@@ -434,6 +435,7 @@
          :death
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
+               replay-code (replay/encode-run world)  ;; compute ONCE — encode is O(n) per call
                poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
                result (loop [scroll 0 frame 0]
@@ -441,7 +443,7 @@
                         ;; pulsing while we wait for a key instead of freezing.
                         (let [[k nf] (sfx/drive-until-key
                                        frame
-                                       (fn [f] (render/render-death-screen world runes scroll f))
+                                       (fn [f] (render/render-death-screen world runes scroll f replay-code))
                                        poll!)]
                           (cond
                             (or (= k "n") (= k "\r") (= k "\n") (= k " "))
