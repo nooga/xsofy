@@ -167,6 +167,13 @@
   [k]
   (if (nil? k) [:action :eof] [:action (input/parse-key k)]))
 
+(defn raw-key->event
+  "Edge normalization for screens that match raw keys rather than game actions
+   (e.g. the death screen's scroll/new-game keys, or an 'any key' prompt): a raw
+   key → [:action <raw-key-string>]; a nil key (EOF) → [:action :eof]."
+  [k]
+  (if (nil? k) [:action :eof] [:action k]))
+
 (defn input-source
   "A source that drains all keys queued this tick (capped ≤16/frame so an input
    flood can't stall a frame), each normalized to an event by `key->event` at the
