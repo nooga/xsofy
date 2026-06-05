@@ -1,6 +1,7 @@
 (ns xsofy.ui
   (:require [term]
             [async :refer [timeout <!!]]
+            [xsofy.input :as input]
             [xsofy.util :as u]))
 
 ;; --- Timing ---
@@ -138,3 +139,131 @@
      :sidebar sidebar
      :log log-area
      :status status}))
+
+;; --- Event Loop (#56) -----------------------------------------------------
+;; A small, composable, poll-based event loop for terminal UIs. A screen
+;; describes which sources it listens to (input, a cosmetic clock) and how state
+;; folds over events (a pure `step`); the loop drives `render`. The poll-based
+;; source contract NEVER blocks while idle, so the exact same loop runs in a
+;; native terminal and in the browser (wasm) without freezing — and cosmetic
+;; [:tick] events advance :ui only, never the deterministic (seed, :action-log)
+;; world stream, so animated screens never corrupt replay.
+;;
+;; Event shape — a tagged vector [tag payload]:
+;;   [:action act]  a domain action (a keyword like :move-left, or a map like
+;;                  {:type :use-item :id …}); the only thing `dispatch` sees.
+;;   [:tick frame]  a cosmetic frame tick; `frame` is owned by the clock source.
+;; A source is a non-blocking poll: a 0-arg fn (or {:poll fn}) returning a
+;; (possibly empty) seq of events. A source's poll MUST NOT block.
+
+;; Monotonic wall clock in ms. let-go `now` → go.time.Time; `.Sub` → ns (Int).
+(def ^:private clock-epoch (now))
+(defn millis [] (quot (.Sub (now) clock-epoch) 1000000))
+
+(defn default-key->event
+  "Edge normalization: a raw key → an [:action act] event. A nil key (EOF) maps
+   to [:action :eof] without parsing; any other key is parsed to its action.
+   Key→action parsing lives in the source, never in `step`."
+  [k]
+  (if (nil? k) [:action :eof] [:action (input/parse-key k)]))
+
+(defn input-source
+  "A source that drains all keys queued this tick (capped ≤16/frame so an input
+   flood can't stall a frame), each normalized to an event by `key->event` at the
+   edge. It polls `pending?`, then `read!` only once a key is ready, so it never
+   blocks while idle — mandatory under single-threaded wasm, harmless natively.
+   The 3-arity injects pending?/read! for tests; 0/1-arities use `term`."
+  ([] (input-source default-key->event term/key-pending? term/read-key))
+  ([key->event] (input-source key->event term/key-pending? term/read-key))
+  ([key->event pending? read!]
+   (fn []
+     (loop [out []]
+       (if (and (< (count out) 16) (pending?))
+         (recur (conj out (key->event (read!))))
+         out)))))
+
+(defn clock-source
+  "A cosmetic source emitting [:tick frame] once `ms` has elapsed since its last
+   emit; `frame` is a monotonically increasing integer (from 0) the source owns.
+   The 2-arity injects a now-ms fn for deterministic tests."
+  ([ms] (clock-source ms millis))
+  ([ms now-ms]
+   (let [last  (atom (now-ms))
+         frame (atom 0)]
+     (fn []
+       (let [t (now-ms)]
+         (if (>= (- t @last) ms)
+           (do (reset! last t)
+               (let [f @frame] (reset! frame (inc f)) [[:tick f]]))
+           []))))))
+
+(defn replay-source
+  "A source that yields recorded `actions` as [:action act] events, one per
+   tick, then nothing once drained. No clock — the same shape live input
+   produces, so it is interchangeable for headless replay."
+  [actions]
+  (let [remaining (atom (seq actions))]
+    (fn []
+      (if-let [a (first @remaining)]
+        (do (swap! remaining rest) [[:action a]])
+        []))))
+
+(defn poll-source
+  "The generic polling source: `f` is a non-blocking () → event | events | nil
+   called once per tick; input-source/clock-source are specializations. A single
+   [tag …] event is wrapped; a seq of events passes through; nil → no events.
+
+   (A future async/network source would feed a channel and consume it here once
+   let-go gains a non-blocking channel take — nooga/let-go#194. A polling source
+   owns no goroutine, so there is nothing to cancel; that is the leak-free path.
+   The push `chan-source` adapter from the spec is deferred until that primitive
+   exists — its blocking-only `<!`/`>!` can't be polled without parking.)"
+  [f]
+  (fn []
+    (let [x (f)]
+      (cond
+        (nil? x) []
+        (and (vector? x) (keyword? (first x))) [x]   ;; a single [tag …] event
+        :else x))))                                  ;; already a seq of events
+
+(defn- poll-1 [src] (if (map? src) ((:poll src)) (src)))
+
+(defn apply-events
+  "Fold `events` through `step` from `state`. Unlike core `reduce` — which
+   unwraps a (reduced x) — this PRESERVES the wrapper so `run-loop` can tell a
+   normal state from a loop exit. Returns the new state, or a reduced wrapper
+   once `step` signals exit."
+  [step state events]
+  (loop [st state, evs (seq events)]
+    (if (or (reduced? st) (nil? evs))
+      st
+      (recur (step st (first evs)) (next evs)))))
+
+(defn run-loop
+  "Drive a poll-based event loop. opts:
+     :sources  — seq of non-blocking sources (fn or {:poll fn})
+     :state    — initial loop state (typically {:world … :ui …})
+     :step     — (step state event) → state' | (reduced result)   [the scan]
+     :render   — (render state) side-effecting subscriber (paints AND presents,
+                 so the core stays backend-agnostic — it never flushes itself)
+     :xform    — optional transducer shaping each tick's event batch
+     :frame-ms — pacing target (floored under wasm by `pause!`); default 30
+   Each iteration: render the current state, poll every source (non-blocking),
+   fold the batch through `step`, then pace via `pause!`. Exits when `step`
+   returns (reduced result), returning that result.
+
+   No goroutines are owned (input + clock are polling), so there is nothing to
+   tear down — the caller's shutdown-terminal stays the outer finally. A future
+   ctx-aware chan-source would wrap this body in (with-scope …) to drain its
+   producer; not needed today."
+  [{:keys [sources state step render xform frame-ms] :or {frame-ms 30}}]
+  (loop [st state]
+    (render st)
+    ;; poll every source exactly once this tick (eagerly — sources are stateful),
+    ;; then optionally shape the batch through the transducer `xform`.
+    (let [raw   (vec (mapcat poll-1 sources))
+          batch (if xform (vec (sequence xform raw)) raw)
+          st'   (apply-events step st batch)]
+      (if (reduced? st')
+        (deref st')
+        (do (pause! frame-ms) (recur st'))))))
