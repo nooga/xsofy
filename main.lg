@@ -14,7 +14,8 @@
             [xsofy.title :as title]
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
-            [xsofy.dispatch :as dispatch]))
+            [xsofy.dispatch :as dispatch]
+            [xsofy.seed :as seed]))
 
 
 (defn init-terminal []
@@ -359,10 +360,12 @@
       :else world)))
 
 (defn new-game []
-  (let [{:keys [title scheme]} (title/show-title-screen)
-        quest (title/generate-quest)
+  (let [sd  (seed/boot-seed)
+        rng {:seed sd}
+        {:keys [title scheme rng]} (title/show-title-screen rng)
+        [quest rng] (title/generate-quest rng)
         _ (title/show-descending-screen 1 scheme)]
-    (-> (world/make-world 79 30 (rand-int 1000000000))
+    (-> (world/make-world 79 30 sd)
         (assoc :title title
                :scheme scheme
                :quest-item (:item quest))
