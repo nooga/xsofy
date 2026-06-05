@@ -1,6 +1,7 @@
 (ns xsofy.title
   (:require [term]
             [xsofy.screenfx :as sfx]
+            [xsofy.ui :as ui]
             [xsofy.det :as det]))
 
 ;; --- Procedural Title Generation ---
@@ -155,9 +156,20 @@
         [scheme rng] (pick-scheme rng)
         runes (sfx/scatter-runes tw th 40 scheme)]
     (sfx/clear-screen tw th)
-    (sfx/drive-until-key 0
-                         (fn [frame] (draw-frame runes title subtitle tw th frame seed))
-                         (sfx/make-key-poller 120))
+    ;; Animate via the poll-based event loop: a cosmetic clock advances the
+    ;; particle frame each tick; any key ends the screen. Never blocks while
+    ;; idle, so it stays responsive in native + wasm (see xsofy.ui / #56).
+    (ui/run-loop
+      {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+       :state    {:frame 0}
+       :step     (fn [st ev]
+                   (let [[tag payload] ev]
+                     (case tag
+                       :tick   (assoc st :frame payload)
+                       :action (reduced st)   ;; any key ends the title
+                       st)))
+       :render   (fn [st] (draw-frame runes title subtitle tw th (:frame st) seed))
+       :frame-ms 120})
     {:title title :scheme scheme :rng rng}))
 
 ;; --- Descending Screen ---

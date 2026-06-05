@@ -470,36 +470,50 @@
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
                replay-code (replay/encode-run world)  ;; compute ONCE — encode is O(n) per call
-               poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
-               result (loop [scroll 0 frame 0]
-                        ;; animate the death screen continuously; the runes keep
-                        ;; pulsing while we wait for a key instead of freezing.
-                        (let [[k nf] (sfx/drive-until-key
-                                       frame
-                                       (fn [f] (render/render-death-screen world runes scroll f replay-code))
-                                       poll!)]
-                          (cond
-                            (or (= k "n") (= k "\r") (= k "\n") (= k " "))
-                            :new-game
-                            (= k :eof) (assoc world :running false)
-                            (= k "\u001b")
-                            (if *in-wasm*
-                              (do
-                                (render/render-hazard-prompt world "Start a new game?")
-                                (let [confirm (term/read-key)]
-                                  (if (= confirm "y")
-                                    :new-game
-                                    (recur scroll nf))))
-                              (assoc world :running false))
-                            (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)) nf)
-                            (or (= k "k") (= k "\u001b[A")) (recur (inc scroll) nf)
-                            :else (recur scroll nf))))]
-           (if (= result :new-game)
+               ;; Animate the death screen via the poll-based event loop: a
+               ;; cosmetic clock pulses the runes each tick while we wait for a
+               ;; key, instead of freezing on a blocking read (see xsofy.ui /
+               ;; #56). :ui carries {:frame :scroll}; raw keys drive scroll/exit.
+               step (fn [st ev]
+                      (let [[tag payload] ev]
+                        (case tag
+                          :tick (assoc st :frame payload)
+                          :action
+                          (let [k payload]
+                            (cond
+                              (or (= k "n") (= k "\r") (= k "\n") (= k " ")) (reduced :new-game)
+                              (= k :eof)                  (reduced :quit)
+                              (= k "\u001b")               (reduced :esc)
+                              (or (= k "j") (= k "\u001b[B")) (update st :scroll (fn [s] (max 0 (dec s))))
+                              (or (= k "k") (= k "\u001b[A")) (update st :scroll inc)
+                              :else st))
+                          st)))
+               result (ui/run-loop
+                        {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+                         :state    {:frame 0 :scroll 0}
+                         :step     step
+                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st) replay-code))
+                         :frame-ms 120})]
+           (cond
+             (= result :new-game)
              (let [w (new-game)]
                (render/render-full w)
                (recur w w (term/size)))
-             result))
+             ;; esc: wasm offers a restart confirm (declining re-enters the death
+             ;; screen); native esc quits.
+             (= result :esc)
+             (if *in-wasm*
+               (do
+                 (render/render-hazard-prompt world "Start a new game?")
+                 (if (= (term/read-key) "y")
+                   (let [w (new-game)]
+                     (render/render-full w)
+                     (recur w w (term/size)))
+                   (recur world world prev-size)))
+               (assoc world :running false))
+             ;; :quit (EOF)
+             :else (assoc world :running false)))
 
          :confirm-hazard
          (do

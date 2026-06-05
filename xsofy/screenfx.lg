@@ -13,45 +13,10 @@
   [ms]
   (async/<!! (async/timeout (if *in-wasm* (max ms 30) ms))))
 
-;; --- Non-blocking input for animated screens ---
-;; `term/read-key` is blocking, so a screen that calls it directly freezes its
-;; animation until a key is pressed. To keep particles running we sleep one
-;; frame, then peek the input via the non-blocking `term/key-pending?` and only
-;; consume a key when one is queued.
-;;
-;; Why not a goroutine + async/alts! on read-key: in WASM, `term/read-key` calls
-;; `Atomics.wait` on the SharedArrayBuffer, which blocks the entire worker
-;; thread (not just the calling goroutine). That freezes the timer goroutine
-;; backing `async/timeout`, so `alts!` never returns nil and the animation loop
-;; never advances past frame 0 — exactly the "Press any key" never-renders
-;; symptom observed on deployed builds. `key-pending?` is the let-go primitive
-;; provided for this idiom.
-
-(defn make-key-poller
-  "Return a 0-arg poll fn for animation loops. Each call yields ~ms then returns
-   the next pending key, or nil if no key was queued during the wait. Safe in
-   both native and WASM — `term/read-key` is only entered when a key is already
-   pending, so it returns immediately without blocking the runtime."
-  [ms]
-  (fn []
-    (pause! ms)
-    (when (term/key-pending?)
-      (or (term/read-key) :eof))))
-
-(defn drive-until-key
-  "Animation control loop. Render successive frames starting at `start-frame`,
-   calling (render! frame) then (poll!) after each. (poll!) returns a key (the
-   loop ends) or nil (keep animating — frame advances). Returns [key next-frame]
-   so callers can resume animation continuously across handled keypresses.
-   Pure with respect to the injected render!/poll! — the seam tested in
-   title_test."
-  [start-frame render! poll!]
-  (loop [frame start-frame]
-    (render! frame)
-    (let [k (poll!)]
-      (if (some? k)
-        [k (inc frame)]
-        (recur (inc frame))))))
+;; Non-blocking animated-screen input — the `key-pending?` poll-peek idiom that
+;; superseded a goroutine + read-key (which froze under wasm) — now lives in the
+;; general poll-based event loop: xsofy.ui/input-source + run-loop (#56). The
+;; title and death screens drive that loop directly.
 
 (def rune-glyphs
   ["ᚠ" "ᚢ" "ᚦ" "ᚨ" "ᚱ" "ᚲ" "ᚷ" "ᚹ" "ᚺ" "ᚾ" "ᛁ" "ᛃ"
