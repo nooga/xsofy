@@ -1,0 +1,53 @@
+(ns tools.patch-wasm-seed
+  "Bridge ?seed= → worker go.env.XSOFY_SEED in the generated WASM index.html.
+   Idempotent and fail-closed, like patch_wasm_coi."
+  (:require [string :as str]
+            [os]))
+
+(def index-path
+  (let [path (getenv "XSOFY_WASM_INDEX")]
+    (if (and path (> (count path) 0)) path "dist/index.html")))
+
+(defn abort! [m] (println m) (os/exit 1))
+
+(defn replace-exact [s needle replacement]
+  (let [parts (vec (str/split s needle))]
+    (cond
+      (= 2 (count parts)) (str (nth parts 0) replacement (nth parts 1))
+      (= 1 (count parts)) (if (str/includes? s replacement)
+                            s
+                            (abort! (str "missing anchor: " needle)))
+      :else (abort! (str "anchor appears more than once: " needle)))))
+
+;; 1) Main thread: read ?seed= and include it in the worker init message.
+(def post-before
+  "worker.postMessage({ t: 'init', sab, wasmGzB64: WASM_GZ_B64, wasmExecJS: WASM_EXEC_JS });")
+(def post-after
+  (str "const __lgSeed = new URLSearchParams(location.search).get('seed');\n"
+       "  worker.postMessage({ t: 'init', sab, wasmGzB64: WASM_GZ_B64, wasmExecJS: WASM_EXEC_JS, seed: __lgSeed });"))
+
+;; 2) Worker: destructure the seed out of the init message.
+(def destr-before "const { sab, wasmGzB64, wasmExecJS } = e.data;")
+(def destr-after  "const { sab, wasmGzB64, wasmExecJS, seed } = e.data;")
+
+;; 3) Worker: set go.env from the seed before running. Anchored on the unique
+;;    "// Run Go WASM" comment so it can't match the main-thread new Go().
+(def go-before  "// Run Go WASM\n      const go = new Go();")
+(def go-after
+  (str "// Run Go WASM\n      const go = new Go();\n"
+       "      if (seed != null && seed !== '') go.env = Object.assign({}, go.env, { XSOFY_SEED: String(seed) });"))
+
+;; Early idempotency guard: anchor 3's needle ("// Run Go WASM\n      const go =
+;; new Go();") survives its own append (the patch only adds lines after it), so
+;; re-running would inject the go.env line twice. Bail out cleanly if the bundle
+;; is already bridged.
+(let [html (slurp index-path)]
+  (if (str/includes? html "XSOFY_SEED")
+    (println (str "already seed-bridged " index-path))
+    (let [html (replace-exact html post-before post-after)
+          html (replace-exact html destr-before destr-after)
+          html (replace-exact html go-before go-after)]
+      (when-not (str/includes? html "XSOFY_SEED")
+        (abort! "failed to inject seed bridge"))
+      (spit index-path html)
+      (println (str "seed-bridged " index-path)))))
