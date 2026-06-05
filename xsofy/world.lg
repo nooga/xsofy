@@ -1780,6 +1780,7 @@
               :equip    (equip-action world (:id action))
               :unequip  (unequip-action world (:id action))
               :drop     (drop-action world (:id action))
+              :enchant  (enchant-item world (:id action) (:scroll-id action))
               :fire (fire-bow world)
               :up    (player-move world 0 -1)
               :down  (player-move world 0 1)
