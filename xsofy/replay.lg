@@ -202,3 +202,13 @@
       (throw (ex-info "replay/encode-run: action-log contains a non-keyword action; replay codes currently support keyword-only logs"
                       {:non-keyword (filterv (fn [a] (not (keyword? a))) actions)})))
     (encode (:seed-input world) actions)))
+
+(defn encode-run-safe
+  "Like encode-run, but returns nil instead of throwing when the run can't be
+   encoded — i.e. the action-log contains a parameterized map action (item
+   use/equip/drop/enchant routed through dispatch), which the v1 wire format
+   does not yet carry. Callers that merely DISPLAY a code (the death screen)
+   use this and fall back to showing the seed alone for such runs."
+  [world]
+  (when (every? keyword? (or (:action-log world) []))
+    (encode-run world)))
