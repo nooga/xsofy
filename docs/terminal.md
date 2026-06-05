@@ -208,11 +208,80 @@ For better performance, batch a full row into a single string:
       (recur (update-state state key)))))
 ```
 
+## Responsive UIs: multiplexing input and a cosmetic clock
+
+The blocking game loop above is fine for a turn-based screen where **nothing
+moves while you wait for input**. The moment a screen needs to *animate while
+idle* — a pulsing title, drifting particles, ambient effects — a blocking
+`read-key` falls apart:
+
+- **Native:** the loop is stuck in `read-key` until a key arrives, so frames
+  never advance and the animation freezes.
+- **WASM (browser):** far worse. `read-key` is backed by `Atomics.wait` on a
+  SharedArrayBuffer, and Go-wasm is single-threaded/cooperative, so a blocking
+  read freezes the **entire** worker — including any timer goroutine driving
+  animation. The screen never paints past frame 0.
+
+The fix is a **poll-based source contract**: never block while idle. Peek input
+with the non-blocking `term/key-pending?` and only call `read-key` once a key is
+actually queued; meanwhile a cosmetic clock advances the animation. The same
+loop then runs identically native and in wasm.
+
+xsofy implements this as `xsofy.ui/run-loop` (see
+`docs/responsive-ui-event-loop-design.md`). A screen describes **which sources
+it listens to** and **how state folds over events**; the loop drives render:
+
+```clojure
+(ui/run-loop
+  {:sources  [(ui/input-source) (ui/clock-source 120)]  ; non-blocking polls
+   :state    {:world world :ui {:frame 0}}
+   :step     (fn [state [tag payload]]                   ; the scan
+               (case tag
+                 :action (handle-key state payload)      ; drives :world
+                 :tick   (assoc-in state [:ui :frame] payload)  ; animates :ui
+                 state))
+   :render   (fn [state] (draw state) (term/flush))      ; paints AND presents
+   :frame-ms 120})                                       ; floored to ≥30ms in wasm
+```
+
+- **Sources** are non-blocking polls (`() → seq-of-events`). `input-source`
+  drains queued keys (parsed to `[:action …]` at the edge); `clock-source`
+  emits `[:tick frame]` once an interval elapses; `replay-source` feeds a
+  recorded action log; `poll-source` wraps any non-blocking `() → events`.
+- **`step`** is a `scan` over `{:world :ui}`; it returns `(reduced result)` to
+  exit the loop. Modal/multi-step screens compose as **nested `run-loop`s** that
+  return an assembled value.
+- **Pacing** uses a wasm-aware `pause!` (`(<!! (timeout (max ms 30)))`, *not*
+  `Thread/sleep`) so the JS event loop actually yields and the input buffer
+  refills.
+
+### Determinism caveat (important)
+
+If your simulation is replay-deterministic from a `(seed, action-log)` pair,
+**cosmetic clock ticks must never enter that stream**. Keep loop state split:
+
+```clojure
+{:world <deterministic sim>   ; the only thing dispatch/replay ever see
+ :ui    <cosmetic frame/particles>}  ; advanced by [:tick], never logged
+```
+
+Route `[:tick …]` to `:ui` only — never fold it into the seed or append it to
+the action log. Replay then reconstructs `:world` bit-identically regardless of
+how (or whether) animation ran.
+
+### Note on `key-pending?` and async sources
+
+`term/key-pending?` is the portable primitive that makes the poll-on-tick
+contract work in both builds. Genuinely async sources (network, multi-timer)
+are **polling-only** today: let-go's channel ops (`<!`/`>!`) are blocking, with
+no non-blocking `poll!`/`alts!` yet (tracked as nooga/let-go#194), so a push
+`chan-source` adapter is a documented seam, not yet implemented.
+
 ## Gotchas
 
 - **Coordinates are 1-based** — `(term/write-at 1 1 "@")` is the top-left corner.
 - **No newlines in raw mode** — `println` still works but adds `\n` which moves the cursor down. Use `term/write` or `term/write-at` instead.
-- **`read-key` is blocking** — the game loop will wait for input. This is fine for a turn-based roguelike. For real-time, you'd need `core.async` with a key-reading goroutine.
+- **`read-key` is blocking** — the game loop will wait for input. This is fine for a turn-based screen with no idle animation. For anything that animates while waiting (or any wasm build), don't reach for a key-reading goroutine — under single-threaded Go-wasm a blocking `read-key` freezes the whole runtime. Use the poll-based [Responsive UIs](#responsive-uis-multiplexing-input-and-a-cosmetic-clock) pattern (`key-pending?` + `xsofy.ui/run-loop`) instead.
 - **Escape key ambiguity** — pressing Escape sends `\u001b` but so do arrow keys (`\u001b[A`). `read-key` reads all available bytes at once so arrow keys come as a single 3-byte string, but there can be edge cases with slow terminals.
 - **Always clean up** — if the process crashes without calling `restore-mode!`, run `reset` in the shell to fix the terminal.
 - **`size` can change** — if the user resizes the terminal during play, `size` will return the new dimensions on next call. Consider re-rendering on size change.
