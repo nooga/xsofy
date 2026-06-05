@@ -71,3 +71,9 @@
                                            #{[5 5]})]
     (is (nil? (get result [1 1])))
     (is (= :gold-2 (:id (get result [5 5]))))))
+
+(deftest term-dims-falls-back-to-game-size-when-headless
+  ;; term/size returns nil with no TTY (CI, tests). render entries must not
+  ;; destructure nil — they fall back to the game's default dimensions.
+  (testing "no TTY → [ui/game-width ui/game-height] defaults"
+    (is (= [100 36] (render/term-dims)))))
