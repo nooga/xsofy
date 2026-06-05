@@ -1,0 +1,152 @@
+(ns xsofy.test.ui-test
+  "Tests for the xsofy.ui event-loop surface (#56): the poll-based source
+   contract (input/clock/replay/poll sources), the event fold (apply-events),
+   and the run-loop driver. The headline property is determinism: cosmetic
+   [:tick] events advance :ui only and must NEVER perturb :world or the
+   (seed, :action-log) replay stream."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.ui :as ui]
+            [xsofy.world :as world]
+            [xsofy.dispatch :as dispatch]))
+
+;; --- input-source ---------------------------------------------------------
+;; input-source drains all keys queued this tick (≤16), parsing each to an
+;; [:action act] event at the source edge. It is injectable (pending?/read!)
+;; so it can be tested without redefining the term globals.
+
+(deftest input-source-empty-when-nothing-pending
+  (testing "no key queued → no events (never blocks)"
+    (let [src (ui/input-source ui/default-key->event (fn [] false) (fn [] nil))]
+      (is (= [] (src))))))
+
+(deftest input-source-parses-queued-keys-to-actions
+  (testing "each queued key is parsed to an [:action act] at the edge"
+    (let [keys   (atom ["k" "j" "."])
+          pending? (fn [] (boolean (seq @keys)))
+          read!  (fn [] (let [k (first @keys)] (swap! keys rest) k))
+          src    (ui/input-source ui/default-key->event pending? read!)]
+      (is (= [[:action :up] [:action :down] [:action :wait]] (src))))))
+
+(deftest input-source-maps-eof-to-action
+  (testing "a nil key (EOF) becomes [:action :eof] without calling parse-key"
+    (let [fired (atom false)
+          pending? (fn [] (if @fired false (do (reset! fired true) true)))
+          read!  (fn [] nil)
+          src    (ui/input-source ui/default-key->event pending? read!)]
+      (is (= [[:action :eof]] (src))))))
+
+(deftest input-source-caps-at-16-per-frame
+  (testing "a key flood is capped at 16/frame so one tick can't stall"
+    (let [src (ui/input-source ui/default-key->event (fn [] true) (fn [] "k"))]
+      (is (= 16 (count (src)))))))
+
+;; --- clock-source ---------------------------------------------------------
+;; clock-source emits [:tick frame] only after ms elapsed; frame counter is
+;; monotonic. Injectable now-ms makes the cadence deterministic in tests.
+
+(deftest clock-source-emits-only-after-interval
+  (testing "no tick until ms elapsed, then a tick, then quiet again"
+    (let [t   (atom 0)
+          src (ui/clock-source 100 (fn [] @t))]
+      (is (= [] (src)) "t=0: nothing yet")
+      (reset! t 50)
+      (is (= [] (src)) "t=50: still under the interval")
+      (reset! t 100)
+      (is (= [[:tick 0]] (src)) "t=100: first tick, frame 0")
+      (is (= [] (src)) "t=100 again: last-emit reset, under interval"))))
+
+(deftest clock-source-frame-counter-is-monotonic
+  (testing "successive ticks increment the frame counter"
+    (let [t   (atom 0)
+          src (ui/clock-source 10 (fn [] @t))]
+      (reset! t 10) (is (= [[:tick 0]] (src)))
+      (reset! t 20) (is (= [[:tick 1]] (src)))
+      (reset! t 30) (is (= [[:tick 2]] (src))))))
+
+;; --- replay-source --------------------------------------------------------
+
+(deftest replay-source-yields-actions-then-drains
+  (testing "recorded actions arrive as [:action act], one per tick, then []"
+    (let [src (ui/replay-source [:up :wait :fire])]
+      (is (= [[:action :up]] (src)))
+      (is (= [[:action :wait]] (src)))
+      (is (= [[:action :fire]] (src)))
+      (is (= [] (src)) "drained")
+      (is (= [] (src)) "stays drained"))))
+
+;; --- poll-source ----------------------------------------------------------
+
+(deftest poll-source-normalizes-its-return
+  (testing "nil → [], a single [tag …] event → [event], a seq → as-is"
+    (is (= [] ((ui/poll-source (fn [] nil)))))
+    (is (= [[:tick 3]] ((ui/poll-source (fn [] [:tick 3])))) "single event wrapped")
+    (is (= [[:action :x] [:tick 1]]
+           ((ui/poll-source (fn [] [[:action :x] [:tick 1]]))))
+        "seq passed through")))
+
+;; --- apply-events / determinism (the core property) -----------------------
+;; A step mirroring the real play-loop routing: [:action] drives :world via the
+;; deterministic dispatch contract; [:tick] advances :ui only.
+
+(defn- play-step [state ev]
+  (let [[tag payload] ev]
+    (case tag
+      :action (update state :world dispatch/dispatch payload)
+      :tick   (assoc-in state [:ui :frame] payload)
+      state)))
+
+(defn- interleave-ticks [actions]
+  ;; weave a [:tick n] before and after every action — arbitrary positions
+  (loop [out [] as actions n 0]
+    (if (seq as)
+      (recur (conj out [:tick n] [:action (first as)]) (rest as) (inc n))
+      (conj out [:tick n]))))
+
+(deftest ticks-never-perturb-the-world
+  (testing "folding the same actions with vs without interleaved ticks yields a
+            bit-identical :world (seed, action-log, entities); only :ui differs"
+    (let [actions [:right :wait :down :fire :left :wait :up :pickup]
+          seed    4242
+          init    {:world (world/make-world 79 30 seed) :ui {:frame -1}}
+          clean-events  (map (fn [a] [:action a]) actions)
+          ticked-events (interleave-ticks actions)
+          clean  (ui/apply-events play-step init clean-events)
+          ticked (ui/apply-events play-step init ticked-events)]
+      (is (= (get-in clean [:world :seed]) (get-in ticked [:world :seed]))
+          "seed bit-identical")
+      (is (= (get-in clean [:world :action-log]) (get-in ticked [:world :action-log]))
+          "action-log bit-identical")
+      (is (= (get-in clean [:world :entities]) (get-in ticked [:world :entities]))
+          "entity state bit-identical")
+      (is (= -1 (get-in clean [:ui :frame])) "no ticks → :ui untouched")
+      (is (= 8  (get-in ticked [:ui :frame])) "ticks advanced :ui only"))))
+
+(deftest apply-events-stops-on-reduced
+  (testing "a step returning (reduced x) halts the fold and yields the wrapper"
+    (let [step (fn [st ev] (if (= ev :stop) (reduced :halted) (conj st ev)))
+          out  (ui/apply-events step [] [:a :b :stop :c])]
+      (is (reduced? out) "still a reduced wrapper (not auto-unwrapped by reduce)")
+      (is (= :halted (deref out))))))
+
+;; --- run-loop -------------------------------------------------------------
+;; Fake clock + scripted input drive the loop; it animates :ui on ticks and
+;; exits on the sentinel action, returning the reduced result.
+
+(deftest run-loop-animates-then-exits-on-key
+  (testing "frames advance on [:tick] while idle, then an action exits with a result"
+    (let [batches (atom [[[:tick 0]] [[:tick 1]] [[:tick 2]] [[:action :go]]])
+          source  (fn [] (let [b (first @batches)] (swap! batches rest) (or b [])))
+          rendered (atom [])
+          step (fn [st ev]
+                 (let [[tag payload] ev]
+                   (case tag
+                     :tick   (assoc st :frame payload)
+                     :action (reduced {:exit :go :final-frame (:frame st)})
+                     st)))
+          result (ui/run-loop {:sources  [source]
+                               :state    {:frame -1}
+                               :step     step
+                               :render   (fn [st] (swap! rendered conj (:frame st)))
+                               :frame-ms 0})]
+      (is (= {:exit :go :final-frame 2} result) "returns the reduced result")
+      (is (= [-1 0 1 2] @rendered) "each animated frame was rendered before exit"))))
