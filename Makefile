@@ -1,12 +1,14 @@
 # xsofy build & test targets.
 #   lg          — the let-go binary (override: make LG=./bin/lg ...)
 #   DIST        — wasm build output dir
-LG   ?= lg
-DIST ?= dist
+#   STDCLJ      — Standard Clojure Style formatter (--file-ext lg treats .lg as Clojure)
+LG     ?= lg
+DIST   ?= dist
+STDCLJ ?= standard-clj
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test smoke-lg wasm e2e browser-smoke clean
+.PHONY: help test smoke-lg wasm e2e browser-smoke clean fmt fmt-check
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -30,6 +32,12 @@ e2e: wasm ## Build+patch the bundle, then run the headless-WASM @playwright/test
 browser-smoke: wasm ## Run main's node smoke gate (boot-to-title) against the built bundle
 	cd tests/browser && npm install --no-audit --no-fund && npx playwright install chromium
 	cd tests/browser && node smoke.mjs --dir ../../$(DIST)
+
+fmt-check: ## Check Standard Clojure Style on .clj/.cljs/.cljc/.lg (no changes)
+	$(STDCLJ) check --file-ext lg .
+
+fmt: ## Format .clj/.cljs/.cljc/.lg to Standard Clojure Style (modifies files)
+	$(STDCLJ) fix --file-ext lg .
 
 clean: ## Remove build output and test artifacts
 	rm -rf $(DIST) tests/e2e/test-results tests/e2e/playwright-report tests/browser/smoke-failure.png
