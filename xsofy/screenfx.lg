@@ -15,37 +15,28 @@
 
 ;; --- Non-blocking input for animated screens ---
 ;; `term/read-key` is blocking, so a screen that calls it directly freezes its
-;; animation until a key is pressed. To keep particles running, we read keys on
-;; a goroutine and select between that channel and a frame timer.
+;; animation until a key is pressed. To keep particles running we sleep one
+;; frame, then peek the input via the non-blocking `term/key-pending?` and only
+;; consume a key when one is queued.
 ;;
-;; The reader is ONE-SHOT: it reads a single key, delivers it, and exits. A
-;; goroutine blocked inside `read-key` cannot be cancelled, so a looping reader
-;; would survive past the screen and steal the next keypress from the game loop.
-;; One-shot + lazy re-arming guarantees at most one reader is ever blocked on
-;; stdin, and none is left behind once a screen exits on a key.
-
-(defn read-key-chan
-  "Spawn a goroutine that reads exactly one key and delivers it on the returned
-   channel, then exits. EOF (nil from read-key) is delivered as :eof."
-  []
-  (let [ch (async/chan)]
-    (go (async/>! ch (or (term/read-key) :eof)))
-    ch))
+;; Why not a goroutine + async/alts! on read-key: in WASM, `term/read-key` calls
+;; `Atomics.wait` on the SharedArrayBuffer, which blocks the entire worker
+;; thread (not just the calling goroutine). That freezes the timer goroutine
+;; backing `async/timeout`, so `alts!` never returns nil and the animation loop
+;; never advances past frame 0 — exactly the "Press any key" never-renders
+;; symptom observed on deployed builds. `key-pending?` is the let-go primitive
+;; provided for this idiom.
 
 (defn make-key-poller
-  "Return a 0-arg poll fn for animation loops. Each call waits up to `ms` for a
-   keypress: returns the key string, :eof, or nil if none arrived in time.
-   Arms a one-shot reader lazily and disarms once a key is delivered, so when a
-   screen stops polling (after its terminating key) no reader is left blocked."
+  "Return a 0-arg poll fn for animation loops. Each call yields ~ms then returns
+   the next pending key, or nil if no key was queued during the wait. Safe in
+   both native and WASM — `term/read-key` is only entered when a key is already
+   pending, so it returns immediately without blocking the runtime."
   [ms]
-  (let [armed (atom nil)]
-    (fn []
-      (when (nil? @armed)
-        (reset! armed (read-key-chan)))
-      (let [[v _] (async/alts! [@armed (async/timeout ms)])]
-        (when (some? v)
-          (reset! armed nil))
-        v))))
+  (fn []
+    (pause! ms)
+    (when (term/key-pending?)
+      (or (term/read-key) :eof))))
 
 (defn drive-until-key
   "Animation control loop. Render successive frames starting at `start-frame`,
