@@ -5,10 +5,11 @@
 LG     ?= lg
 DIST   ?= dist
 STDCLJ ?= standard-clj
+NREPL_PORT ?= 2137
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test smoke-lg wasm e2e browser-smoke clean fmt fmt-check
+.PHONY: help test smoke-lg wasm e2e browser-smoke clean fmt fmt-check nrepl
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -38,6 +39,9 @@ fmt-check: ## Check Standard Clojure Style on .clj/.cljs/.cljc/.lg (no changes)
 
 fmt: ## Format .clj/.cljs/.cljc/.lg to Standard Clojure Style (modifies files)
 	$(STDCLJ) fix --file-ext lg .
+
+nrepl: ## Start the let-go nREPL on $(NREPL_PORT) (drive via the nrepl MCP server / .mcp.json)
+	$(LG) -n -p $(NREPL_PORT)
 
 clean: ## Remove build output and test artifacts
 	rm -rf $(DIST) tests/e2e/test-results tests/e2e/playwright-report tests/browser/smoke-failure.png

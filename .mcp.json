@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nrepl": {
+      "command": "npx",
+      "args": ["-y", "nrepl-mcp-server"]
+    }
+  }
+}
