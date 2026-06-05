@@ -1,7 +1,7 @@
 (ns xsofy.hash
-  "xxh3-64 hash function in pure Lisp, plus a canonical byte encoder for
-   salt-keys (v1 encoding) and a three-layer macro pipeline for compile-time
-   folding of constant salt-key prefixes.
+  "xxh3-64 hash function via native let-go xxh3 interop, plus a canonical
+   byte encoder for salt-keys (v1 encoding) and a three-layer macro pipeline
+   for compile-time folding of constant salt-key prefixes.
 
    All hash state is held in int64 cells interpreted as the lower 64 bits of
    an unsigned integer. The u64-* helpers wrap let-go primitives chosen for
@@ -14,11 +14,7 @@
      u64-shl   -> bit-shift-left            (Go's int64 << uint wraps at 2^64)
      u64-rotl  -> u64-shl + u64-shr via bit-or  (rotate-left, mod 64)
 
-   Future helpers will follow the same convention.
-
-   Note: u64+ needs let-go's unchecked-add primitive (clojure.core parity).
-   Until the upstream let-go PR lands, xsofy runs against a patched binary
-   via the ../bin/lg wrapper.")
+   Future helpers will follow the same convention.")
 
 (defn u64+
   "Modular addition: (a + b) mod 2^64. Wraps on overflow."
@@ -886,33 +882,14 @@
 ;; ============================================================================
 
 (defn xxh3-64
-  "Compute the xxh3-64 hash of a byte vector with optional seed (default 0).
-
-   Input must be a vector of int byte values in [0, 255]. Returns an int64
-   cell interpreted as a u64.
-
-   Routes by length to the appropriate code path:
-     0       -> xxh3-64-empty
-     1-3     -> xxh3-64-1to3
-     4-8     -> xxh3-64-4to8
-     9-16    -> xxh3-64-9to16
-     17-128  -> xxh3-64-17to128
-     129-240 -> xxh3-64-129to240    (PR1b)
-     >= 241  -> xxh3-64-long        (PR1b)
-
-   Conforms bit-for-bit to the reference implementation at
-   https://github.com/Cyan4973/xxHash for the full input range."
+  "xxh3-64 of a byte vector with optional seed (default 0). Backed by let-go's
+   native xxh3 interop (github.com/zeebo/xxh3) — bit-identical to the former
+   pure-Lisp implementation (verified at seed 0 and nonzero)."
   ([input] (xxh3-64 input 0))
   ([input seed]
-   (let [len (count input)]
-     (cond
-       (zero? len)  (xxh3-64-empty    seed)
-       (<= len 3)   (xxh3-64-1to3     input seed)
-       (<= len 8)   (xxh3-64-4to8     input seed)
-       (<= len 16)  (xxh3-64-9to16    input seed)
-       (<= len 128) (xxh3-64-17to128  input seed)
-       (<= len 240) (xxh3-64-129to240 input seed)
-       :else        (xxh3-64-long     input seed)))))
+   (let [len (count input)
+         ba  (if (zero? len) (byte-array 0) (byte-array input))]
+     (xxh3/HashSeed ba seed))))
 
 ;; ============================================================================
 ;; Streaming xxh3-64 API
