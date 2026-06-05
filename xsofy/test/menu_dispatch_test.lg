@@ -57,6 +57,24 @@
       (is (= [{:type :unequip :id weapon} {:type :equip :id weapon}] (:action-log live)) "both logged")
       (is (replays-identically? seed live) "replay reproduces equipment state"))))
 
+(deftest enchant-action-dispatches-and-is-deterministic
+  (testing "{:type :enchant} enchants the target, consumes the scroll, logs, and
+            is a pure deterministic dispatch (the scroll is a spawned item, so we
+            assert dispatch purity rather than replay-from-seed)"
+    (let [w0     (world/make-world 79 30 12345)
+          weapon (item-with-slot w0 :weapon)
+          gi     (world/give-item w0 :scroll-enchant :player)
+          w      (first gi)
+          scroll (second gi)
+          act    {:type :enchant :id weapon :scroll-id scroll}
+          live   (dispatch/dispatch w act)
+          again  (dispatch/dispatch w act)]
+      (is (= 1 (get-in live [:entities weapon :item :enchant])) "target gained +1 enchant")
+      (is (not (some #{scroll} (get-in live [:entities :player :inventory]))) "scroll consumed")
+      (is (= [act] (:action-log live)) "action logged")
+      (is (not= (:seed w) (:seed live)) "seed advanced")
+      (is (= (:entities live) (:entities again)) "dispatch is deterministic (pure fn)"))))
+
 (deftest use-item-action-dispatches-and-replays
   (testing "{:type :use-item} consumes the item, logs it, and replays identically (regression guard)"
     (let [seed   12345

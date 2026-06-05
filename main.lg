@@ -218,7 +218,9 @@
                      :enchant
                      (let [scroll-id (:enchant-scroll-id world)]
                        (if scroll-id
-                         (-> (world/enchant-item world item-id scroll-id)
+                         ;; dispatch the assembled (target, scroll) action so the
+                         ;; enchant + scroll-consume fold into the seed + log
+                         (-> (dispatch/dispatch world {:type :enchant :id item-id :scroll-id scroll-id})
                              (dissoc :enchant-scroll-id))
                          world))
 
