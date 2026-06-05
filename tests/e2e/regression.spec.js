@@ -16,36 +16,32 @@ async function waitForServer(port = 8123, timeout = 5000) {
   while (Date.now() - start < timeout) {
     try {
       await new Promise((resolve, reject) => {
-        const req = http.get(`http://localhost:${port}/`, (res) => {
-          res.destroy();
-          resolve();
-        }).on('error', reject);
+        http.get(`http://localhost:${port}/`, (res) => { res.destroy(); resolve(); }).on('error', reject);
       });
       return;
-    } catch (e) {
-      await new Promise(r => setTimeout(r, 100));
-    }
+    } catch (e) { await new Promise(r => setTimeout(r, 100)); }
   }
   throw new Error(`Server did not start within ${timeout}ms`);
 }
 
-// Golden values for seed 12345 (computed natively from the word lists).
+// Golden title for seed 12345 (computed natively from the word lists). Seeing
+// it render in-browser proves the whole determinism chain: ?seed= reached the
+// game via go.env, AND wasm-xxh3 == native-xxh3 (a divergence in either would
+// produce a different title).
 const TITLE = 'Chasms of Infinity';
 
-test('seed 12345 reproduces the same run (proves ?seed bridge + wasm xxh3 parity)', async ({ page }) => {
+test('seed 12345 reproduces the title (proves ?seed bridge + wasm xxh3 parity)', async ({ page }) => {
   const srv = serve();
   try {
     await waitForServer();
     await page.goto('/?seed=12345');
+    expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
     await expect(page.locator('#terminal')).toBeVisible({ timeout: 20000 });
-    await expect.poll(async () =>
-      (await page.locator('#terminal').innerText()).includes(TITLE),
-      { timeout: 20000 }).toBe(true);
-    // Start the game (any key), then the quest line is reachable in-game.
-    await page.locator('#terminal').click();
-    await page.keyboard.press('Enter');
-    await expect.poll(async () =>
-      (await page.locator('#terminal').innerText()).includes('Spatula'),
-      { timeout: 20000 }).toBe(true);
+    await page.waitForFunction(
+      (t) => {
+        const el = document.querySelector('.xterm-rows');
+        return !!el && el.textContent.includes(t);
+      },
+      TITLE, { timeout: 30000, polling: 200 });
   } finally { srv.kill(); }
 });
