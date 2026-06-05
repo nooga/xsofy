@@ -1,0 +1,12 @@
+{
+  "name": "xsofy-browser-smoke",
+  "private": true,
+  "type": "module",
+  "description": "Pre-deploy browser smoke gate. Boots the built WASM bundle in headless Chromium, waits for the deterministic 'Press any key' title-screen sentinel, and fails if it never appears or if any console.error / uncaught exception fires.",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.50.0"
+  }
+}
