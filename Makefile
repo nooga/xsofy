@@ -6,10 +6,11 @@ LG     ?= lg
 DIST   ?= dist
 STDCLJ ?= standard-clj
 NREPL_PORT ?= 2137
+PORT   ?= 8123
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test smoke-lg wasm e2e browser-smoke clean fmt fmt-check nrepl
+.PHONY: help test smoke-lg wasm e2e browser-smoke clean fmt fmt-check nrepl serve
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -29,6 +30,10 @@ wasm: ## Build the WASM web app into $(DIST) and apply COI + ?seed= patches
 e2e: wasm ## Build+patch the bundle, then run the headless-WASM @playwright/test suite (boot + seeded regression)
 	cd tests/e2e && npm install --no-audit --no-fund && npx playwright install chromium
 	cd tests/e2e && DIST="$(CURDIR)/$(DIST)" npx playwright test
+
+serve: ## Serve the built $(DIST) on http://localhost:$(PORT) with COI headers (open ?seed= / ?replay=). Run `make wasm serve` to rebuild first.
+	@echo "Serving $(DIST) on http://localhost:$(PORT)  (Ctrl-C to stop)"
+	COI=1 PORT=$(PORT) DIST="$(CURDIR)/$(DIST)" node tests/e2e/static-server.js
 
 browser-smoke: wasm ## Run main's node smoke gate (boot-to-title) against the built bundle
 	cd tests/browser && npm install --no-audit --no-fund && npx playwright install chromium
