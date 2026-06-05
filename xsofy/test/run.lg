@@ -9,6 +9,7 @@
    [xsofy.test.hash-test]
    [xsofy.test.invariant-test]
    [xsofy.test.menu-dispatch-test]
+   [xsofy.test.menu-test]
    [xsofy.test.play-test]
    [xsofy.test.render-test]
    [xsofy.test.replay-test]

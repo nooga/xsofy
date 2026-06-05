@@ -1,0 +1,35 @@
+(ns xsofy.test.menu-test
+  "End-to-end coverage of the menu input handlers — now possible because
+   xsofy.menu is extracted from main (requiring main runs -main). Drives the
+   quick-menu selection path and asserts the screen transition AND that the
+   world-mutating action was dispatched (folded into :action-log)."
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.menu :as menu]
+   [xsofy.world :as world]))
+
+(deftest quick-menu-drop-transitions-and-dispatches
+  (testing "selecting an item by its letter in the drop quick-menu dispatches
+            {:type :drop}, drops the item, and returns to the game screen"
+    (let [w0 (world/make-world 79 30 12345)
+          item0 (first (get-in w0 [:entities :player :inventory]))
+          ;; open the drop quick-menu (a pure-UI screen state), then pick the
+          ;; first listed item via its letter ("a" -> inventory index 0)
+          opened (assoc w0 :screen :quick-menu :menu-action :drop)
+          result (menu/quick-menu-input opened "a")]
+      (is (nil? (:screen result)) "menu closed -> back to the game screen")
+      (is (= [{:type :drop :id item0}] (:action-log result)) "drop was dispatched + logged")
+      (is (not (some #{item0} (get-in result [:entities :player :inventory]))) "item left the inventory"))))
+
+(deftest inventory-equip-dispatches
+  (testing "pressing 'e' on a selected inventory item dispatches {:type :equip}"
+    (let [w0 (world/make-world 79 30 12345)
+          weapon (first (filter #(= :weapon (get-in w0 [:entities % :item :slot]))
+                                (get-in w0 [:entities :player :inventory])))
+          ;; open inventory with the weapon selected, then press equip
+          sel (first (keep-indexed (fn [i id] (when (= id weapon) i))
+                                   (get-in w0 [:entities :player :inventory])))
+          opened (assoc w0 :screen :inventory :inv-sel sel)
+          result (menu/inventory-input opened "e")]
+      (is (= weapon (get-in result [:entities :player :equipment :weapon])) "weapon equipped")
+      (is (= [{:type :equip :id weapon}] (:action-log result)) "equip was dispatched + logged"))))
