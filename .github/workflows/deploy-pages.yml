@@ -57,9 +57,9 @@ jobs:
 
       # Seeded determinism regression: boots /?seed=12345 and asserts the
       # seed-derived title — proving the ?seed= bridge AND wasm==native xxh3.
-      # Non-blocking until validated by a real CI run; then drop continue-on-error.
+      # (The title-animation gate is the separate `smoke.mjs` step above /
+      # the fixme test, pending nooga/xsofy#61.)
       - name: E2E seeded regression (@playwright/test)
-        continue-on-error: true
         working-directory: tests/e2e
         run: |
           npm install --no-audit --no-fund
