@@ -37,6 +37,9 @@ jobs:
       - name: Patch COI startup guard
         run: let-go tools/patch_wasm_coi.lg
 
+      - name: Bridge ?seed= for reproducible runs
+        run: let-go tools/patch_wasm_seed.lg
+
       - name: Set up Node (smoke gate)
         uses: actions/setup-node@v4
         with:
@@ -51,6 +54,17 @@ jobs:
       - name: Browser smoke (must boot to title screen)
         working-directory: tests/browser
         run: node smoke.mjs --dir ../../dist
+
+      # Seeded determinism regression: boots /?seed=12345 and asserts the
+      # seed-derived title — proving the ?seed= bridge AND wasm==native xxh3.
+      # Non-blocking until validated by a real CI run; then drop continue-on-error.
+      - name: E2E seeded regression (@playwright/test)
+        continue-on-error: true
+        working-directory: tests/e2e
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install chromium
+          DIST="$GITHUB_WORKSPACE/dist" npx playwright test
 
       - name: Upload smoke failure artifacts
         if: failure()
