@@ -17,7 +17,11 @@ http.createServer((req, res) => {
   const file = path.join(DIST, rel);
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
-    const headers = { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' };
+    // No caching — the wasm bundle is large and rebuilt often; without this the
+    // browser serves a stale index.html after `make wasm` and you debug a build
+    // that no longer exists.
+    const headers = { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
+                      'Cache-Control': 'no-store' };
     if (COI) {
       headers['Cross-Origin-Opener-Policy'] = 'same-origin';
       headers['Cross-Origin-Embedder-Policy'] = 'require-corp';
