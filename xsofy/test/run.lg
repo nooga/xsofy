@@ -16,6 +16,7 @@
             [xsofy.test.seed-test]
             [xsofy.test.replay-test]
             [xsofy.test.ui-test]
-            [xsofy.test.play-test]))
+            [xsofy.test.play-test]
+            [xsofy.test.menu-dispatch-test]))
 
 (run-tests)

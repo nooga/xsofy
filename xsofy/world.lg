@@ -1715,6 +1715,48 @@
   (-> world
       (dissoc :screen :hazard-prompt :hazard-pos :hazard-dx :hazard-dy)))
 
+;; --- Inventory actions (dispatched, replay-safe) ---
+;; These mutate the world (equip/unequip/drop) and so must flow through dispatch
+;; like any other turn action, NOT be applied directly by the menu UI — otherwise
+;; they never enter the seed/:action-log and a recorded run replays to a
+;; different world. update-world routes the parameterized {:type … :id …} actions
+;; here; the quick-menu just assembles + dispatches them.
+
+(defn- item-name* [world item-id]
+  (let [item (get-in world [:entities item-id])]
+    (or (:item-name item) (name (or (:template item) (:id item) :item)))))
+
+(defn equip-action [world item-id]
+  (let [slot (get-in world [:entities item-id :item :slot])]
+    (if (and slot (not= slot :consumable))
+      (if-let [w (ent/equip-item world item-id :player)]
+        (log-msg w (str "You equip the " (item-name* world item-id) "."))
+        world)
+      world)))
+
+(defn unequip-action [world item-id]
+  (let [slot (get-in world [:entities item-id :item :slot])]
+    (if slot
+      (if (ent/cursed? world item-id)
+        (log-msg world (str "The " (item-name* world item-id) " is cursed! You can't remove it."))
+        (if-let [w (ent/unequip-item world :player slot)]
+          (log-msg w (str "You remove the " (item-name* world item-id) "."))
+          world))
+      world)))
+
+(defn drop-action [world item-id]
+  (let [slot        (get-in world [:entities item-id :item :slot])
+        equipment   (or (get-in world [:entities :player :equipment]) {})
+        equipped-id (when slot (get equipment slot))
+        is-cursed   (and (= equipped-id item-id) (ent/cursed? world item-id))]
+    (if is-cursed
+      (log-msg world (str "The " (item-name* world item-id) " is cursed! You can't remove it."))
+      (let [w (if (= equipped-id item-id)
+                (ent/unequip-item world :player slot)
+                world)]
+        (-> (ent/drop-item w item-id :player)
+            (log-msg (str "You drop the " (item-name* world item-id) ".")))))))
+
 ;; --- Turn Processing ---
 
 (defn update-world [world action]
@@ -1735,6 +1777,10 @@
     :use-menu (assoc world :screen :quick-menu :menu-action :use)
     (let [w (case (if (map? action) (:type action) action)
               :use-item (use-item world (:id action))
+              :equip    (equip-action world (:id action))
+              :unequip  (unequip-action world (:id action))
+              :drop     (drop-action world (:id action))
+              :enchant  (enchant-item world (:id action) (:scroll-id action))
               :fire (fire-bow world)
               :up    (player-move world 0 -1)
               :down  (player-move world 0 1)

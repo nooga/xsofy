@@ -47,3 +47,41 @@
           {:keys [seed actions]} (replay/decode (replay/encode-run w))]
       (is (= 555 seed))
       (is (= [:up :down :wait] actions)))))
+
+(deftest encode-run-safe-encodes-keyword-only-runs
+  (testing "encode-run-safe returns a working code for a keyword-only log"
+    (let [w (dispatch/replay 79 30 555 [:up :down :wait])
+          {:keys [seed actions]} (replay/decode (replay/encode-run-safe w))]
+      (is (= 555 seed))
+      (is (= [:up :down :wait] actions)))))
+
+(deftest encode-decode-round-trips-map-actions
+  (testing "the wire format carries parameterized map actions (item use/equip/
+            drop/enchant), not just bare keywords, and decode reproduces them
+            exactly — including enchant's extra :scroll-id field"
+    (let [actions [:up :up
+                   {:type :use-item :id :health-potion-93379127}
+                   :down
+                   {:type :equip :id :rapier-1272135760}
+                   {:type :enchant :id :whip-1872488856 :scroll-id :scroll-enchant-42}
+                   :wait]
+          back (replay/decode (replay/encode 12345 actions))]
+      (is (= 12345 (:seed back)))
+      (is (= actions (:actions back))))))
+
+(deftest encode-run-reproduces-an-item-run
+  (testing "encode-run encodes a finished world whose log has map actions, and
+            decode round-trips its seed + full action-log"
+    (let [w {:seed-input 555
+             :action-log [:up {:type :use-item :id :potion-1} :down
+                          {:type :drop :id :rock-2}]}
+          {:keys [seed actions]} (replay/decode (replay/encode-run w))]
+      (is (= 555 seed))
+      (is (= [:up {:type :use-item :id :potion-1} :down {:type :drop :id :rock-2}]
+             actions)))))
+
+(deftest encode-run-safe-still-guards
+  (testing "encode-run-safe stays a non-throwing wrapper: a real code for a normal
+            run (now incl. item runs), nil only when encoding genuinely fails"
+    (let [w {:seed-input 555 :action-log [:up {:type :use-item :id :potion-1} :down]}]
+      (is (some? (replay/encode-run-safe w)) "item runs now encode to a real code"))))
