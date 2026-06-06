@@ -1,14 +1,13 @@
 (ns xsofy.replay
   "Shareable replay codes.
 
-   SCOPE — a replay code captures (seed, :action-log) and reproduces only the
-   KEYWORD-DISPATCH portion of a run: turns that flow through xsofy.dispatch. The
-   seed reproduces the opening state (title/quest/scheme/world generation), and
-   :action-log reproduces dispatch-routed turns. Runs that involve inventory,
-   menu, inscribe, or hazard-confirm interactions are NOT fully reproducible from
-   the code today — those handlers mutate the world outside dispatch (widening
-   that contract is a follow-up). So a code is faithful for keyword-only
-   gameplay, and reproduces the opening state for everything else.
+   SCOPE — a replay code captures (seed, :action-log) and reproduces every turn
+   that flows through xsofy.dispatch: bare-keyword turns AND the parameterized
+   item actions (use/equip/unequip/drop/enchant) the menus route through dispatch.
+   The seed reproduces the opening state (title/quest/scheme/world generation).
+   Inscribe and hazard-confirm interactions are still NOT reproducible — those
+   handlers mutate the world outside dispatch, so they never reach :action-log;
+   such a run reproduces its opening state and all dispatch-routed turns.
 
    This packs (seed, action-log) into a compact, URL-safe base64 string suitable
    for a ?replay= link or XSOFY_REPLAY env var.
@@ -16,17 +15,23 @@
    Wire format (bytes, then url-safe base64, no padding):
      1   version (= 1; v1-exact — future versions reject v1 codes by default)
      8   seed                       (i64 big-endian)
-     1   dict size D                (distinct action keywords, < 256)
-     D*  for each: 1 len + ASCII name bytes   (self-describing dictionary)
+     1   dict size D                (distinct actions, < 256)
+     D*  for each entry, a self-describing record:
+           len>0 : 1 len + ASCII name bytes                  (bare keyword)
+           len=0 : sentinel, then type + id keyword fields,
+                   then a scroll-id field (its own len, 0 = absent)
+                   (a parameterized map action {:type :id (:scroll-id)})
      4   run count R                (u32 big-endian)
      R*  for each run: 1 dict-index + varint run-length
 
    Runs are run-length-encoded over the dictionary indices, which compresses the
-   long streaks of repeated movement typical of a roguelike. Only keyword actions
-   are supported (the action-log contains bare keywords); names must be ASCII.
+   long streaks of repeated movement typical of a roguelike. Keyword names and
+   the type/id/scroll-id of map actions must be ASCII. Keyword-only codes are
+   byte-identical to before the map-action support landed (the len=0 sentinel is
+   free because keyword names are never empty) — so no version bump was needed.
 
-   ABI — action keywords are wire-format ABI. Renaming an action keyword breaks
-   all existing replay codes; the format does not migrate.")
+   ABI — action keywords (and map-action :type/:id names) are wire-format ABI.
+   Renaming one breaks all existing replay codes; the format does not migrate.")
 
 (def ^:private VERSION 1)
 
@@ -125,6 +130,43 @@
       (throw (ex-info "replay: action keyword name is not ASCII" {:keyword kw})))
     bs))
 
+;; --- dictionary entries: bare keyword OR parameterized map action ---
+;; A keyword entry is [len name...] with len >= 1 (names are non-empty). That
+;; leaves a 0 length free as the sentinel for a parameterized map action
+;; {:type :id (:scroll-id)} — item use/equip/unequip/drop/enchant routed through
+;; dispatch. Keyword-only codes are byte-identical to before (no version bump).
+
+(defn- kw-field [kw]
+  (let [nb (name-bytes kw)]
+    (into [(count nb)] nb)))
+
+(defn- entry-bytes [action]
+  (if (keyword? action)
+    (kw-field action)
+    (let [{:keys [type id scroll-id]} action]
+      (when-not (and type id)
+        (throw (ex-info "replay: unsupported action shape (need :type and :id)" {:action action})))
+      (into (into (into [0] (kw-field type)) (kw-field id))
+            (if scroll-id (kw-field scroll-id) [0])))))
+
+(defn- read-name [bytes off]
+  (let [len (nth bytes off)]
+    [(apply str (map char (subvec bytes (inc off) (+ off 1 len)))) (+ off 1 len)]))
+
+(defn- read-entry [bytes off]
+  (let [len (nth bytes off)]
+    (if (> len 0)
+      (let [[nm off2] (read-name bytes off)]
+        [(keyword nm) off2])
+      ;; sentinel 0 -> parameterized map action
+      (let [[tnm off2] (read-name bytes (inc off))
+            [inm off3] (read-name bytes off2)
+            slen (nth bytes off3)]
+        (if (> slen 0)
+          (let [[snm off4] (read-name bytes off3)]
+            [{:type (keyword tnm) :id (keyword inm) :scroll-id (keyword snm)} off4])
+          [{:type (keyword tnm) :id (keyword inm)} (inc off3)])))))
+
 ;; --- RLE over a sequence ---
 
 (defn- rle [xs]
@@ -138,8 +180,9 @@
 ;; --- encode / decode ---
 
 (defn encode
-  "Pack [seed actions] into a url-safe base64 replay code. `actions` is a vector
-   of action keywords (the world's :action-log)."
+  "Pack [seed actions] into a url-safe base64 replay code. `actions` is the
+   world's :action-log — bare keywords and/or parameterized map actions
+   ({:type :id (:scroll-id)})."
   [seed actions]
   (let [dict (vec (distinct actions))
         _    (when (>= (count dict) 256)
@@ -148,10 +191,7 @@
         idx  (reduce (fn [m i] (assoc m (nth dict i) i)) {} (range (count dict)))
         runs (rle (map idx actions))
         head (into (into [VERSION] (i64-be seed)) [(count dict)])
-        dict-bytes (reduce (fn [acc kw]
-                             (let [nb (name-bytes kw)]
-                               (into (conj acc (count nb)) nb)))
-                           [] dict)
+        dict-bytes (reduce (fn [acc a] (into acc (entry-bytes a))) [] dict)
         run-bytes (reduce (fn [acc [i run]]
                             (into (conj acc i) (varint run)))
                           [] runs)
@@ -171,9 +211,8 @@
           (loop [k 0 off 10 dict []]
             (if (>= k dict-n)
               [dict off]
-              (let [len (nth bytes off)
-                    nm (apply str (map char (subvec bytes (inc off) (+ off 1 len))))]
-                (recur (inc k) (+ off 1 len) (conj dict (keyword nm))))))
+              (let [[action off2] (read-entry bytes off)]
+                (recur (inc k) off2 (conj dict action)))))
           run-count (read-u32-be bytes off)
           _ (when (>= run-count 1000000)
               (throw (ex-info "replay: implausible run count" {:run-count run-count})))
@@ -193,22 +232,15 @@
 
 (defn encode-run
   "Convenience: replay code for a finished world (its :seed-input + :action-log).
-   The action-log must be keyword-only — dispatch can log parameterized map
-   actions (e.g. {:type :use-item :id …}), which the v1 wire format does not yet
-   carry, so guard rather than crash deep in name-bytes."
+   The log may mix bare keywords and parameterized map actions (item use/equip/
+   unequip/drop/enchant routed through dispatch) — the wire format carries both."
   [world]
-  (let [actions (or (:action-log world) [])]
-    (when-not (every? keyword? actions)
-      (throw (ex-info "replay/encode-run: action-log contains a non-keyword action; replay codes currently support keyword-only logs"
-                      {:non-keyword (filterv (fn [a] (not (keyword? a))) actions)})))
-    (encode (:seed-input world) actions)))
+  (encode (:seed-input world) (or (:action-log world) [])))
 
 (defn encode-run-safe
-  "Like encode-run, but returns nil instead of throwing when the run can't be
-   encoded — i.e. the action-log contains a parameterized map action (item
-   use/equip/drop/enchant routed through dispatch), which the v1 wire format
-   does not yet carry. Callers that merely DISPLAY a code (the death screen)
-   use this and fall back to showing the seed alone for such runs."
+  "Like encode-run, but returns nil instead of throwing if encoding fails for any
+   reason (e.g. an unexpected action shape or a non-ASCII name). Callers that
+   merely DISPLAY a code (the death screen) use this so a corner-case run can
+   never crash the game — it falls back to showing the seed alone."
   [world]
-  (when (every? keyword? (or (:action-log world) []))
-    (encode-run world)))
+  (try (encode-run world) (catch e nil)))
