@@ -13,6 +13,7 @@
             [xsofy.test.dispatch-test]
             [xsofy.test.serialize-test]
             [xsofy.test.dag-test]
-            [xsofy.test.seed-test]))
+            [xsofy.test.seed-test]
+            [xsofy.test.replay-test]))
 
 (run-tests)

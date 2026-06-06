@@ -1,0 +1,49 @@
+(ns xsofy.test.replay-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.replay :as replay]
+            [xsofy.dispatch :as dispatch]
+            [xsofy.world :as world]))
+
+(deftest base64-round-trips-arbitrary-bytes
+  (testing "url-safe base64 encode/decode is identity for byte vectors"
+    (doseq [bytes [[] [0] [255] [0 1 2 3 4 5] [72 105 33] [200 100 50 25 12 6 3 1 0]]]
+      (is (= bytes (replay/b64-decode (replay/b64-encode bytes)))))))
+
+(deftest replay-code-round-trips-seed-and-actions
+  (testing "decode . encode = identity on (seed, actions)"
+    (let [seed 12345
+          actions [:up :up :up :down :left :right :wait :wait :fire :pickup :descend]
+          {:keys [seed actions] :as back} (replay/decode (replay/encode seed actions))]
+      (is (= 12345 (:seed back)))
+      (is (= [:up :up :up :down :left :right :wait :wait :fire :pickup :descend]
+             (:actions back))))))
+
+(deftest replay-code-reconstructs-the-same-world
+  (testing "a decoded code replays to the identical world as the original"
+    (let [actions [:up :right :right :fire :wait :pickup :down :down]
+          live (dispatch/replay 79 30 9999 actions)
+          {:keys [seed actions]} (replay/decode (replay/encode 9999 actions))
+          rebuilt (dispatch/replay 79 30 seed actions)]
+      (is (= (:seed live) (:seed rebuilt)))
+      (is (= (:action-log live) (:action-log rebuilt)))
+      (is (= (vec (:terrain live)) (vec (:terrain rebuilt))))
+      ;; not just seed/log/terrain — assert the full reconstructed world matches,
+      ;; so drift in entity/fov/turn state can't slip past the round-trip.
+      (is (= (:entities live) (:entities rebuilt)))
+      (is (= (:fov live) (:fov rebuilt)))
+      (is (= (:turn live) (:turn rebuilt))))))
+
+(deftest rle-compresses-long-runs
+  (testing "200 identical moves encode far shorter than 200 actions"
+    (let [actions (vec (repeat 200 :up))
+          code (replay/encode 1 actions)]
+      ;; one dictionary entry + one run → tiny, regardless of length
+      (is (< (count code) 40))
+      (is (= actions (:actions (replay/decode code)))))))
+
+(deftest encode-run-uses-seed-input-and-action-log
+  (testing "encode-run packs a finished world's origin seed + log"
+    (let [w (dispatch/replay 79 30 555 [:up :down :wait])
+          {:keys [seed actions]} (replay/decode (replay/encode-run w))]
+      (is (= 555 seed))
+      (is (= [:up :down :wait] actions)))))

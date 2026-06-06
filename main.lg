@@ -15,7 +15,8 @@
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
-            [xsofy.seed :as seed]))
+            [xsofy.seed :as seed]
+            [xsofy.replay :as replay]))
 
 
 (defn init-terminal []
@@ -359,17 +360,51 @@
 
       :else world)))
 
+(defn assemble-world
+  "Build the starting world for `seed` and graft on its (seed-derived) title,
+   scheme, and quest. Title/scheme/quest are cosmetic — they don't touch the
+   gameplay seed chain — so this world replays identically to one made by
+   new-game from the same seed."
+  [seed title scheme quest]
+  (-> (world/make-world 79 30 seed)
+      (assoc :title title
+             :scheme scheme
+             :quest-item (:item quest))
+      (#(reduce world/log-msg % (:messages quest)))))
+
 (defn new-game []
   (let [sd  (seed/boot-seed)
         rng {:seed sd}
         {:keys [title scheme rng]} (title/show-title-screen rng)
         [quest rng] (title/generate-quest rng)
         _ (title/show-descending-screen 1 scheme)]
-    (-> (world/make-world 79 30 sd)
-        (assoc :title title
-               :scheme scheme
-               :quest-item (:item quest))
-        (#(reduce world/log-msg % (:messages quest))))))
+    (assemble-world sd title scheme quest)))
+
+(defn build-game
+  "Reconstruct a run's starting world from its seed, without the interactive
+   title screen (same pick order as new-game: title -> scheme -> quest)."
+  [seed]
+  (let [rng {:seed seed}
+        [title rng]  (title/generate-title rng)
+        [scheme rng] (title/pick-scheme rng)
+        [quest rng]  (title/generate-quest rng)]
+    (assemble-world seed title scheme quest)))
+
+(defn play-replay
+  "Decode a replay code, reconstruct the run, and step through its actions with
+   a short delay so the run plays out on screen. Returns the final world so the
+   caller can hand control back to the player at the recorded end-state."
+  [code]
+  (let [{:keys [seed actions]} (replay/decode code)
+        w0 (build-game seed)]
+    (render/render-full w0)
+    (sfx/pause! 400)
+    (reduce (fn [w action]
+              (let [w' (dispatch/dispatch w action)]
+                (render/render-full w')
+                (sfx/pause! 90)
+                w'))
+            w0 actions)))
 
 (defn game-loop
   ([world]
@@ -434,6 +469,7 @@
          :death
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
+               replay-code (replay/encode-run world)  ;; compute ONCE — encode is O(n) per call
                poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
                result (loop [scroll 0 frame 0]
@@ -441,7 +477,7 @@
                         ;; pulsing while we wait for a key instead of freezing.
                         (let [[k nf] (sfx/drive-until-key
                                        frame
-                                       (fn [f] (render/render-death-screen world runes scroll f))
+                                       (fn [f] (render/render-death-screen world runes scroll f replay-code))
                                        poll!)]
                           (cond
                             (or (= k "n") (= k "\r") (= k "\n") (= k " "))
@@ -566,7 +602,8 @@
 (defn -main []
   (init-terminal)
   (try
-    (game-loop (new-game))
+    (let [code (seed/boot-replay)]
+      (game-loop (if code (play-replay code) (new-game))))
     (catch e
            (dbg/log "FATAL ERROR:" e)
            (dbg/dump-crash! e)

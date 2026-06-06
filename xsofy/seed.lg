@@ -16,3 +16,13 @@
           (let [n (read-string s)]
             (when (integer? n) n))))
       (rand-int 1000000000)))
+
+(def ^:dynamic *boot-replay* nil)
+
+(defn boot-replay
+  "A replay code to play back at boot, or nil. From *boot-replay* (tests) or the
+   XSOFY_REPLAY env var (native + browser-via-?replay= bridge)."
+  []
+  (or *boot-replay*
+      (let [s (os/getenv "XSOFY_REPLAY")]
+        (when (and s (> (count s) 0)) s))))
