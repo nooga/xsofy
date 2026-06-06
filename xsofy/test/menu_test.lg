@@ -33,3 +33,20 @@
           result (menu/inventory-input opened "e")]
       (is (= weapon (get-in result [:entities :player :equipment :weapon])) "weapon equipped")
       (is (= [{:type :equip :id weapon}] (:action-log result)) "equip was dispatched + logged"))))
+
+(deftest quick-menu-use-enchant-scroll-preserves-enchant-target-state
+  (testing "using an enchant scroll from the use quick-menu stays in quick-menu
+            and transitions into enchant target selection"
+    (let [w0 (world/make-world 79 30 12345)
+          giv (world/give-item w0 :scroll-enchant :player)
+          with-scroll (first giv)
+          scroll-id (second giv)
+          inv (get-in with-scroll [:entities :player :inventory])
+          scroll-idx (first (keep-indexed (fn [i id] (when (= id scroll-id) i)) inv))
+          scroll-key (subs menu/inv-letters scroll-idx (inc scroll-idx))
+          opened (assoc with-scroll :screen :quick-menu :menu-action :use)
+          result (menu/quick-menu-input opened scroll-key)]
+      (is (= :quick-menu (:screen result)) "quick-menu stays open for target selection")
+      (is (= :enchant (:menu-action result)) "menu switches into enchant mode")
+      (is (= scroll-id (:enchant-scroll-id result)) "selected scroll is preserved for the targeting step")
+      (is (= [{:type :use-item :id scroll-id}] (:action-log result)) "scroll use was dispatched + logged"))))

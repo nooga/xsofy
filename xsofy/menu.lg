@@ -200,9 +200,14 @@
                          world))
 
                      world)]
-        ;; if the action set a NEW screen, keep it (e.g. enchant menu)
-        ;; otherwise strip all menu state to return to game
-        (if (and (:screen result) (not= (:screen result) old-screen))
+        ;; Preserve submenu transitions when the action keeps us on a screen
+        ;; because it changed the menu mode/state, even if the screen keyword
+        ;; itself stayed :quick-menu (e.g. use -> enchant target select). Plain
+        ;; mutating actions like drop/equip should still fall back to the game.
+        (if (and (:screen result)
+                 (or (not= (:screen result) old-screen)
+                     (not= (:menu-action result) (:menu-action world))
+                     (not= (:enchant-scroll-id result) (:enchant-scroll-id world))))
           (dissoc result :menu-sel)
           (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id))))))
 
