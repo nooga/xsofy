@@ -38,8 +38,25 @@ jobs:
           which let-go
           let-go --version 2>/dev/null || true
 
+      # The aggregate runner (run.lg) prints a sub-namespace load/compile error
+      # but still exits 0, so a required test ns that fails to load is silently
+      # masked. Compile each test ns directly first; any failure fails the job.
+      - name: Compile-check test namespaces
+        run: |
+          for f in xsofy/test/*_test.lg xsofy/test/*_prop.lg; do
+            echo "compile-check $f"
+            let-go -c "/tmp/$(basename "$f" .lg).lgb" "$f" \
+              || { echo "::error::$f failed to compile"; exit 1; }
+          done
+
       - name: Run tests
         run: let-go xsofy/test/run.lg
 
+      - name: Layer-1 runtime smoke
+        run: LG=let-go python3 xsofy/test/check_smoke.py
+
       - name: Compile smoke test
         run: let-go -b /tmp/xsofy main.lg
+
+      - name: WASM build smoke
+        run: let-go -w /tmp/xsofy-dist main.lg
