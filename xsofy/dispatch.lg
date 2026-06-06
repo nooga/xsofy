@@ -23,7 +23,7 @@
 ;; or a stray keystroke or a window resize would advance the seed and grow the
 ;; :action-log, silently breaking (seed, action-log) replay determinism.
 (def ^:private ignored-actions
-  #{:unknown :resize})
+  #{:unknown :resize :eof})
 
 (defn action-type
   "The dispatch key for an action: a bare keyword as-is, or the :type of a
