@@ -93,18 +93,34 @@
 (defn play-replay
   "Decode a replay code, reconstruct the run, and step through its actions with
    a short delay so the run plays out on screen. Returns the final world so the
-   caller can hand control back to the player at the recorded end-state."
+   caller can hand control back to the player at the recorded end-state.
+
+   Driven by the poll-based run-loop (#56), not a blocking reduce: a clock paces
+   one recorded action per tick while an input source DRAINS any keys pressed
+   during playback. Draining matters under single-threaded wasm — a blocking
+   playback that never reads input lets a keypress back up the input buffer and
+   freeze the runtime. Keys are consumed but ignored; playback runs to the end."
   [code]
   (let [{:keys [seed actions]} (replay/decode code)
         w0 (build-game seed)]
     (render/render-full w0)
     (sfx/pause! 400)
-    (reduce (fn [w action]
-              (let [w' (dispatch/dispatch w action)]
-                (render/render-full w')
-                (sfx/pause! 90)
-                w'))
-            w0 actions)))
+    (ui/run-loop
+      {:sources [(ui/input-source (fn [k] [:user-key k]))
+                 (ui/clock-source 0)]
+       :state   {:world w0 :remaining (seq actions)}
+       :step    (fn [st ev]
+                  (let [[tag _] ev]
+                    (case tag
+                      :user-key st  ;; drained (no wasm freeze) but ignored
+                      :tick (if-let [a (first (:remaining st))]
+                              (let [w' (dispatch/dispatch (:world st) a)]
+                                (render/render-full w')
+                                (-> st (assoc :world w') (update :remaining rest)))
+                              (reduced (:world st)))
+                      st)))
+       :render  (fn [_])  ;; rendering is turn-aware; done in step
+       :frame-ms 90})))
 
 (defn run
   ([world]

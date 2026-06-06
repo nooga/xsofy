@@ -1,0 +1,21 @@
+(ns xsofy.test.game-test
+  "Coverage of the interaction-loop module — possible because xsofy.game is
+   extracted from main (requiring main runs -main)."
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.dispatch :as dispatch]
+   [xsofy.game :as game]
+   [xsofy.replay :as replay]))
+
+(deftest play-replay-reaches-the-recorded-end-state
+  (testing "play-replay dispatches the recorded actions in order via the
+            poll-based loop and returns the same end-state as replaying them
+            directly — the loop drains input but never drops or reorders actions"
+    (let [seed 4242
+          actions [:down :right]
+          code (replay/encode seed actions)
+          played (game/play-replay code)
+          direct (reduce dispatch/dispatch (game/build-game seed) actions)]
+      (is (= (:seed direct) (:seed played)))
+      (is (= (:action-log direct) (:action-log played)))
+      (is (= (:entities direct) (:entities played))))))

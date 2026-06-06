@@ -6,6 +6,7 @@
    [xsofy.test.dag-test]
    [xsofy.test.det-test]
    [xsofy.test.dispatch-test]
+   [xsofy.test.game-test]
    [xsofy.test.hash-test]
    [xsofy.test.invariant-test]
    [xsofy.test.menu-dispatch-test]
