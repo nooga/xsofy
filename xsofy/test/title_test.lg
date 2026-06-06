@@ -1,6 +1,8 @@
 (ns xsofy.test.title-test
   (:require [test :refer [deftest is testing]]
-            [xsofy.screenfx :as sfx]))
+            [xsofy.screenfx :as sfx]
+            [xsofy.title :as title]
+            [xsofy.det :as det]))
 
 ;; nooga/xsofy — particle screens (title + death) must keep animating
 ;; independently of input. The control seam is `drive-until-key`: it renders
@@ -37,3 +39,16 @@
       (is (= "q" k))
       (is (= [7] @rendered))
       (is (= 8 next-frame)))))
+
+(deftest seeded-title-is-deterministic
+  (testing "same seed → same title; known golden for 12345"
+    (is (= (first (title/generate-title {:seed 12345}))
+           (first (title/generate-title {:seed 12345}))))
+    (is (= "Chasms of Infinity" (first (title/generate-title {:seed 12345}))))))
+
+(deftest seeded-quest-is-deterministic
+  (testing "quest threads from the post-title-and-scheme rng (matches new-game order)"
+    (let [[_ r] (title/generate-title {:seed 12345})
+          [_ r] (title/pick-scheme r)
+          [quest _] (title/generate-quest r)]
+      (is (= "Spatula of Unmatched Delimiters" (:item quest))))))

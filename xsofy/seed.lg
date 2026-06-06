@@ -1,0 +1,18 @@
+(ns xsofy.seed
+  "Run seed. Precedence: explicit override (tests / *boot-seed*), then the
+   XSOFY_SEED env var (native + browser-via-?seed= bridge), then random.
+   A fixed seed reproduces an entire run — title, quest, scheme, and world."
+  (:require [os]))
+
+(def ^:dynamic *boot-seed* nil)
+
+(defn boot-seed []
+  (or *boot-seed*
+      ;; Validate at the boundary: a malformed XSOFY_SEED (e.g. ?seed=foo / 12.5 /
+      ;; empty) reads as a symbol/float/nil; only accept an integer, else fall
+      ;; through to random rather than surfacing the failure later in the chain.
+      (let [s (os/getenv "XSOFY_SEED")]
+        (when (and s (> (count s) 0))
+          (let [n (read-string s)]
+            (when (integer? n) n))))
+      (rand-int 1000000000)))

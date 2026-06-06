@@ -17,6 +17,12 @@
 
 (def dim-color u/scale)
 
+;; Terminal dimensions, headless-safe. term/size is nil with no TTY (CI/tests)
+;; and momentarily nil during a resize — both yielded a nil destructure and a
+;; blank/garbled redraw. Fall back to the game's nominal size.
+(defn term-dims []
+  (or (term/size) [ui/game-width ui/game-height]))
+
 ;; --- Tile Rendering ---
 
 (defn style-tile [tile]
@@ -615,7 +621,7 @@
         inv)))))
 
 (defn render-quick-menu [world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         action (or (:menu-action world) :equip)
         items (menu-filter world action)
         sel (or (:menu-sel world) -1)
@@ -652,7 +658,7 @@
 ;; --- Message Log Screen (modal) ---
 
 (defn render-messages-screen [world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Message Log" [180 170 140] ui/bg)
         visible-lines (message-visible-lines th)
@@ -707,7 +713,7 @@
         (swap! row inc)))))
 
 (defn render-help-screen [world]
-  (let [[tw th] (or (term/size) [ui/game-width ui/game-height])
+  (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Keybindings" [180 170 140] ui/bg)
         [left right] (ui/rect-split-h inner (quot (:w inner) 2))]
@@ -779,7 +785,7 @@
             (ui/write-line r (inc @rune-row) cmds [120 120 100] ui/bg)))))))
 
 (defn render-inventory-screen [world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Inventory" [180 170 140] ui/bg)
         inv (or (get-in world [:entities :player :inventory]) [])
@@ -867,7 +873,7 @@
   (sfx/scatter-runes tw th 30 [200 50 30]))  ;; crimson runes
 
 (defn render-death-screen [world runes scroll-offset frame]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         cx (quot tw 2)
         cy (quot th 2)
         seed (or (:turn world) 0)]
@@ -1005,7 +1011,7 @@
 ;; --- Rune Codex Screen ---
 
 (defn render-rune-codex [world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Rune Codex" [170 140 220] ui/bg)
         rune-table (or (:rune-table world) {})
@@ -1037,7 +1043,7 @@
 ;; --- Inscription Screen ---
 
 (defn render-inscribe-screen [world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Inscribe Runes" [200 160 240] ui/bg)
         rune-table (or (:rune-table world) {})
@@ -1097,7 +1103,7 @@
 
 (defn render-hazard-prompt [world prompt]
   "Render a hazard confirmation prompt at the bottom of the screen."
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         msg (str " " prompt " (y/n)")
         y th]
     (term/move-cursor 1 y)
@@ -1109,7 +1115,7 @@
     (term/flush)))
 
 (defn render-full [world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         panels (ui/layout tw th)]
     ;; blank entire terminal with bg color
     (ui/apply-bg ui/bg)
@@ -1126,7 +1132,7 @@
     (term/flush)))
 
 (defn render-dirty [world prev-world]
-  (let [[tw th] (term/size)
+  (let [[tw th] (term-dims)
         panels (ui/layout tw th)
         mr (:map panels)
         old-fov (:fov prev-world)

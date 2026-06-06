@@ -1,6 +1,7 @@
 (ns xsofy.title
   (:require [term]
-            [xsofy.screenfx :as sfx]))
+            [xsofy.screenfx :as sfx]
+            [xsofy.det :as det]))
 
 ;; --- Procedural Title Generation ---
 
@@ -35,10 +36,10 @@
          "Trepidation" "Trouble" "Tuesday" "Undefined Behavior"
          "Understandable Nature" "Varying Utility"])
 
-(defn generate-title []
-  (str (nth xs (rand-int (count xs)))
-       " of "
-       (nth ys (rand-int (count ys)))))
+(defn generate-title [rng]
+  (let [[x rng] (det/pick rng xs)
+        [y rng] (det/pick rng ys)]
+    [(str x " of " y) rng]))
 
 ;; --- Quest Objective ---
 
@@ -71,13 +72,14 @@
    "You wake up hung over on a stone slab. No way out."
    "You just got here. You don't feel like going back yet."])
 
-(defn generate-quest []
-  (let [gate (nth gate-messages (rand-int (count gate-messages)))
-        item (str (nth quest-ps (rand-int (count quest-ps)))
-                  " of "
-                  (nth quest-qs (rand-int (count quest-qs))))]
-    {:item item
-     :messages [gate (str "You must retrieve the " item ".")]}))
+(defn generate-quest [rng]
+  (let [[gate rng] (det/pick rng gate-messages)
+        [p rng]    (det/pick rng quest-ps)
+        [q rng]    (det/pick rng quest-qs)
+        item       (str p " of " q)]
+    [{:item item
+      :messages [gate (str "You must retrieve the " item ".")]}
+     rng]))
 
 ;; --- Rune Glyphs ---
 
@@ -90,6 +92,9 @@
    [170 70 220]    ;; violet
    [70 200 200]    ;; teal
    [220 120 50]])  ;; amber
+
+(defn pick-scheme [rng]
+  (det/pick rng color-schemes))
 
 ;; --- Title Screen ---
 ;; Screen-animation primitives (pause!, scatter-runes, rune-brightness,
@@ -134,22 +139,17 @@
         (term/write subtitle)))
     (term/flush)))
 
-(defn show-title-screen []
-  (let [[tw th] (term/size)
-        title (generate-title)
+(defn show-title-screen [rng]
+  (let [[tw th] (or (term/size) [100 36])
+        [title rng]  (generate-title rng)
         subtitle "Press any key"
-        scheme (nth color-schemes (rand-int (count color-schemes)))
+        [scheme rng] (pick-scheme rng)
         runes (sfx/scatter-runes tw th 40 scheme)]
-    ;; clear once
     (sfx/clear-screen tw th)
-    ;; animate continuously until a key is pressed — runes keep pulsing instead
-    ;; of freezing on a held final frame while a blocking read-key waits.
     (sfx/drive-until-key 0
                          (fn [frame] (draw-frame runes title subtitle tw th frame))
-                         ;; 120ms/frame: a calmer rune pulse (was 80ms). Input
-                         ;; latency at a title screen is imperceptible at this rate.
                          (sfx/make-key-poller 120))
-    {:title title :scheme scheme}))
+    {:title title :scheme scheme :rng rng}))
 
 ;; --- Descending Screen ---
 ;; Shown while terrain generates. Runes rise upward, flicker and fade.

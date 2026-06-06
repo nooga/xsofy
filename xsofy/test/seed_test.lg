@@ -1,0 +1,12 @@
+(ns xsofy.test.seed-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.seed :as seed]))
+
+(deftest boot-seed-prefers-dynamic-override
+  (testing "*boot-seed* wins when bound"
+    (binding [seed/*boot-seed* 777]
+      (is (= 777 (seed/boot-seed))))))
+
+(deftest boot-seed-defaults-to-an-integer
+  (testing "unbound, no env → a random integer (still usable)"
+    (is (integer? (seed/boot-seed)))))

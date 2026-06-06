@@ -12,6 +12,7 @@
             [xsofy.test.world-seed-test]
             [xsofy.test.dispatch-test]
             [xsofy.test.serialize-test]
-            [xsofy.test.dag-test]))
+            [xsofy.test.dag-test]
+            [xsofy.test.seed-test]))
 
 (run-tests)
