@@ -1,8 +1,9 @@
 (ns xsofy.ui
-  (:require [term]
-            [async :refer [timeout <!!]]
-            [xsofy.input :as input]
-            [xsofy.util :as u]))
+  (:require
+   [async :refer [<!! timeout]]
+   [term]
+   [xsofy.input :as input]
+   [xsofy.util :as u]))
 
 ;; --- Timing ---
 ;; Shared frame/animation pause. Floors the delay under wasm so the event loop
@@ -124,11 +125,13 @@
 (def status-height 1)
 
 (defn layout [term-w term-h]
-  (let [;; center the game rect in terminal
+  (let [;; anchor the game rect to the upper-left of the terminal (1-based), so a
+        ;; larger viewport adds margin to the right/bottom rather than floating
+        ;; the whole UI in the middle.
         gw (min game-width term-w)
         gh (min game-height term-h)
-        ox (inc (quot (- term-w gw) 2))
-        oy (inc (quot (- term-h gh) 2))
+        ox 1
+        oy 1
         full (rect ox oy gw gh)
         ;; sidebar on left, map on right
         [sidebar main] (rect-split-h full sidebar-width)
