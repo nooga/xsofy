@@ -1,6 +1,3 @@
-(require 'ir.passes.pipeline)
-;;;(alter-var-root #'*ir-compile* (constantly true))
-
 (ns xsofy.main
   (:require [term]
             [os]

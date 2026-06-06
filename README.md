@@ -24,6 +24,8 @@ If you like how this game looks check out [Brogue](https://sites.google.com/site
 lg main.lg
 ```
 
+Requires `lg` / let-go `>=1.9.0`.
+
 Get `lg` from [let-go](https://github.com/nooga/let-go), or:
 
 ```bash
