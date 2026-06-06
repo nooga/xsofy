@@ -19,3 +19,34 @@
       (is (= (:seed direct) (:seed played)))
       (is (= (:action-log direct) (:action-log played)))
       (is (= (:entities direct) (:entities played))))))
+
+;; A non-blocking source that emits the given raw keys as [:action k] events on
+;; its first poll, then nothing — drives the modal loops in tests without a tty.
+(defn scripted [keys]
+  (let [q (atom (vec keys))]
+    (fn []
+      (let [ks @q]
+        (reset! q [])
+        (mapv (fn [k] [:action k]) ks)))))
+
+(deftest prompt-loop-returns-after-one-key
+  (testing "prompt-loop waits for a single key, then returns (on-key world key)
+            — the any-key-dismiss / y-n confirm modal, now non-blocking"
+    (let [result (game/prompt-loop {:screen :help}
+                                   (fn [_w])
+                                   (fn [w k] (assoc (dissoc w :screen) :pressed k))
+                                   (scripted ["q"]))]
+      (is (= "q" (:pressed result)))
+      (is (nil? (:screen result))))))
+
+(deftest modal-input-loop-loops-until-the-screen-changes
+  (testing "modal-input-loop keeps polling while the handler stays on the same
+            screen and exits once it changes — processing every key, in order"
+    (let [handle (fn [w k] (if (= k "x")
+                             (dissoc (update w :n inc) :screen)
+                             (update w :n inc)))
+          result (game/modal-input-loop {:screen :inventory :n 0}
+                                        (fn [_w]) handle
+                                        (scripted ["a" "b" "x"]))]
+      (is (nil? (:screen result)) "exited when the screen changed")
+      (is (= 3 (:n result)) "all three keys processed in order, none dropped"))))

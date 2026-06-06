@@ -122,6 +122,52 @@
        :render  (fn [_])  ;; rendering is turn-aware; done in step
        :frame-ms 90})))
 
+;; --- Modal screens as nested poll-based loops (#56 PR3b) ---
+;; Each modal used to block on term/read-key, which freezes single-threaded wasm
+;; (Atomics.wait on the SAB stalls the whole worker). These drive the same
+;; xsofy.ui/run-loop the live screens use, draining input each frame so a
+;; keypress can never wedge the runtime. The input source is injectable so the
+;; exit logic is unit-testable without a terminal.
+
+(defn prompt-loop
+  "A modal that waits for a single keypress, then returns (on-key world key).
+   For the any-key-dismiss screens (rune-codex/help) and the y/n confirms."
+  ([world render-fn on-key]
+   (prompt-loop world render-fn on-key (ui/input-source ui/raw-key->event)))
+  ([world render-fn on-key source]
+   (render-fn world)
+   (ui/run-loop
+     {:sources  [source]
+      :state    world
+      :step     (fn [w ev]
+                  (let [[tag k] ev]
+                    (if (= tag :action) (reduced (on-key w k)) w)))
+      :render   (fn [_])
+      :frame-ms 30})))
+
+(defn modal-input-loop
+  "A modal driven by an input handler `(world, raw-key) -> world`. Re-renders and
+   keeps polling while the handler leaves us on the same :screen; returns the
+   world once the screen changes (closed or transitioned)."
+  ([world render-fn handle]
+   (modal-input-loop world render-fn handle (ui/input-source ui/raw-key->event)))
+  ([world render-fn handle source]
+   (let [screen (:screen world)]
+     (render-fn world)
+     (ui/run-loop
+       {:sources  [source]
+        :state    world
+        :step     (fn [w ev]
+                    (let [[tag k] ev]
+                      (if (= tag :action)
+                        (let [w' (handle w k)]
+                          (if (= (:screen w') screen)
+                            (do (render-fn w') w')
+                            (reduced w')))
+                        w)))
+        :render   (fn [_])
+        :frame-ms 30}))))
+
 (defn run
   ([world]
    (render/render-full world)
@@ -132,55 +178,42 @@
      (let [screen (or (:screen world) :game)]
        (case screen
          :messages
-         (do (render/render-messages-screen world)
-             (let [k (term/read-key)
-                   w (messages-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do
-                   (render/render-full w)
-                   (recur w w (term/size))))))
+         (let [w (modal-input-loop world render/render-messages-screen messages-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :rune-codex
-         (do (render/render-rune-codex world)
-             (term/read-key)
-             (let [w (dissoc world :screen)]
-               (render/render-full w)
-               (recur w w (term/size))))
+         (let [w (prompt-loop world render/render-rune-codex (fn [w _k] (dissoc w :screen)))]
+           (render/render-full w)
+           (recur w w (term/size)))
 
          :help
-         (do (render/render-help-screen world)
-             (term/read-key)
-             (let [w (dissoc world :screen)]
-               (render/render-full w)
-               (recur w w (term/size))))
+         (let [w (prompt-loop world render/render-help-screen (fn [w _k] (dissoc w :screen)))]
+           (render/render-full w)
+           (recur w w (term/size)))
 
          :inventory
-         (do (render/render-inventory-screen world)
-             (let [k (term/read-key)
-                   w (menu/inventory-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do (render/render-full w)
-                     (recur w w (term/size))))))
+         (let [w (modal-input-loop world render/render-inventory-screen menu/inventory-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :inscribe
-         (do (render/render-inscribe-screen world)
-             (let [k (term/read-key)
-                   w (menu/inscribe-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do (render/render-full w)
-                     (recur w w (term/size))))))
+         (let [w (modal-input-loop world render/render-inscribe-screen menu/inscribe-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :quick-menu
-         (do (render/render-quick-menu world)
-             (let [k (term/read-key)
-                   w (menu/quick-menu-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do (render/render-full w)
-                     (recur w w (term/size))))))
+         (let [w (modal-input-loop world render/render-quick-menu menu/quick-menu-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :death
          (let [[tw th] (term/size)
@@ -224,48 +257,40 @@
              ;; screen); native esc quits.
              (= result :esc)
              (if *in-wasm*
-               (do
-                 (render/render-hazard-prompt world "Start a new game?")
-                 (if (= (term/read-key) "y")
-                   (let [w (new-game)]
-                     (render/render-full w)
-                     (recur w w (term/size)))
-                   (recur world world prev-size)))
+               (if (prompt-loop world
+                                (fn [wl] (render/render-hazard-prompt wl "Start a new game?"))
+                                (fn [_w k] (= k "y")))
+                 (let [w (new-game)]
+                   (render/render-full w)
+                   (recur w w (term/size)))
+                 (recur world world prev-size))
                (assoc world :running false))
              ;; :quit (EOF)
              :else (assoc world :running false)))
 
          :confirm-hazard
-         (do
-           ;; render the prompt on the message line
-           (render/render-full world)
-           (let [prompt (or (:hazard-prompt world) "Are you sure?")
-                 k (do (render/render-hazard-prompt world prompt)
-                       (term/read-key))
-                 w (if (= k "y")
-                     (world/confirm-hazard-step world)
-                     (world/cancel-hazard-step world))]
-             (render/render-full w)
-             (recur w w (term/size))))
+         (let [prompt (or (:hazard-prompt world) "Are you sure?")
+               w (prompt-loop world
+                              (fn [wl] (render/render-full wl) (render/render-hazard-prompt wl prompt))
+                              (fn [wl k] (if (= k "y")
+                                           (world/confirm-hazard-step wl)
+                                           (world/cancel-hazard-step wl))))]
+           (render/render-full w)
+           (recur w w (term/size)))
 
          :confirm-quit
-         (do
-           (render/render-full world)
-           (let [prompt (if *in-wasm*
-                          "Are you sure you want to restart?"
-                          "Are you sure you want to quit?")
-                 k (do (render/render-hazard-prompt world prompt)
-                       (term/read-key))
-                 w (if (= k "y")
-                     (if *in-wasm*
-                       (new-game)
-                       (assoc world :running false))
-                     (dissoc world :screen))]
-             (if (:running w)
-               (do
-                 (render/render-full w)
+         (let [prompt (if *in-wasm*
+                        "Are you sure you want to restart?"
+                        "Are you sure you want to quit?")
+               w (prompt-loop world
+                              (fn [wl] (render/render-full wl) (render/render-hazard-prompt wl prompt))
+                              (fn [wl k] (if (= k "y")
+                                           (if *in-wasm* (new-game) (assoc wl :running false))
+                                           (dissoc wl :screen))))]
+           (if (:running w)
+             (do (render/render-full w)
                  (recur w w (term/size)))
-               w)))
+             w))
 
          ;; default: game screen — the poll-based turn loop (input +
          ;; clock-driven auto-actions / ambient animation); see run-play-loop.
