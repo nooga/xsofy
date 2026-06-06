@@ -422,7 +422,11 @@
          :death
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
-               replay-code (replay/encode-run world)  ;; compute ONCE — encode is O(n) per call
+               ;; compute ONCE — encode is O(n) per call. encode-run-safe yields
+               ;; nil for runs whose log has map actions (item use/equip/etc via
+               ;; dispatch); the death screen then shows the seed alone, instead
+               ;; of crashing the game on encode-run's keyword-only guard.
+               replay-code (replay/encode-run-safe world)
                poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
                result (loop [scroll 0 frame 0]
