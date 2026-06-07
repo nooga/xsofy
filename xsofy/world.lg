@@ -817,6 +817,11 @@
                     w (if target-pos
                         (splatter-blood w2 (first target-pos) (second target-pos) dmg hp-before killed)
                         w2)
+                    w (if target-pos
+                        (update w :vfx #(conj (or % [])
+                                              {:type :flash :pos target-pos
+                                               :color [255 80 80] :decay 3}))
+                        w)
                     ;; trigger runes on hit (weapon runes or creature runes)
                     wep (ent/get-weapon world attacker-id)
                     hit-runes (or (when wep (:runes wep))
