@@ -1,6 +1,3 @@
-(require 'ir.passes.pipeline)
-;;;(alter-var-root #'*ir-compile* (constantly true))
-
 (ns xsofy.main
   (:require [term]
             [os]
@@ -17,7 +14,6 @@
             [xsofy.dispatch :as dispatch]
             [xsofy.seed :as seed]
             [xsofy.replay :as replay]))
-
 
 (defn init-terminal []
   (when (nil? (term/size))

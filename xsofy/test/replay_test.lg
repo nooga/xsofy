@@ -1,8 +1,9 @@
 (ns xsofy.test.replay-test
-  (:require [test :refer [deftest is testing]]
-            [xsofy.replay :as replay]
-            [xsofy.dispatch :as dispatch]
-            [xsofy.world :as world]))
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.dispatch :as dispatch]
+   [xsofy.replay :as replay]
+   [xsofy.world :as world]))
 
 (deftest base64-round-trips-arbitrary-bytes
   (testing "url-safe base64 encode/decode is identity for byte vectors"

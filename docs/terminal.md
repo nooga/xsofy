@@ -250,7 +250,12 @@ it listens to** and **how state folds over events**; the loop drives render:
   recorded action log; `poll-source` wraps any non-blocking `() → events`.
 - **`step`** is a `scan` over `{:world :ui}`; it returns `(reduced result)` to
   exit the loop. Modal/multi-step screens compose as **nested `run-loop`s** that
-  return an assembled value.
+  return an assembled value — in xsofy every interactive screen runs this way
+  (title, death, the turn loop, and the modal menus: inventory, quick-menu,
+  messages, help, rune-codex, inscribe, and the y/n confirms), so **no screen
+  blocks on `read-key`**. A nested loop drains input each frame and exits on the
+  first relevant key (`prompt-loop`) or once its handler changes `:screen`
+  (`modal-input-loop`).
 - **Pacing** uses a wasm-aware `pause!` (`(<!! (timeout (max ms 30)))`, *not*
   `Thread/sleep`) so the JS event loop actually yields and the input buffer
   refills.

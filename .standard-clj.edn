@@ -1,0 +1,13 @@
+;; Standard Clojure Style config — https://github.com/oakmac/standard-clojure-style-js
+;;
+;; This project's source is mostly let-go (.lg), which is Clojure-syntax. NOTE:
+;; standard-clj only recognizes .lg via the `--file-ext lg` CLI flag — there is
+;; no .edn key to register a file extension — so run it as `make fmt-check` /
+;; `make fmt` (which pass the flag), or `standard-clj fix --file-ext lg .`.
+;; A bare `standard-clj` (no flag) only sees .clj/.cljs/.cljc.
+;;
+;; The check-on-edit Claude Code hook (tools/standard_clj_check_hook.py) passes
+;; the flag too, so edits to .lg files are checked as Clojure.
+{:ignore ["**/node_modules/**"
+          "dist/**"
+          "tests/e2e/test-results/**"]}

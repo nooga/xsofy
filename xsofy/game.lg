@@ -1,0 +1,300 @@
+(ns xsofy.game
+  "The interaction loop: the screen router (run), the messages screen, the inline
+   confirm/codex/help screens, and game setup. Extracted from main so the loop is
+   a testable module, not bound to the (-main) boot hook."
+  (:require
+   [term]
+   [xsofy.debug :as dbg]
+   [xsofy.dispatch :as dispatch]
+   [xsofy.menu :as menu]
+   [xsofy.play :as play]
+   [xsofy.render :as render]
+   [xsofy.replay :as replay]
+   [xsofy.screenfx :as sfx]
+   [xsofy.seed :as seed]
+   [xsofy.title :as title]
+   [xsofy.ui :as ui]
+   [xsofy.world :as world]))
+
+(defn message-page-size []
+  (let [[_tw th] (term/size)]
+    (max 1 (dec (render/message-visible-lines th)))))
+
+(defn clamp-message-scroll [world scroll]
+  (let [[_tw th] (term/size)
+        visible-lines (render/message-visible-lines th)
+        max-scroll (render/max-message-scroll world visible-lines)]
+    (assoc world :message-scroll (max 0 (min max-scroll scroll)))))
+
+(defn scroll-messages [world delta]
+  (clamp-message-scroll world (+ (or (:message-scroll world) 0) delta)))
+
+(defn close-messages-screen [world]
+  (dissoc world :screen :message-scroll))
+
+(defn messages-input [world k]
+  (let [page (message-page-size)]
+    (cond
+      (or (= k "\u001b") (= k "q") (= k "m") (= k "\r"))
+      (close-messages-screen world)
+
+      (or (= k "k") (= k "\u001b[A"))
+      (scroll-messages world 1)
+
+      (or (= k "j") (= k "\u001b[B") (= k " "))
+      (scroll-messages world -1)
+
+      (or (= k "\u001b[5~") (= k "K"))
+      (scroll-messages world page)
+
+      (or (= k "\u001b[6~") (= k "J"))
+      (scroll-messages world (- page))
+
+      (= k "g")
+      (let [[_tw th] (term/size)
+            visible-lines (render/message-visible-lines th)]
+        (clamp-message-scroll world (render/max-message-scroll world visible-lines)))
+
+      (= k "G")
+      (clamp-message-scroll world 0)
+
+      :else world)))
+
+(defn assemble-world
+  "Build the starting world for `seed` and graft on its (seed-derived) title,
+   scheme, and quest. Title/scheme/quest are cosmetic — they don't touch the
+   gameplay seed chain — so this world replays identically to one made by
+   new-game from the same seed."
+  [seed title scheme quest]
+  (-> (world/make-world 79 30 seed)
+      (assoc :title title
+             :scheme scheme
+             :quest-item (:item quest))
+      (#(reduce world/log-msg % (:messages quest)))))
+
+(defn new-game []
+  (let [sd  (seed/boot-seed)
+        rng {:seed sd}
+        {:keys [title scheme rng]} (title/show-title-screen rng)
+        [quest rng] (title/generate-quest rng)
+        _ (title/show-descending-screen 1 scheme)]
+    (assemble-world sd title scheme quest)))
+
+(defn build-game
+  "Reconstruct a run's starting world from its seed, without the interactive
+   title screen (same pick order as new-game: title -> scheme -> quest)."
+  [seed]
+  (let [rng {:seed seed}
+        [title rng]  (title/generate-title rng)
+        [scheme rng] (title/pick-scheme rng)
+        [quest rng]  (title/generate-quest rng)]
+    (assemble-world seed title scheme quest)))
+
+(defn play-replay
+  "Decode a replay code, reconstruct the run, and step through its actions with
+   a short delay so the run plays out on screen. Returns the final world so the
+   caller can hand control back to the player at the recorded end-state.
+
+   Driven by the poll-based run-loop (#56), not a blocking reduce: a clock paces
+   one recorded action per tick while an input source DRAINS any keys pressed
+   during playback. Draining matters under single-threaded wasm — a blocking
+   playback that never reads input lets a keypress back up the input buffer and
+   freeze the runtime. Keys are consumed but ignored; playback runs to the end."
+  [code]
+  (let [{:keys [seed actions]} (replay/decode code)
+        w0 (build-game seed)]
+    (render/render-full w0)
+    (sfx/pause! 400)
+    (ui/run-loop
+      {:sources [(ui/input-source (fn [k] [:user-key k]))
+                 (ui/clock-source 0)]
+       :state   {:world w0 :remaining (seq actions)}
+       :step    (fn [st ev]
+                  (let [[tag _] ev]
+                    (case tag
+                      :user-key st  ;; drained (no wasm freeze) but ignored
+                      :tick (if-let [a (first (:remaining st))]
+                              (let [w' (dispatch/dispatch (:world st) a)]
+                                (render/render-full w')
+                                (-> st (assoc :world w') (update :remaining rest)))
+                              (reduced (:world st)))
+                      st)))
+       :render  (fn [_])  ;; rendering is turn-aware; done in step
+       :frame-ms 90})))
+
+;; --- Modal screens as nested poll-based loops (#56 PR3b) ---
+;; Each modal used to block on term/read-key, which freezes single-threaded wasm
+;; (Atomics.wait on the SAB stalls the whole worker). These drive the same
+;; xsofy.ui/run-loop the live screens use, draining input each frame so a
+;; keypress can never wedge the runtime. The input source is injectable so the
+;; exit logic is unit-testable without a terminal.
+
+(defn prompt-loop
+  "A modal that waits for a single keypress, then returns (on-key world key).
+   For the any-key-dismiss screens (rune-codex/help) and the y/n confirms."
+  ([world render-fn on-key]
+   (prompt-loop world render-fn on-key (ui/input-source ui/raw-key->event)))
+  ([world render-fn on-key source]
+   (render-fn world)
+   (ui/run-loop
+     {:sources  [source]
+      :state    world
+      :step     (fn [w ev]
+                  (let [[tag k] ev]
+                    (if (= tag :action) (reduced (on-key w k)) w)))
+      :render   (fn [_])
+      :frame-ms 30})))
+
+(defn modal-input-loop
+  "A modal driven by an input handler `(world, raw-key) -> world`. Re-renders and
+   keeps polling while the handler leaves us on the same :screen; returns the
+   world once the screen changes (closed or transitioned)."
+  ([world render-fn handle]
+   (modal-input-loop world render-fn handle (ui/input-source ui/raw-key->event)))
+  ([world render-fn handle source]
+   (let [screen (:screen world)]
+     (render-fn world)
+     (ui/run-loop
+       {:sources  [source]
+        :state    world
+        :step     (fn [w ev]
+                    (let [[tag k] ev]
+                      (if (= tag :action)
+                        (let [w' (handle w k)]
+                          (if (= (:screen w') screen)
+                            (do (render-fn w') w')
+                            (reduced w')))
+                        w)))
+        :render   (fn [_])
+        :frame-ms 30}))))
+
+(defn run
+  ([world]
+   (render/render-full world)
+   (run world world (term/size)))
+  ([world prev-world prev-size]
+   (if-not (:running world)
+     world
+     (let [screen (or (:screen world) :game)]
+       (case screen
+         :messages
+         (let [w (modal-input-loop world render/render-messages-screen messages-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
+
+         :rune-codex
+         (let [w (prompt-loop world render/render-rune-codex (fn [w _k] (dissoc w :screen)))]
+           (render/render-full w)
+           (recur w w (term/size)))
+
+         :help
+         (let [w (prompt-loop world render/render-help-screen (fn [w _k] (dissoc w :screen)))]
+           (render/render-full w)
+           (recur w w (term/size)))
+
+         :inventory
+         (let [w (modal-input-loop world render/render-inventory-screen menu/inventory-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
+
+         :inscribe
+         (let [w (modal-input-loop world render/render-inscribe-screen menu/inscribe-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
+
+         :quick-menu
+         (let [w (modal-input-loop world render/render-quick-menu menu/quick-menu-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
+
+         :death
+         (let [[tw th] (term/size)
+               runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
+               ;; compute ONCE — encode is O(n) per call. encode-run-safe yields
+               ;; nil for runs whose log has map actions (item use/equip/etc via
+               ;; dispatch); the death screen then shows the seed alone, instead
+               ;; of crashing the game on encode-run's keyword-only guard.
+               replay-code (replay/encode-run-safe world)
+               _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
+               ;; Animate the death screen via the poll-based event loop: a
+               ;; cosmetic clock pulses the runes each tick while we wait for a
+               ;; key, instead of freezing on a blocking read (see xsofy.ui /
+               ;; #56). :ui carries {:frame :scroll}; raw keys drive scroll/exit.
+               step (fn [st ev]
+                      (let [[tag payload] ev]
+                        (case tag
+                          :tick (assoc st :frame payload)
+                          :action
+                          (let [k payload]
+                            (cond
+                              (or (= k "n") (= k "\r") (= k "\n") (= k " ")) (reduced :new-game)
+                              (= k :eof)                  (reduced :quit)
+                              (= k "\u001b")               (reduced :esc)
+                              (or (= k "j") (= k "\u001b[B")) (update st :scroll (fn [s] (max 0 (dec s))))
+                              (or (= k "k") (= k "\u001b[A")) (update st :scroll inc)
+                              :else st))
+                          st)))
+               result (ui/run-loop
+                        {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+                         :state    {:frame 0 :scroll 0}
+                         :step     step
+                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st) replay-code))
+                         :frame-ms 120})]
+           (cond
+             (= result :new-game)
+             (let [w (new-game)]
+               (render/render-full w)
+               (recur w w (term/size)))
+             ;; esc: wasm offers a restart confirm (declining re-enters the death
+             ;; screen); native esc quits.
+             (= result :esc)
+             (if *in-wasm*
+               (if (prompt-loop world
+                                (fn [wl] (render/render-hazard-prompt wl "Start a new game?"))
+                                (fn [_w k] (= k "y")))
+                 (let [w (new-game)]
+                   (render/render-full w)
+                   (recur w w (term/size)))
+                 (recur world world prev-size))
+               (assoc world :running false))
+             ;; :quit (EOF)
+             :else (assoc world :running false)))
+
+         :confirm-hazard
+         (let [prompt (or (:hazard-prompt world) "Are you sure?")
+               w (prompt-loop world
+                              (fn [wl] (render/render-full wl) (render/render-hazard-prompt wl prompt))
+                              (fn [wl k] (if (= k "y")
+                                           (world/confirm-hazard-step wl)
+                                           (world/cancel-hazard-step wl))))]
+           (render/render-full w)
+           (recur w w (term/size)))
+
+         :confirm-quit
+         (let [prompt (if *in-wasm*
+                        "Are you sure you want to restart?"
+                        "Are you sure you want to quit?")
+               w (prompt-loop world
+                              (fn [wl] (render/render-full wl) (render/render-hazard-prompt wl prompt))
+                              (fn [wl k] (if (= k "y")
+                                           (if *in-wasm* (new-game) (assoc wl :running false))
+                                           (dissoc wl :screen))))]
+           (if (:running w)
+             (do (render/render-full w)
+                 (recur w w (term/size)))
+             w))
+
+         ;; default: game screen — the poll-based turn loop (input +
+         ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         (let [result (play/run-play-loop world prev-size)]
+           (if (:running result)
+             (recur result result (term/size))
+             result)))))))

@@ -1,0 +1,250 @@
+(ns xsofy.menu
+  "Inventory / quick-menu / inscribe screen input handlers and item actions.
+   Pure (world, key) -> world transforms; world-mutating actions go through
+   xsofy.dispatch (seed + :action-log). Extracted from main so they are testable
+   without launching the game."
+  (:require [term]
+            [string]
+            [xsofy.world :as world]
+            [xsofy.dispatch :as dispatch]
+            [xsofy.render :as render]
+            [xsofy.runes :as runes]))
+
+(def inv-letters "abcdefghijklmnopqrstuvwxyz")
+
+(defn letter-to-index [k]
+  (string/index-of inv-letters k))
+
+(defn get-item-name [world item-id]
+  (let [item (get-in world [:entities item-id])]
+    (or (:item-name item) (name (or (:template item) (:id item) :unknown)))))
+
+(defn inv-sel [world]
+  (or (:inv-sel world) -1))
+
+(defn inv-count [world]
+  (count (or (get-in world [:entities :player :inventory]) [])))
+
+(defn sel-item-id [world]
+  (let [inv (or (get-in world [:entities :player :inventory]) [])
+        sel (inv-sel world)]
+    (when (and (>= sel 0) (< sel (count inv)))
+      (nth inv sel nil))))
+
+;; The inventory-screen item actions, like the quick-menu, route world-mutating
+;; actions through dispatch (seed + :action-log) — guards/messages live in
+;; world's *-action handlers — and only manage the :inventory screen state here.
+
+(defn inv-equip [world]
+  (if-let [item-id (sel-item-id world)]
+    (-> (dispatch/dispatch world {:type :equip :id item-id})
+        (assoc :screen :inventory))
+    (assoc world :screen :inventory)))
+
+(defn inv-unequip [world]
+  (if-let [item-id (sel-item-id world)]
+    (-> (dispatch/dispatch world {:type :unequip :id item-id})
+        (assoc :screen :inventory))
+    (assoc world :screen :inventory)))
+
+(defn inv-drop [world]
+  (if-let [item-id (sel-item-id world)]
+    (-> (dispatch/dispatch world {:type :drop :id item-id})
+        (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world)))))
+    (assoc world :screen :inventory)))
+
+(defn inv-use [world]
+  (if-let [item-id (sel-item-id world)]
+    (if (= :consumable (get-in world [:entities item-id :item :slot]))
+      (let [result (dispatch/dispatch world {:type :use-item :id item-id})]
+        ;; if use-item opened a submenu (enchant), keep its screen
+        (if (:screen result)
+          (dissoc result :inv-sel)
+          (dissoc result :screen :inv-sel)))
+      (assoc world :screen :inventory))
+    (assoc world :screen :inventory)))
+
+(defn inv-inscribe [world]
+  (if-let [item-id (sel-item-id world)]
+    (let [item (get-in world [:entities item-id])
+          slot (get-in item [:item :slot])]
+      (if (or (= slot :weapon) (= slot :armor))
+        (-> world
+            (assoc :screen :inscribe
+                   :inscribe-item-id item-id
+                   :inscribe-runes (vec (or (:runes item) []))
+                   :inscribe-sel 0))
+        (-> world
+            (world/log-msg "You can only inscribe weapons and armor.")
+            (assoc :screen :inventory))))
+    (assoc world :screen :inventory)))
+
+(defn inscribe-input [world k]
+  (let [rune-table (or (:rune-table world) {})
+        available (runes/inscribable-runes rune-table)
+        sel (or (:inscribe-sel world) 0)
+        runes (or (:inscribe-runes world) [])
+        max-runes 12
+        cnt (count available)]
+    (cond
+      ;; cancel
+      (= k "\u001b")
+      (-> world (dissoc :screen :inscribe-item-id :inscribe-runes :inscribe-sel))
+
+      ;; navigate down
+      (or (= k "j") (= k "\u001b[B"))
+      (assoc world :inscribe-sel (min (dec cnt) (inc sel)))
+
+      ;; navigate up
+      (or (= k "k") (= k "\u001b[A"))
+      (assoc world :inscribe-sel (max 0 (dec sel)))
+
+      ;; navigate right (next column)
+      (or (= k "l") (= k "\u001b[C"))
+      (let [[tw th] (term/size)
+            max-rows (- th 14)
+            new-sel (min (dec cnt) (+ sel max-rows))]
+        (assoc world :inscribe-sel new-sel))
+
+      ;; navigate left (prev column)
+      (or (= k "h") (= k "\u001b[D"))
+      (let [[tw th] (term/size)
+            max-rows (- th 14)
+            new-sel (max 0 (- sel max-rows))]
+        (assoc world :inscribe-sel new-sel))
+
+      ;; add selected rune
+      (and (= k " ") (< (count runes) max-runes) (> cnt 0) (< sel cnt))
+      (let [rn (nth available sel)]
+        (assoc world :inscribe-runes (conj runes (:rune rn))))
+
+      ;; remove last rune
+      (and (= k "x") (seq runes))
+      (assoc world :inscribe-runes (vec (butlast runes)))
+
+      ;; confirm inscription
+      (= k "\r")
+      (if (seq runes)
+        (let [item-id (:inscribe-item-id world)
+              w (world/inscribe-runes-on-item world item-id runes)]
+          (-> w (dissoc :screen :inscribe-item-id :inscribe-runes :inscribe-sel)))
+        (-> world (dissoc :screen :inscribe-item-id :inscribe-runes :inscribe-sel)))
+
+      :else world)))
+
+(defn inventory-input [world k]
+  (let [sel (inv-sel world)
+        cnt (inv-count world)]
+    (cond
+      ;; close — esc always, i only when nothing selected
+      (= k "\u001b")
+      (-> world (dissoc :screen :inv-sel))
+
+      (and (= k "i") (< sel 0))
+      (-> world (dissoc :screen :inv-sel))
+
+      ;; navigate
+      (or (= k "j") (= k "\u001b[B"))
+      (assoc world :inv-sel (min (dec cnt) (inc sel)) :screen :inventory)
+
+      (or (= k "k") (= k "\u001b[A"))
+      (assoc world :inv-sel (max 0 (dec sel)) :screen :inventory)
+
+      ;; deselect
+      (= k " ")
+      (assoc world :inv-sel -1 :screen :inventory)
+
+      ;; actions on selected item (check before letter select)
+      (and (>= sel 0) (= k "e")) (inv-equip world)
+      (and (>= sel 0) (= k "U")) (inv-unequip world)
+      (and (>= sel 0) (= k "d")) (inv-drop world)
+      (and (>= sel 0) (= k "a")) (inv-use world)
+      (and (>= sel 0) (= k "s")) (inv-inscribe world)
+
+      ;; letter select
+      (and (= 1 (count k)) (some? (letter-to-index k)))
+      (let [idx (letter-to-index k)]
+        (if (and idx (< idx cnt))
+          (assoc world :inv-sel idx :screen :inventory)
+          world))
+
+      :else world)))
+
+(defn execute-menu-action [world action inv-idx]
+  (let [inv (or (get-in world [:entities :player :inventory]) [])
+        item-id (nth inv inv-idx nil)
+        old-screen (:screen world)]
+    (if (nil? item-id)
+      world
+      (let [slot (get-in world [:entities item-id :item :slot])
+            result (case action
+                     ;; world-mutating menu actions go through dispatch so they
+                     ;; fold into the seed + :action-log and replay identically.
+                     ;; Guards/messages live in world's *-action handlers.
+                     :equip   (dispatch/dispatch world {:type :equip :id item-id})
+                     :unequip (dispatch/dispatch world {:type :unequip :id item-id})
+                     :drop    (dispatch/dispatch world {:type :drop :id item-id})
+
+                     :use
+                     (if (= slot :consumable)
+                       (dispatch/dispatch world {:type :use-item :id item-id})
+                       world)
+
+                     :enchant
+                     (let [scroll-id (:enchant-scroll-id world)]
+                       (if scroll-id
+                         ;; dispatch the assembled (target, scroll) action so the
+                         ;; enchant + scroll-consume fold into the seed + log
+                         (-> (dispatch/dispatch world {:type :enchant :id item-id :scroll-id scroll-id})
+                             (dissoc :enchant-scroll-id))
+                         world))
+
+                     world)]
+        ;; Preserve submenu transitions when the action keeps us on a screen
+        ;; because it changed the menu mode/state, even if the screen keyword
+        ;; itself stayed :quick-menu (e.g. use -> enchant target select). Plain
+        ;; mutating actions like drop/equip should still fall back to the game.
+        (if (and (:screen result)
+                 (or (not= (:screen result) old-screen)
+                     (not= (:menu-action result) (:menu-action world))
+                     (not= (:enchant-scroll-id result) (:enchant-scroll-id world))))
+          (dissoc result :menu-sel)
+          (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id))))))
+
+(defn quick-menu-input [world k]
+  (let [action (or (:menu-action world) :equip)
+        items (render/menu-filter world action)
+        sel (or (:menu-sel world) -1)]
+    (cond
+      ;; cancel
+      (= k "\u001b")
+      (dissoc world :screen :menu-action :menu-sel)
+
+      ;; navigate
+      (or (= k "j") (= k "\u001b[B"))
+      (assoc world :menu-sel (min (dec (count items)) (inc sel)))
+
+      (or (= k "k") (= k "\u001b[A"))
+      (assoc world :menu-sel (max 0 (dec sel)))
+
+      ;; space/enter to confirm selection
+      (and (or (= k " ") (= k "\r") (= k "\n")) (>= sel 0) (< sel (count items)))
+      (let [[inv-idx item-id] (nth items sel)
+            result (execute-menu-action world action inv-idx)]
+        (if (:screen result)
+          (dissoc result :menu-sel)
+          (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id)))
+
+      ;; letter key — find matching item by inventory index and execute
+      (and (= 1 (count k)) (some? (letter-to-index k)))
+      (let [target-idx (letter-to-index k)
+            match (first (filter (fn [[inv-idx _]] (= inv-idx target-idx)) items))]
+        (if match
+          (let [[inv-idx item-id] match
+                result (execute-menu-action world action inv-idx)]
+            (if (:screen result)
+              (dissoc result :menu-sel)
+              (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id)))
+          world))
+
+      :else world)))
