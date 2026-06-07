@@ -13,6 +13,11 @@
 (def distance u/distance)
 (def adjacent? u/adjacent?)
 
+;; Default per-turn chance a ranged creature fires when in range + LOS.
+;; Creatures may override via their spell's :fire-chance (e.g. spider: 15).
+;; Kept below 100 so ranged enemies don't shoot every single turn.
+(def default-ranged-fire-chance 60)
+
 ;; --- Simple Pathfinding ---
 
 (defn step-toward [from to]
@@ -324,7 +329,7 @@
         in-range-with-los (and (<= dist max-range) los)
         fire-pair (if (and (not too-close) in-range-with-los)
                     (det/percent? (det/with-context world [:ai :ranged-fire entity-id])
-                                  (or (:fire-chance spell-data) 100))
+                                  (or (:fire-chance spell-data) default-ranged-fire-chance))
                     [false world])
         fires-now (first fire-pair)
         world (second fire-pair)]

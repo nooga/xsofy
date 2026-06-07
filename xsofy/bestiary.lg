@@ -75,9 +75,9 @@
 (defcreature spider
   (visual "S" [80 60 40])
   (body {:hp 12 :strength 2})
-  (ai :ranged {:preferred-range 3 :speed 2})
+  (ai :ranged {:preferred-range 3})
   (melee 3)
-  ;; spider shoots webs at range, casts cone web on hit (30% chance per turn)
+  ;; spider shoots webs at range, casts cone web on hit (15% chance per turn)
   (spell :ranged {:damage 1 :range 4 :fire-chance 15 :glyph "*" :color [220 220 230]})
   {:spell-runes [:web]
    :properties {:web-immune true}}
@@ -91,8 +91,8 @@
 
 (defcreature slime
   (visual "s" [100 200 100])
-  (body {:hp 50 :strength 1 :regen 0})
-  (ai :hunter {:speed 2})
+  (body {:hp 24 :strength 1 :regen 0})
+  (ai :hunter)
   (melee 2)
   {:properties {:splits-on-hit true}}
   (sounds {:death {:near "The slime dissolves with a hiss."
