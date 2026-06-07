@@ -9,6 +9,7 @@
             [xsofy.effects :as fx]
             [xsofy.fire :as fire]
             [xsofy.spell :as spell]
+            [xsofy.container-trigger :as ctrig]
             [xsofy.runes :as runes]
             [xsofy.status :as status]
             [xsofy.items :as items]
@@ -760,6 +761,19 @@
           (log-msg w (str "Rune " rune " on the " source-name " hums but nothing answers."))
           w))
       :else w)))
+
+(defn- fire-triggered-container-spell [world owner-id trigger]
+  (let [item (:item trigger)
+        source-name (or (:item-name item)
+                        (name (or (:template item) (:id item) :item)))
+        result (spell/eval-spell* world owner-id (:target-pos trigger) (:runes trigger)
+                                  {:container (:container trigger)})]
+    (apply-spell-result world owner-id source-name result)))
+
+(defn- fire-player-on-turn-containers [world]
+  (ctrig/fire-event world :player :on-turn
+                    (fn [w trigger]
+                      (fire-triggered-container-spell w :player trigger))))
 
 (def pushable-tiles #{1 2 3 4 5 6 7 10 12 13 14 15 16 17 18 19})
 
@@ -1830,6 +1844,7 @@
                 ;; bench paths catch the same entity-resurrection class
                 ;; of bugs that the non-bench path does.
                 (let [t0 (System/currentTimeMillis)
+                      w (fire-player-on-turn-containers w)
                       w (tick-pending-allies w)
                       w2 (run-until-player-turn w)
                       _ (snapshot! w2 "update-world:after-run-until-player-turn")
@@ -1850,7 +1865,8 @@
                           :ignite (- t3 t2)
                           :drift  (- t4 t3)
                           :fov    (- t5 t4)}))
-                (let [w (tick-pending-allies w)
+                (let [w (fire-player-on-turn-containers w)
+                      w (tick-pending-allies w)
                       w2 (run-until-player-turn w)
                       _ (snapshot! w2 "update-world:after-run-until-player-turn")
                       ;; fire simulation + burning entities ignite terrain + water drift

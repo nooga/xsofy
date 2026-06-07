@@ -1,0 +1,82 @@
+(ns xsofy.test.container-trigger-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.world :as world]
+            [xsofy.dispatch :as dispatch]))
+
+(def movement-actions [:up :down :left :right :up-left :up-right :down-left :down-right])
+
+(defn- equip-test-ring
+  [world]
+  (let [ring-id :test-ring]
+    (-> world
+        (assoc-in [:entities ring-id]
+                  {:id ring-id
+                   :template :test-ring
+                   :item-name "ring of mending"
+                   :item {:slot :ring :effect :focus :power 1}
+                   :runes [:self :apply :heal 2]
+                   :pos nil})
+        (update-in [:entities :player :inventory] #(vec (conj (or % []) ring-id)))
+        (assoc-in [:entities :player :equipment :ring] ring-id))))
+
+(defn- first-safe-move
+  [world]
+  (first
+    (filter
+      (fn [action]
+        (let [w' (dispatch/dispatch world action)]
+          (and (> (:turn w') (:turn world))
+               (not= (get-in w' [:entities :player :pos])
+                     (get-in world [:entities :player :pos])))))
+      movement-actions)))
+
+(deftest equipped-ring-fires-on-wait
+  (testing "an equipped ring with runes fires once on :wait"
+    (let [w0 (-> (world/make-world 79 30 4242)
+                 equip-test-ring
+                 (assoc-in [:entities :player :body :hp] 20))
+          w1 (dispatch/dispatch w0 :wait)]
+      (is (= 22 (get-in w1 [:entities :player :body :hp])))
+      (is (= [:wait] (:action-log w1))))))
+
+(deftest equipped-ring-fires-on-movement
+  (testing "an equipped ring with runes fires after a replayed move"
+    (let [base (world/make-world 79 30 4242)
+          action (first-safe-move base)
+          w0 (-> base
+                 equip-test-ring
+                 (assoc-in [:entities :player :body :hp] 20))
+          w1 (dispatch/dispatch w0 action)]
+      (is (some? action) "fixture found a legal movement action")
+      (is (= 22 (get-in w1 [:entities :player :body :hp])))
+      (is (= [action] (:action-log w1))))))
+
+(deftest ring-does-not-fire-on-ui-actions
+  (testing "UI-only actions do not trigger per-turn ring runes"
+    (let [w0 (-> (world/make-world 79 30 4242)
+                 equip-test-ring
+                 (assoc-in [:entities :player :body :hp] 20))
+          w1 (dispatch/dispatch w0 :inventory)]
+      (is (= 20 (get-in w1 [:entities :player :body :hp])))
+      (is (= [] (:action-log w1))))))
+
+(deftest unequipped-ring-does-not-fire
+  (testing "a ring in inventory but not equipped does not trigger"
+    (let [w0 (-> (world/make-world 79 30 4242)
+                 equip-test-ring
+                 (assoc-in [:entities :player :body :hp] 20)
+                 (assoc-in [:entities :player :equipment :ring] nil))
+          w1 (dispatch/dispatch w0 :wait)]
+      (is (= 20 (get-in w1 [:entities :player :body :hp])))
+      (is (= [:wait] (:action-log w1))))))
+
+(deftest ring-turn-trigger-is-deterministic
+  (testing "dispatching the same ring-bearing world twice yields the same result"
+    (let [w0 (-> (world/make-world 79 30 4242)
+                 equip-test-ring
+                 (assoc-in [:entities :player :body :hp] 20))
+          a (dispatch/dispatch w0 :wait)
+          b (dispatch/dispatch w0 :wait)]
+      (is (= (:seed a) (:seed b)))
+      (is (= (:action-log a) (:action-log b)))
+      (is (= (:entities a) (:entities b))))))

@@ -1,0 +1,35 @@
+(ns xsofy.container-trigger
+  (:require [xsofy.entities :as ent]))
+
+(defn- ring-trigger
+  [world owner-id event]
+  (let [ring-id (ent/equipped world owner-id :ring)
+        ring (when ring-id (get-in world [:entities ring-id]))
+        runes (:runes ring)
+        target-pos (get-in world [:entities owner-id :pos])]
+    (if (and ring (seq runes) target-pos)
+      [{:item-id ring-id
+        :item ring
+        :runes runes
+        :target-pos target-pos
+        :container {:slot :ring
+                    :event event
+                    :owner-id owner-id
+                    :item-id ring-id}}]
+      [])))
+
+(defn triggers-for
+  "Return equipped container rune triggers for `owner-id` at `event`.
+   The structure is generic; only :ring / :on-turn is implemented here."
+  [world owner-id event]
+  (case event
+    :on-turn (ring-trigger world owner-id event)
+    []))
+
+(defn fire-event
+  "Run all container rune triggers for `owner-id` at `event`, threading the
+   world through `fire-trigger`."
+  [world owner-id event fire-trigger]
+  (reduce (fn [w trigger] (fire-trigger w trigger))
+          world
+          (triggers-for world owner-id event)))
