@@ -1650,7 +1650,7 @@
                       w (if (and (fire/on-web? w nx ny)
                                  (not (fire/web-immune? w :player)))
                           (-> w
-                              (status/apply-status :player :webbed 3)
+                              (status/apply-status :player :webbed 2)
                               (log-msg "You walk into a web!"))
                           w)
                       ;; tile effects (water extinguishes fire, etc.)
