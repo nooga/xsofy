@@ -1,0 +1,26 @@
+(ns xsofy.test.smoke
+  "Headless runtime smoke. Drives real render/dispatch paths and prints labeled
+   frames to stdout for xsofy/test/check_smoke.py. Any uncaught exception in a
+   render path makes lg exit non-zero (the comparator treats that as failure)."
+  (:require [xsofy.title :as title]
+            [xsofy.screenfx :as sfx]
+            [xsofy.world :as world]
+            [xsofy.render :as render]
+            [xsofy.dispatch :as dispatch]))
+
+;; Title: two animation ticks must differ (frozen-title guard).
+(let [runes (sfx/scatter-runes 80 24 30 [200 50 30])]
+  (title/draw-frame runes "SMOKE TITLE" "subtitle" 80 24 0 12345)
+  (println "\n@@T0@@")
+  (title/draw-frame runes "SMOKE TITLE" "subtitle" 80 24 50 12345)
+  (println "\n@@T50@@"))
+
+;; Game screen renders, then survives a few scripted turns and re-renders.
+(let [w  (world/make-world 79 30 12345)]
+  (render/render-full w)
+  (println "\n@@GAME@@")
+  (let [w2 (dispatch/replay 79 30 12345 [:right :right :down :wait])]
+    (render/render-full w2)
+    (println "\n@@GAME2@@")))
+
+(println "@@SMOKE-OK@@")

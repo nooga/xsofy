@@ -301,6 +301,9 @@
       ;; depth
       (ui/write-line r @row (str " Depth " (:depth world)) [100 100 100] ui/bg)
       (swap! row inc)
+      ;; seed — enables ?seed= reproducible runs (#44)
+      (ui/write-line r @row (str " Seed " (:seed-input world)) [80 80 95] ui/bg)
+      (swap! row inc)
       ;; separator
       (ui/write-line r @row (apply str (repeat (:w r) "-")) [40 40 40] ui/bg)
       (swap! row inc)
@@ -872,7 +875,7 @@
   [tw th]
   (sfx/scatter-runes tw th 30 [200 50 30]))  ;; crimson runes
 
-(defn render-death-screen [world runes scroll-offset frame]
+(defn render-death-screen [world runes scroll-offset frame replay-code]
   (let [[tw th] (term-dims)
         cx (quot tw 2)
         cy (quot th 2)
@@ -972,7 +975,33 @@
           (term/move-cursor (max 1 (- cx (quot (count dmsg) 2))) msg-y)
           (term/set-fg 200 60 40)
           (term/set-bg 10 10 10)
-          (term/write dmsg))))
+          (term/write dmsg)
+          ;; seed line — note/share to replay this exact run via ?seed=
+          (let [sd (:seed-input world)
+                sline (str "seed " sd "  ·  ?seed=" sd " to replay")
+                sy (min (- th 1) (+ msg-y 2))]
+            (term/move-cursor (max 1 (- cx (quot (count sline) 2))) sy)
+            (term/set-fg 110 105 90)
+            (term/set-bg 10 10 10)
+            (term/write sline)
+            ;; replay code — wrapped across the lower rows. The full code replays
+            ;; the exact run via ?replay=; long codes may overflow (share the seed).
+            (when (and replay-code (> (count replay-code) 0))
+              (let [cw (max 24 (- tw 4))
+                    lines (loop [s replay-code acc []]
+                            (if (<= (count s) cw)
+                              (conj acc s)
+                              (recur (subs s cw) (conj acc (subs s 0 cw)))))
+                    ly0 (min (- th 2) (+ sy 2))]
+                (term/move-cursor 2 ly0)
+                (term/set-fg 70 85 75) (term/set-bg 10 10 10)
+                (term/write "replay code (paste into ?replay=):")
+                (loop [i 0 ls lines]
+                  (when (and (seq ls) (< (+ ly0 1 i) th))
+                    (term/move-cursor 2 (+ ly0 1 i))
+                    (term/set-fg 110 125 105) (term/set-bg 10 10 10)
+                    (term/write (first ls))
+                    (recur (inc i) (rest ls))))))))))
     ;; message log — scrollable
     (let [log (or (:log world) [])
           log-count (count log)

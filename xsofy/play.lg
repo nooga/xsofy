@@ -1,0 +1,122 @@
+(ns xsofy.play
+  "The core play-screen turn loop, on the unified poll-based event loop
+   (xsofy.ui). Extracted from main so it is testable without launching the
+   game (requiring xsofy.main runs -main)."
+  (:require [term]
+            [xsofy.world :as world]
+            [xsofy.render :as render]
+            [xsofy.ui :as ui]
+            [xsofy.dispatch :as dispatch]))
+
+;; --- Play loop (poll-based; #56) ------------------------------------------
+;; The core turn loop runs on the unified event loop (xsofy.ui/run-loop):
+;;   - input-source feeds parsed [:action] events; play-step dispatches each
+;;     through the deterministic dispatch contract (seed + :action-log).
+;;   - a cosmetic clock-source ticks each frame: it advances an in-flight
+;;     auto-action (rest/run/autoexplore/auto-target) one step per tick and is
+;;     the seam for future idle/ambient animation. Ticks are NEVER dispatched
+;;     or logged, so replay stays bit-identical.
+;; A real keypress in the same batch is folded before the tick, so it cancels
+;; in-flight auto-mode (the interrupt) before the tick's auto-step fires. The
+;; loop exits (reduced world') when a screen opens or the game ends; the outer
+;; game-loop then dispatches that screen.
+
+(defn auto-key-for
+  "The implicit action for an in-flight auto-mode, or nil if not auto-moving."
+  [world]
+  (cond
+    (:resting world) :wait
+    (:running-dir world) (let [[dx dy] (:running-dir world)]
+                           (cond (and (= dx 0) (< dy 0)) :up
+                                 (and (= dx 0) (> dy 0)) :down
+                                 (and (< dx 0) (= dy 0)) :left
+                                 (and (> dx 0) (= dy 0)) :right
+                                 :else nil))
+    (:autoexploring world) :autoexplore
+    (:auto-target world) :auto-target-step
+    :else nil))
+
+(defn apply-auto-stops
+  "Stop an active auto-mode when something interesting happens — death, a
+   visible threatening enemy, finished resting, a blocked run, or a full
+   inventory. `world` is the pre-turn world (for the run-blocked turn check)."
+  [new-world world]
+  (if (or (:resting new-world) (:running-dir new-world) (:autoexploring new-world) (:auto-target new-world))
+    (let [player (get-in new-world [:entities :player])
+          hp (get-in player [:body :hp] 0)
+          max-hp (get-in player [:body :max-hp] 1)
+          fov (or (:fov new-world) #{})
+          enemies (some (fn [e]
+                          (and (:ai e)
+                               (not= :player (:id e))
+                               (:pos e)
+                               (contains? fov (:pos e))
+                               (contains? #{:hunt :investigate :flee} (get-in e [:ai :state]))))
+                        (vals (:entities new-world)))
+          run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
+                           (= (:turn new-world) (:turn world)))
+          dead (nil? player)]
+      (cond
+        dead (dissoc new-world :resting :running-dir :autoexploring :auto-target)
+        enemies (-> new-world
+                    (dissoc :resting :running-dir :autoexploring :auto-target)
+                    (world/log-msg "You stop — enemy spotted!"))
+        (and (:resting new-world) (>= hp max-hp))
+        (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
+        run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
+        (:inventory-full new-world)
+        (-> new-world
+            (dissoc :autoexploring :auto-target :inventory-full))
+        :else new-world))
+    new-world))
+
+(defn play-advance
+  "Dispatch one turn (`key` against `world`), apply auto-stops, then present the
+   frame (full render on floor-change/resize, else dirty + between-turn vfx).
+   Returns the run-loop state, or (reduced world') when a screen opens / the game
+   ends so the outer game-loop can take over."
+  [state world key]
+  (let [prev (:world state)
+        new-world (apply-auto-stops (dispatch/dispatch world key) world)
+        cur-size (term/size)
+        resized (not= cur-size (:size state))
+        floor-changed (not= (:depth new-world) (:depth prev))]
+    (if (or (not (:running new-world)) (:screen new-world))
+      (reduced new-world)
+      (do
+        (if (or floor-changed resized)
+          (render/render-full new-world)
+          (do (render/render-dirty new-world prev)
+              (when (seq (:vfx new-world))
+                (let [[tw th] cur-size
+                      panels (ui/layout tw th)]
+                  (render/animate-vfx! new-world (:map panels))))))
+        (assoc state :world (dissoc new-world :vfx) :size cur-size)))))
+
+(defn play-step
+  "The play loop's scan. [:action] dispatches an explicit key (cancelling any
+   auto-mode first); [:tick] advances ambient :ui and, if auto-moving, dispatches
+   one auto-step. Both route through play-advance / the deterministic dispatch."
+  [state ev]
+  (let [[tag payload] ev
+        world (:world state)]
+    (case tag
+      :action (play-advance state
+                            (dissoc world :resting :running-dir :autoexploring :auto-target)
+                            payload)
+      :tick (let [st (update-in state [:ui :frame] (fn [f] (inc (or f 0))))
+                  ak (auto-key-for world)]
+              (if ak (play-advance st world ak) st))
+      state)))
+
+(defn run-play-loop
+  "Drive the play screen on the unified poll-based loop. Returns the world when a
+   screen opens (so game-loop dispatches it) or when the game ends. Never blocks
+   while idle (input is polled), so it stays responsive in native + wasm."
+  [world size]
+  (ui/run-loop
+    {:sources  [(ui/input-source) (ui/clock-source 0)]
+     :state    {:world world :size size :ui {:frame 0}}
+     :step     play-step
+     :render   (fn [_])          ;; rendering is turn-aware; done in play-advance
+     :frame-ms 30}))

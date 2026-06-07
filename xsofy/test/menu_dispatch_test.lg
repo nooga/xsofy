@@ -1,0 +1,86 @@
+(ns xsofy.test.menu-dispatch-test
+  "Quick-menu mutating actions (use / equip / unequip / drop) must go through the
+   deterministic dispatch contract — folded into the seed, recorded in
+   :action-log, and reproduced bit-identically by replay.
+
+   Before this fix the menu mutated the world directly (xsofy.main's
+   execute-menu-action calling world/use-item, ent/equip-item, ent/drop-item),
+   so item use/equip/drop were INVISIBLE to replay: a recorded run replayed to a
+   different world (the smoking gun — a used potion stayed in the inventory on
+   replay). These tests pin the contract at the dispatch layer: the typed action
+   both mutates and is replayable."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.world :as world]
+            [xsofy.dispatch :as dispatch]))
+
+(defn- item-with-slot [w slot]
+  (first (filter #(= slot (get-in w [:entities % :item :slot]))
+                 (get-in w [:entities :player :inventory]))))
+
+(defn- replays-identically? [seed live]
+  (let [rep (dispatch/replay 79 30 seed (:action-log live))]
+    (and (= (:seed live) (:seed rep))
+         (= (:entities live) (:entities rep)))))
+
+;; Player starts with dagger + leather-armor EQUIPPED and a stacked health
+;; potion (count 2). So equip is tested on a freshly-unequipped item.
+
+(deftest drop-action-dispatches-and-replays
+  (testing "{:type :drop} removes the item, logs it, advances the seed, and replays identically"
+    (let [seed 12345
+          w0   (world/make-world 79 30 seed)
+          potion (item-with-slot w0 :consumable)
+          live (dispatch/dispatch w0 {:type :drop :id potion})]
+      (is (not (some #{potion} (get-in live [:entities :player :inventory]))) "item left the inventory")
+      (is (= [{:type :drop :id potion}] (:action-log live)) "action logged")
+      (is (not= (:seed w0) (:seed live)) "seed advanced")
+      (is (replays-identically? seed live) "replay reproduces entity state"))))
+
+(deftest unequip-action-dispatches-and-replays
+  (testing "{:type :unequip} removes equipped gear, logs it, and replays identically"
+    (let [seed   12345
+          w0     (world/make-world 79 30 seed)
+          weapon (item-with-slot w0 :weapon)
+          live   (dispatch/dispatch w0 {:type :unequip :id weapon})]
+      (is (nil? (get-in live [:entities :player :equipment :weapon])) "weapon slot cleared")
+      (is (= [{:type :unequip :id weapon}] (:action-log live)) "action logged")
+      (is (replays-identically? seed live) "replay reproduces equipment state"))))
+
+(deftest equip-action-dispatches-and-replays
+  (testing "{:type :equip} equips an unequipped item into its slot, logs it, and replays identically"
+    (let [seed   12345
+          w0     (world/make-world 79 30 seed)
+          weapon (item-with-slot w0 :weapon)
+          bare   (dispatch/dispatch w0 {:type :unequip :id weapon})   ; take it off first
+          live   (dispatch/dispatch bare {:type :equip :id weapon})]  ; then re-equip
+      (is (= weapon (get-in live [:entities :player :equipment :weapon])) "item equipped")
+      (is (= [{:type :unequip :id weapon} {:type :equip :id weapon}] (:action-log live)) "both logged")
+      (is (replays-identically? seed live) "replay reproduces equipment state"))))
+
+(deftest enchant-action-dispatches-and-is-deterministic
+  (testing "{:type :enchant} enchants the target, consumes the scroll, logs, and
+            is a pure deterministic dispatch (the scroll is a spawned item, so we
+            assert dispatch purity rather than replay-from-seed)"
+    (let [w0     (world/make-world 79 30 12345)
+          weapon (item-with-slot w0 :weapon)
+          gi     (world/give-item w0 :scroll-enchant :player)
+          w      (first gi)
+          scroll (second gi)
+          act    {:type :enchant :id weapon :scroll-id scroll}
+          live   (dispatch/dispatch w act)
+          again  (dispatch/dispatch w act)]
+      (is (= 1 (get-in live [:entities weapon :item :enchant])) "target gained +1 enchant")
+      (is (not (some #{scroll} (get-in live [:entities :player :inventory]))) "scroll consumed")
+      (is (= [act] (:action-log live)) "action logged")
+      (is (not= (:seed w) (:seed live)) "seed advanced")
+      (is (= (:entities live) (:entities again)) "dispatch is deterministic (pure fn)"))))
+
+(deftest use-item-action-dispatches-and-replays
+  (testing "{:type :use-item} consumes the item, logs it, and replays identically (regression guard)"
+    (let [seed   12345
+          w0     (world/make-world 79 30 seed)
+          potion (item-with-slot w0 :consumable)
+          live   (dispatch/dispatch w0 {:type :use-item :id potion})]
+      (is (= 1 (get-in live [:entities potion :item :count])) "stack decremented 2 -> 1")
+      (is (= [{:type :use-item :id potion}] (:action-log live)) "action logged")
+      (is (replays-identically? seed live) "replay reproduces entity state"))))

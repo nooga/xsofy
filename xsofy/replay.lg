@@ -1,0 +1,246 @@
+(ns xsofy.replay
+  "Shareable replay codes.
+
+   SCOPE — a replay code captures (seed, :action-log) and reproduces every turn
+   that flows through xsofy.dispatch: bare-keyword turns AND the parameterized
+   item actions (use/equip/unequip/drop/enchant) the menus route through dispatch.
+   The seed reproduces the opening state (title/quest/scheme/world generation).
+   Inscribe and hazard-confirm interactions are still NOT reproducible — those
+   handlers mutate the world outside dispatch, so they never reach :action-log;
+   such a run reproduces its opening state and all dispatch-routed turns.
+
+   This packs (seed, action-log) into a compact, URL-safe base64 string suitable
+   for a ?replay= link or XSOFY_REPLAY env var.
+
+   Wire format (bytes, then url-safe base64, no padding):
+     1   version (= 1; v1-exact — future versions reject v1 codes by default)
+     8   seed                       (i64 big-endian)
+     1   dict size D                (distinct actions, < 256)
+     D*  for each entry, a self-describing record:
+           len>0 : 1 len + ASCII name bytes                  (bare keyword)
+           len=0 : sentinel, then type + id keyword fields,
+                   then a scroll-id field (its own len, 0 = absent)
+                   (a parameterized map action {:type :id (:scroll-id)})
+     4   run count R                (u32 big-endian)
+     R*  for each run: 1 dict-index + varint run-length
+
+   Runs are run-length-encoded over the dictionary indices, which compresses the
+   long streaks of repeated movement typical of a roguelike. Keyword names and
+   the type/id/scroll-id of map actions must be ASCII. Keyword-only codes are
+   byte-identical to before the map-action support landed (the len=0 sentinel is
+   free because keyword names are never empty) — so no version bump was needed.
+
+   ABI — action keywords (and map-action :type/:id names) are wire-format ABI.
+   Renaming one breaks all existing replay codes; the format does not migrate.")
+
+(def ^:private VERSION 1)
+
+;; --- url-safe base64 (RFC 4648 §5, no padding) ---
+
+(def ^:private b64-alphabet
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+(def ^:private b64-decode-map
+  (reduce (fn [m i] (assoc m (int (nth b64-alphabet i)) i))
+          {} (range (count b64-alphabet))))
+
+(defn b64-encode
+  "Encode a vector of int byte values [0,255] to a url-safe base64 string."
+  [bytes]
+  (let [n (count bytes)]
+    (loop [i 0 out []]
+      (if (>= i n)
+        (apply str out)
+        (let [b0 (nth bytes i)
+              b1 (if (< (+ i 1) n) (nth bytes (+ i 1)) 0)
+              b2 (if (< (+ i 2) n) (nth bytes (+ i 2)) 0)
+              rem (- n i)
+              c0 (bit-and (unsigned-bit-shift-right b0 2) 0x3F)
+              c1 (bit-and (bit-or (bit-shift-left b0 4) (unsigned-bit-shift-right b1 4)) 0x3F)
+              c2 (bit-and (bit-or (bit-shift-left b1 2) (unsigned-bit-shift-right b2 6)) 0x3F)
+              c3 (bit-and b2 0x3F)
+              chs (cond
+                    (= rem 1) [c0 c1]
+                    (= rem 2) [c0 c1 c2]
+                    :else     [c0 c1 c2 c3])]
+          (recur (+ i 3) (into out (map (fn [c] (nth b64-alphabet c)) chs))))))))
+
+(defn b64-decode
+  "Decode a url-safe base64 string to a vector of int byte values. Rejects any
+   character outside the url-safe base64 alphabet with one controlled error
+   (rather than crashing later in the bit math on a nil)."
+  [s]
+  (let [vals (mapv (fn [c]
+                     (or (get b64-decode-map (int c))
+                         (throw (ex-info "replay: invalid character in replay code"
+                                         {:char c}))))
+                   s)
+        n (count vals)]
+    (loop [i 0 out []]
+      (if (>= i n)
+        out
+        (let [v0 (nth vals i)
+              v1 (if (< (+ i 1) n) (nth vals (+ i 1)) 0)
+              v2 (if (< (+ i 2) n) (nth vals (+ i 2)) 0)
+              v3 (if (< (+ i 3) n) (nth vals (+ i 3)) 0)
+              rem (- n i)
+              b0 (bit-and (bit-or (bit-shift-left v0 2) (unsigned-bit-shift-right v1 4)) 0xFF)
+              b1 (bit-and (bit-or (bit-shift-left v1 4) (unsigned-bit-shift-right v2 2)) 0xFF)
+              b2 (bit-and (bit-or (bit-shift-left v2 6) v3) 0xFF)
+              bs (cond
+                   (<= rem 1) []
+                   (= rem 2)  [b0]
+                   (= rem 3)  [b0 b1]
+                   :else      [b0 b1 b2])]
+          (recur (+ i 4) (into out bs)))))))
+
+;; --- byte helpers ---
+
+(defn- i64-be [n]
+  (mapv (fn [sh] (bit-and (unsigned-bit-shift-right n sh) 0xFF)) [56 48 40 32 24 16 8 0]))
+
+(defn- read-i64-be [bytes off]
+  (reduce (fn [acc i] (bit-or (bit-shift-left acc 8) (nth bytes (+ off i)))) 0 (range 8)))
+
+(defn- u32-be [n]
+  (mapv (fn [sh] (bit-and (unsigned-bit-shift-right n sh) 0xFF)) [24 16 8 0]))
+
+(defn- read-u32-be [bytes off]
+  (reduce (fn [acc i] (bit-or (bit-shift-left acc 8) (nth bytes (+ off i)))) 0 (range 4)))
+
+(defn- varint [n]
+  (loop [n n out []]
+    (if (< n 0x80)
+      (conj out n)
+      (recur (unsigned-bit-shift-right n 7) (conj out (bit-or 0x80 (bit-and n 0x7F)))))))
+
+(defn- read-varint [bytes off]
+  (loop [off off shift 0 acc 0]
+    (let [b (nth bytes off)
+          acc (bit-or acc (bit-shift-left (bit-and b 0x7F) shift))]
+      (if (zero? (bit-and b 0x80))
+        [acc (inc off)]
+        (recur (inc off) (+ shift 7) acc)))))
+
+(defn- name-bytes [kw]
+  ;; action keyword names must be ASCII — the dictionary stores raw codepoint
+  ;; bytes, so a non-ASCII name would produce a code that crashes on decode.
+  (let [bs (mapv int (name kw))]
+    (when-not (every? (fn [b] (< b 128)) bs)
+      (throw (ex-info "replay: action keyword name is not ASCII" {:keyword kw})))
+    bs))
+
+;; --- dictionary entries: bare keyword OR parameterized map action ---
+;; A keyword entry is [len name...] with len >= 1 (names are non-empty). That
+;; leaves a 0 length free as the sentinel for a parameterized map action
+;; {:type :id (:scroll-id)} — item use/equip/unequip/drop/enchant routed through
+;; dispatch. Keyword-only codes are byte-identical to before (no version bump).
+
+(defn- kw-field [kw]
+  (let [nb (name-bytes kw)]
+    (into [(count nb)] nb)))
+
+(defn- entry-bytes [action]
+  (if (keyword? action)
+    (kw-field action)
+    (let [{:keys [type id scroll-id]} action]
+      (when-not (and type id)
+        (throw (ex-info "replay: unsupported action shape (need :type and :id)" {:action action})))
+      (into (into (into [0] (kw-field type)) (kw-field id))
+            (if scroll-id (kw-field scroll-id) [0])))))
+
+(defn- read-name [bytes off]
+  (let [len (nth bytes off)]
+    [(apply str (map char (subvec bytes (inc off) (+ off 1 len)))) (+ off 1 len)]))
+
+(defn- read-entry [bytes off]
+  (let [len (nth bytes off)]
+    (if (> len 0)
+      (let [[nm off2] (read-name bytes off)]
+        [(keyword nm) off2])
+      ;; sentinel 0 -> parameterized map action
+      (let [[tnm off2] (read-name bytes (inc off))
+            [inm off3] (read-name bytes off2)
+            slen (nth bytes off3)]
+        (if (> slen 0)
+          (let [[snm off4] (read-name bytes off3)]
+            [{:type (keyword tnm) :id (keyword inm) :scroll-id (keyword snm)} off4])
+          [{:type (keyword tnm) :id (keyword inm)} (inc off3)])))))
+
+;; --- RLE over a sequence ---
+
+(defn- rle [xs]
+  (loop [xs (seq xs) out []]
+    (if (nil? xs)
+      out
+      (let [x (first xs)
+            run (count (take-while (fn [y] (= y x)) xs))]
+        (recur (drop run xs) (conj out [x run]))))))
+
+;; --- encode / decode ---
+
+(defn encode
+  "Pack [seed actions] into a url-safe base64 replay code. `actions` is the
+   world's :action-log — bare keywords and/or parameterized map actions
+   ({:type :id (:scroll-id)})."
+  [seed actions]
+  (let [dict (vec (distinct actions))
+        _    (when (>= (count dict) 256)
+               (throw (ex-info "replay: too many distinct actions; dict size must fit one byte (< 256)"
+                               {:count (count dict)})))
+        idx  (reduce (fn [m i] (assoc m (nth dict i) i)) {} (range (count dict)))
+        runs (rle (map idx actions))
+        head (into (into [VERSION] (i64-be seed)) [(count dict)])
+        dict-bytes (reduce (fn [acc a] (into acc (entry-bytes a))) [] dict)
+        run-bytes (reduce (fn [acc [i run]]
+                            (into (conj acc i) (varint run)))
+                          [] runs)
+        bytes (into (into (into head dict-bytes) (u32-be (count runs))) run-bytes)]
+    (b64-encode bytes)))
+
+(defn decode
+  "Decode a replay code back to {:seed seed :actions [kw ...]}."
+  [code]
+  (let [bytes (b64-decode code)
+        version (nth bytes 0)
+        seed (read-i64-be bytes 1)
+        dict-n (nth bytes 9)]
+    (when (not= version VERSION)
+      (throw (ex-info "replay: unknown code version" {:version version})))
+    (let [[dict off]
+          (loop [k 0 off 10 dict []]
+            (if (>= k dict-n)
+              [dict off]
+              (let [[action off2] (read-entry bytes off)]
+                (recur (inc k) off2 (conj dict action)))))
+          run-count (read-u32-be bytes off)
+          _ (when (>= run-count 1000000)
+              (throw (ex-info "replay: implausible run count" {:run-count run-count})))
+          off (+ off 4)
+          actions (loop [r 0 off off acc []]
+                    (if (>= r run-count)
+                      acc
+                      (let [di (nth bytes off)
+                            [run off2] (read-varint bytes (inc off))]
+                        (when (>= di (count dict))
+                          (throw (ex-info "replay: dict index out of range" {:index di})))
+                        (when (>= run 1000000)
+                          (throw (ex-info "replay: implausible run length" {:run run})))
+                        (recur (inc r) off2
+                               (into acc (repeat run (nth dict di)))))))]
+      {:seed seed :actions actions})))
+
+(defn encode-run
+  "Convenience: replay code for a finished world (its :seed-input + :action-log).
+   The log may mix bare keywords and parameterized map actions (item use/equip/
+   unequip/drop/enchant routed through dispatch) — the wire format carries both."
+  [world]
+  (encode (:seed-input world) (or (:action-log world) [])))
+
+(defn encode-run-safe
+  "Like encode-run, but returns nil instead of throwing if encoding fails for any
+   reason (e.g. an unexpected action shape or a non-ASCII name). Callers that
+   merely DISPLAY a code (the death screen) use this so a corner-case run can
+   never crash the game — it falls back to showing the seed alone."
+  [world]
+  (try (encode-run world) (catch e nil)))

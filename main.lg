@@ -7,15 +7,16 @@
             [string]
             [xsofy.world :as world]
             [xsofy.entities :as ent]
-            [xsofy.input :as input]
             [xsofy.render :as render]
             [xsofy.ui :as ui]
             [xsofy.runes :as runes]
+            [xsofy.play :as play]
             [xsofy.title :as title]
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
-            [xsofy.seed :as seed]))
+            [xsofy.seed :as seed]
+            [xsofy.replay :as replay]))
 
 
 (defn init-terminal []
@@ -55,65 +56,37 @@
     (when (and (>= sel 0) (< sel (count inv)))
       (nth inv sel nil))))
 
+;; The inventory-screen item actions, like the quick-menu, route world-mutating
+;; actions through dispatch (seed + :action-log) — guards/messages live in
+;; world's *-action handlers — and only manage the :inventory screen state here.
+
 (defn inv-equip [world]
   (if-let [item-id (sel-item-id world)]
-    (let [item (get-in world [:entities item-id])
-          slot (get-in item [:item :slot])
-          iname (get-item-name world item-id)]
-      (if (and slot (not= slot :consumable))
-        (-> (ent/equip-item world item-id :player)
-            (world/log-msg (str "You equip the " iname "."))
-            (assoc :screen :inventory))
-        (assoc world :screen :inventory)))
+    (-> (dispatch/dispatch world {:type :equip :id item-id})
+        (assoc :screen :inventory))
     (assoc world :screen :inventory)))
 
 (defn inv-unequip [world]
   (if-let [item-id (sel-item-id world)]
-    (let [item (get-in world [:entities item-id])
-          slot (get-in item [:item :slot])
-          iname (get-item-name world item-id)]
-      (if slot
-        (if (ent/cursed? world item-id)
-          (-> world
-              (world/log-msg (str "The " iname " is cursed! You can't remove it."))
-              (assoc :screen :inventory))
-          (-> (ent/unequip-item world :player slot)
-              (world/log-msg (str "You remove the " iname "."))
-              (assoc :screen :inventory)))
-        (assoc world :screen :inventory)))
+    (-> (dispatch/dispatch world {:type :unequip :id item-id})
+        (assoc :screen :inventory))
     (assoc world :screen :inventory)))
 
 (defn inv-drop [world]
   (if-let [item-id (sel-item-id world)]
-    (let [iname (get-item-name world item-id)
-          equipment (or (get-in world [:entities :player :equipment]) {})
-          slot (get-in world [:entities item-id :item :slot])
-          equipped-id (when slot (get equipment slot))
-          ;; can't drop equipped cursed items
-          is-equipped-cursed (and (= equipped-id item-id) (ent/cursed? world item-id))]
-      (if is-equipped-cursed
-        (-> world
-            (world/log-msg (str "The " iname " is cursed! You can't remove it."))
-            (assoc :screen :inventory))
-        (let [w (if (= equipped-id item-id)
-                  (ent/unequip-item world :player slot)
-                  world)]
-          (-> (ent/drop-item w item-id :player)
-              (world/log-msg (str "You drop the " iname "."))
-              (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world))))))))
+    (-> (dispatch/dispatch world {:type :drop :id item-id})
+        (assoc :screen :inventory :inv-sel (max 0 (dec (inv-sel world)))))
     (assoc world :screen :inventory)))
 
 (defn inv-use [world]
   (if-let [item-id (sel-item-id world)]
-    (let [item (get-in world [:entities item-id])
-          slot (get-in item [:item :slot])]
-      (if (= slot :consumable)
-        (let [result (world/use-item world item-id)]
-          ;; if use-item opened a submenu (enchant), keep its screen
-          (if (:screen result)
-            (dissoc result :inv-sel)
-            (dissoc result :screen :inv-sel)))
-        (assoc world :screen :inventory)))
+    (if (= :consumable (get-in world [:entities item-id :item :slot]))
+      (let [result (dispatch/dispatch world {:type :use-item :id item-id})]
+        ;; if use-item opened a submenu (enchant), keep its screen
+        (if (:screen result)
+          (dissoc result :inv-sel)
+          (dissoc result :screen :inv-sel)))
+      (assoc world :screen :inventory))
     (assoc world :screen :inventory)))
 
 (defn inv-inscribe [world]
@@ -228,52 +201,38 @@
         old-screen (:screen world)]
     (if (nil? item-id)
       world
-      (let [iname (get-item-name world item-id)
-            equipment (or (get-in world [:entities :player :equipment]) {})
-            item (get-in world [:entities item-id])
-            slot (get-in item [:item :slot])
+      (let [slot (get-in world [:entities item-id :item :slot])
             result (case action
-                     :equip
-                     (if (and slot (not= slot :consumable))
-                       (-> (ent/equip-item world item-id :player)
-                           (world/log-msg (str "You equip the " iname ".")))
-                       world)
-
-                     :unequip
-                     (if slot
-                       (if (ent/cursed? world item-id)
-                         (world/log-msg world (str "The " iname " is cursed! You can't remove it."))
-                         (-> (ent/unequip-item world :player slot)
-                             (world/log-msg (str "You remove the " iname "."))))
-                       world)
-
-                     :drop
-                     (let [equipped-id (when slot (get equipment slot))
-                           is-cursed (and (= equipped-id item-id) (ent/cursed? world item-id))]
-                       (if is-cursed
-                         (world/log-msg world (str "The " iname " is cursed! You can't remove it."))
-                         (let [w (if (= equipped-id item-id)
-                                   (ent/unequip-item world :player slot)
-                                   world)]
-                           (-> (ent/drop-item w item-id :player)
-                               (world/log-msg (str "You drop the " iname "."))))))
+                     ;; world-mutating menu actions go through dispatch so they
+                     ;; fold into the seed + :action-log and replay identically.
+                     ;; Guards/messages live in world's *-action handlers.
+                     :equip   (dispatch/dispatch world {:type :equip :id item-id})
+                     :unequip (dispatch/dispatch world {:type :unequip :id item-id})
+                     :drop    (dispatch/dispatch world {:type :drop :id item-id})
 
                      :use
                      (if (= slot :consumable)
-                       (world/use-item world item-id)
+                       (dispatch/dispatch world {:type :use-item :id item-id})
                        world)
 
                      :enchant
                      (let [scroll-id (:enchant-scroll-id world)]
                        (if scroll-id
-                         (-> (world/enchant-item world item-id scroll-id)
+                         ;; dispatch the assembled (target, scroll) action so the
+                         ;; enchant + scroll-consume fold into the seed + log
+                         (-> (dispatch/dispatch world {:type :enchant :id item-id :scroll-id scroll-id})
                              (dissoc :enchant-scroll-id))
                          world))
 
                      world)]
-        ;; if the action set a NEW screen, keep it (e.g. enchant menu)
-        ;; otherwise strip all menu state to return to game
-        (if (and (:screen result) (not= (:screen result) old-screen))
+        ;; Preserve submenu transitions when the action keeps us on a screen
+        ;; because it changed the menu mode/state, even if the screen keyword
+        ;; itself stayed :quick-menu (e.g. use -> enchant target select). Plain
+        ;; mutating actions like drop/equip should still fall back to the game.
+        (if (and (:screen result)
+                 (or (not= (:screen result) old-screen)
+                     (not= (:menu-action result) (:menu-action world))
+                     (not= (:enchant-scroll-id result) (:enchant-scroll-id world))))
           (dissoc result :menu-sel)
           (dissoc result :screen :menu-action :menu-sel :enchant-scroll-id))))))
 
@@ -359,17 +318,51 @@
 
       :else world)))
 
+(defn assemble-world
+  "Build the starting world for `seed` and graft on its (seed-derived) title,
+   scheme, and quest. Title/scheme/quest are cosmetic — they don't touch the
+   gameplay seed chain — so this world replays identically to one made by
+   new-game from the same seed."
+  [seed title scheme quest]
+  (-> (world/make-world 79 30 seed)
+      (assoc :title title
+             :scheme scheme
+             :quest-item (:item quest))
+      (#(reduce world/log-msg % (:messages quest)))))
+
 (defn new-game []
   (let [sd  (seed/boot-seed)
         rng {:seed sd}
         {:keys [title scheme rng]} (title/show-title-screen rng)
         [quest rng] (title/generate-quest rng)
         _ (title/show-descending-screen 1 scheme)]
-    (-> (world/make-world 79 30 sd)
-        (assoc :title title
-               :scheme scheme
-               :quest-item (:item quest))
-        (#(reduce world/log-msg % (:messages quest))))))
+    (assemble-world sd title scheme quest)))
+
+(defn build-game
+  "Reconstruct a run's starting world from its seed, without the interactive
+   title screen (same pick order as new-game: title -> scheme -> quest)."
+  [seed]
+  (let [rng {:seed seed}
+        [title rng]  (title/generate-title rng)
+        [scheme rng] (title/pick-scheme rng)
+        [quest rng]  (title/generate-quest rng)]
+    (assemble-world seed title scheme quest)))
+
+(defn play-replay
+  "Decode a replay code, reconstruct the run, and step through its actions with
+   a short delay so the run plays out on screen. Returns the final world so the
+   caller can hand control back to the player at the recorded end-state."
+  [code]
+  (let [{:keys [seed actions]} (replay/decode code)
+        w0 (build-game seed)]
+    (render/render-full w0)
+    (sfx/pause! 400)
+    (reduce (fn [w action]
+              (let [w' (dispatch/dispatch w action)]
+                (render/render-full w')
+                (sfx/pause! 90)
+                w'))
+            w0 actions)))
 
 (defn game-loop
   ([world]
@@ -434,36 +427,55 @@
          :death
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
-               poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
+               ;; compute ONCE — encode is O(n) per call. encode-run-safe yields
+               ;; nil for runs whose log has map actions (item use/equip/etc via
+               ;; dispatch); the death screen then shows the seed alone, instead
+               ;; of crashing the game on encode-run's keyword-only guard.
+               replay-code (replay/encode-run-safe world)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
-               result (loop [scroll 0 frame 0]
-                        ;; animate the death screen continuously; the runes keep
-                        ;; pulsing while we wait for a key instead of freezing.
-                        (let [[k nf] (sfx/drive-until-key
-                                       frame
-                                       (fn [f] (render/render-death-screen world runes scroll f))
-                                       poll!)]
-                          (cond
-                            (or (= k "n") (= k "\r") (= k "\n") (= k " "))
-                            :new-game
-                            (= k :eof) (assoc world :running false)
-                            (= k "\u001b")
-                            (if *in-wasm*
-                              (do
-                                (render/render-hazard-prompt world "Start a new game?")
-                                (let [confirm (term/read-key)]
-                                  (if (= confirm "y")
-                                    :new-game
-                                    (recur scroll nf))))
-                              (assoc world :running false))
-                            (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)) nf)
-                            (or (= k "k") (= k "\u001b[A")) (recur (inc scroll) nf)
-                            :else (recur scroll nf))))]
-           (if (= result :new-game)
+               ;; Animate the death screen via the poll-based event loop: a
+               ;; cosmetic clock pulses the runes each tick while we wait for a
+               ;; key, instead of freezing on a blocking read (see xsofy.ui /
+               ;; #56). :ui carries {:frame :scroll}; raw keys drive scroll/exit.
+               step (fn [st ev]
+                      (let [[tag payload] ev]
+                        (case tag
+                          :tick (assoc st :frame payload)
+                          :action
+                          (let [k payload]
+                            (cond
+                              (or (= k "n") (= k "\r") (= k "\n") (= k " ")) (reduced :new-game)
+                              (= k :eof)                  (reduced :quit)
+                              (= k "\u001b")               (reduced :esc)
+                              (or (= k "j") (= k "\u001b[B")) (update st :scroll (fn [s] (max 0 (dec s))))
+                              (or (= k "k") (= k "\u001b[A")) (update st :scroll inc)
+                              :else st))
+                          st)))
+               result (ui/run-loop
+                        {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+                         :state    {:frame 0 :scroll 0}
+                         :step     step
+                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st) replay-code))
+                         :frame-ms 120})]
+           (cond
+             (= result :new-game)
              (let [w (new-game)]
                (render/render-full w)
                (recur w w (term/size)))
-             result))
+             ;; esc: wasm offers a restart confirm (declining re-enters the death
+             ;; screen); native esc quits.
+             (= result :esc)
+             (if *in-wasm*
+               (do
+                 (render/render-hazard-prompt world "Start a new game?")
+                 (if (= (term/read-key) "y")
+                   (let [w (new-game)]
+                     (render/render-full w)
+                     (recur w w (term/size)))
+                   (recur world world prev-size)))
+               (assoc world :running false))
+             ;; :quit (EOF)
+             :else (assoc world :running false)))
 
          :confirm-hazard
          (do
@@ -497,76 +509,18 @@
                  (recur w w (term/size)))
                w)))
 
-         ;; default: game screen
-         (let [;; determine auto-action or wait for input
-               auto-key0 (cond
-                           (:resting world) :wait
-                           (:running-dir world) (let [[dx dy] (:running-dir world)]
-                                                  (cond (and (= dx 0) (< dy 0)) :up
-                                                        (and (= dx 0) (> dy 0)) :down
-                                                        (and (< dx 0) (= dy 0)) :left
-                                                        (and (> dx 0) (= dy 0)) :right
-                                                        :else nil))
-                           (:autoexploring world) :autoexplore
-                           (:auto-target world) :auto-target-step
-                           :else nil)
-               ;; queued keystroke cancels in-flight auto-action
-               interrupting (and auto-key0 (term/key-pending?))
-               world (if interrupting
-                       (dissoc world :resting :running-dir :autoexploring :auto-target)
-                       world)
-               auto-key (when (not interrupting) auto-key0)
-               key (or auto-key (input/parse-key (term/read-key)))
-               new-world (dispatch/dispatch world key)
-               ;; check if auto-mode should stop
-               new-world (if (or (:resting new-world) (:running-dir new-world) (:autoexploring new-world) (:auto-target new-world))
-                           (let [player (get-in new-world [:entities :player])
-                                 hp (get-in player [:body :hp] 0)
-                                 max-hp (get-in player [:body :max-hp] 1)
-                                 fov (or (:fov new-world) #{})
-                                 enemies (some (fn [e]
-                                                 (and (:ai e)
-                                                      (not= :player (:id e))
-                                                      (:pos e)
-                                                      (contains? fov (:pos e))
-                                                      (contains? #{:hunt :investigate :flee} (get-in e [:ai :state]))))
-                                               (vals (:entities new-world)))
-                                 ;; running stops at walls/doors/items
-                                 run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
-                                                  (= (:turn new-world) (:turn world)))
-                                 dead (nil? player)]
-                             (cond
-                               dead (dissoc new-world :resting :running-dir :autoexploring :auto-target)
-                               enemies (-> new-world
-                                           (dissoc :resting :running-dir :autoexploring :auto-target)
-                                           (world/log-msg "You stop — enemy spotted!"))
-                               (and (:resting new-world) (>= hp max-hp))
-                               (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
-                               run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
-                               (:inventory-full new-world)
-                               (-> new-world
-                                   (dissoc :autoexploring :auto-target :inventory-full))
-                               :else new-world))
-                           new-world)
-               cur-size (term/size)
-               resized (not= cur-size prev-size)
-               floor-changed (not= (:depth new-world) (:depth world))]
-           (if (or floor-changed resized (:screen new-world))
-             (do (when-not (:screen new-world)
-                   (render/render-full new-world))
-                 (recur new-world new-world cur-size))
-             (do (render/render-dirty new-world world)
-                 ;; animate vfx between turns
-                 (when (seq (:vfx new-world))
-                   (let [[tw th] cur-size
-                         panels (ui/layout tw th)]
-                     (render/animate-vfx! new-world (:map panels))))
-                 (recur (dissoc new-world :vfx) world cur-size)))))))))
+         ;; default: game screen — the poll-based turn loop (input +
+         ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         (let [result (play/run-play-loop world prev-size)]
+           (if (:running result)
+             (recur result result (term/size))
+             result)))))))
 
 (defn -main []
   (init-terminal)
   (try
-    (game-loop (new-game))
+    (let [code (seed/boot-replay)]
+      (game-loop (if code (play-replay code) (new-game))))
     (catch e
            (dbg/log "FATAL ERROR:" e)
            (dbg/dump-crash! e)
