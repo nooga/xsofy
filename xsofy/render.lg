@@ -482,17 +482,25 @@
 
             :flash
             (let [[x y] (:pos event)
-                  i2 (* intensity intensity)]
+                  i2 (* intensity intensity)
+                  tint (or (:color event) [255 255 255])
+                  ent-at-pos (core/some (fn [[_ e]] (when (= (:pos e) [x y]) e))
+                                        (:entities world))]
               (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
                 (let [tile (terrain/tget (:terrain world) (:width world) x y)
                       style (style-tile tile)
-                      white [255 255 255]
-                      fg (boost-color (:fg style) white i2)
-                      bg (boost-color (:bg style) white (* i2 0.8))
-                      ch (get terrain/tile-chars tile ".")]
+                      bg-lit (let [lv (light/light-at x y lights)]
+                               (if lv (light/apply-light (:bg style) lv) (:bg style)))
+                      base-fg (if ent-at-pos
+                                (get-in ent-at-pos [:visual :color] [200 60 60])
+                                (:fg style))
+                      fg (boost-color base-fg tint i2)
+                      ch (if ent-at-pos
+                           (get-in ent-at-pos [:visual :glyph] "?")
+                           (get terrain/tile-chars tile "."))]
                   (term/move-cursor (+ (:x r) x) (+ (:y r) y))
                   (let [[fr fg_ fb] fg] (term/set-fg fr fg_ fb))
-                  (let [[br bg_ bb] bg] (term/set-bg br bg_ bb))
+                  (let [[br bg_ bb] bg-lit] (term/set-bg br bg_ bb))
                   (term/write ch))))
 
             nil)))
