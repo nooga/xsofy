@@ -7,10 +7,10 @@
             [string]
             [xsofy.world :as world]
             [xsofy.entities :as ent]
-            [xsofy.input :as input]
             [xsofy.render :as render]
             [xsofy.ui :as ui]
             [xsofy.runes :as runes]
+            [xsofy.play :as play]
             [xsofy.title :as title]
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
@@ -432,36 +432,50 @@
                ;; dispatch); the death screen then shows the seed alone, instead
                ;; of crashing the game on encode-run's keyword-only guard.
                replay-code (replay/encode-run-safe world)
-               poll! (sfx/make-key-poller 120)  ;; calmer death-screen pulse (was 80ms)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
-               result (loop [scroll 0 frame 0]
-                        ;; animate the death screen continuously; the runes keep
-                        ;; pulsing while we wait for a key instead of freezing.
-                        (let [[k nf] (sfx/drive-until-key
-                                       frame
-                                       (fn [f] (render/render-death-screen world runes scroll f replay-code))
-                                       poll!)]
-                          (cond
-                            (or (= k "n") (= k "\r") (= k "\n") (= k " "))
-                            :new-game
-                            (= k :eof) (assoc world :running false)
-                            (= k "\u001b")
-                            (if *in-wasm*
-                              (do
-                                (render/render-hazard-prompt world "Start a new game?")
-                                (let [confirm (term/read-key)]
-                                  (if (= confirm "y")
-                                    :new-game
-                                    (recur scroll nf))))
-                              (assoc world :running false))
-                            (or (= k "j") (= k "\u001b[B")) (recur (max 0 (dec scroll)) nf)
-                            (or (= k "k") (= k "\u001b[A")) (recur (inc scroll) nf)
-                            :else (recur scroll nf))))]
-           (if (= result :new-game)
+               ;; Animate the death screen via the poll-based event loop: a
+               ;; cosmetic clock pulses the runes each tick while we wait for a
+               ;; key, instead of freezing on a blocking read (see xsofy.ui /
+               ;; #56). :ui carries {:frame :scroll}; raw keys drive scroll/exit.
+               step (fn [st ev]
+                      (let [[tag payload] ev]
+                        (case tag
+                          :tick (assoc st :frame payload)
+                          :action
+                          (let [k payload]
+                            (cond
+                              (or (= k "n") (= k "\r") (= k "\n") (= k " ")) (reduced :new-game)
+                              (= k :eof)                  (reduced :quit)
+                              (= k "\u001b")               (reduced :esc)
+                              (or (= k "j") (= k "\u001b[B")) (update st :scroll (fn [s] (max 0 (dec s))))
+                              (or (= k "k") (= k "\u001b[A")) (update st :scroll inc)
+                              :else st))
+                          st)))
+               result (ui/run-loop
+                        {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+                         :state    {:frame 0 :scroll 0}
+                         :step     step
+                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st) replay-code))
+                         :frame-ms 120})]
+           (cond
+             (= result :new-game)
              (let [w (new-game)]
                (render/render-full w)
                (recur w w (term/size)))
-             result))
+             ;; esc: wasm offers a restart confirm (declining re-enters the death
+             ;; screen); native esc quits.
+             (= result :esc)
+             (if *in-wasm*
+               (do
+                 (render/render-hazard-prompt world "Start a new game?")
+                 (if (= (term/read-key) "y")
+                   (let [w (new-game)]
+                     (render/render-full w)
+                     (recur w w (term/size)))
+                   (recur world world prev-size)))
+               (assoc world :running false))
+             ;; :quit (EOF)
+             :else (assoc world :running false)))
 
          :confirm-hazard
          (do
@@ -495,71 +509,12 @@
                  (recur w w (term/size)))
                w)))
 
-         ;; default: game screen
-         (let [;; determine auto-action or wait for input
-               auto-key0 (cond
-                           (:resting world) :wait
-                           (:running-dir world) (let [[dx dy] (:running-dir world)]
-                                                  (cond (and (= dx 0) (< dy 0)) :up
-                                                        (and (= dx 0) (> dy 0)) :down
-                                                        (and (< dx 0) (= dy 0)) :left
-                                                        (and (> dx 0) (= dy 0)) :right
-                                                        :else nil))
-                           (:autoexploring world) :autoexplore
-                           (:auto-target world) :auto-target-step
-                           :else nil)
-               ;; queued keystroke cancels in-flight auto-action
-               interrupting (and auto-key0 (term/key-pending?))
-               world (if interrupting
-                       (dissoc world :resting :running-dir :autoexploring :auto-target)
-                       world)
-               auto-key (when (not interrupting) auto-key0)
-               key (or auto-key (input/parse-key (term/read-key)))
-               new-world (dispatch/dispatch world key)
-               ;; check if auto-mode should stop
-               new-world (if (or (:resting new-world) (:running-dir new-world) (:autoexploring new-world) (:auto-target new-world))
-                           (let [player (get-in new-world [:entities :player])
-                                 hp (get-in player [:body :hp] 0)
-                                 max-hp (get-in player [:body :max-hp] 1)
-                                 fov (or (:fov new-world) #{})
-                                 enemies (some (fn [e]
-                                                 (and (:ai e)
-                                                      (not= :player (:id e))
-                                                      (:pos e)
-                                                      (contains? fov (:pos e))
-                                                      (contains? #{:hunt :investigate :flee} (get-in e [:ai :state]))))
-                                               (vals (:entities new-world)))
-                                 ;; running stops at walls/doors/items
-                                 run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
-                                                  (= (:turn new-world) (:turn world)))
-                                 dead (nil? player)]
-                             (cond
-                               dead (dissoc new-world :resting :running-dir :autoexploring :auto-target)
-                               enemies (-> new-world
-                                           (dissoc :resting :running-dir :autoexploring :auto-target)
-                                           (world/log-msg "You stop — enemy spotted!"))
-                               (and (:resting new-world) (>= hp max-hp))
-                               (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
-                               run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
-                               (:inventory-full new-world)
-                               (-> new-world
-                                   (dissoc :autoexploring :auto-target :inventory-full))
-                               :else new-world))
-                           new-world)
-               cur-size (term/size)
-               resized (not= cur-size prev-size)
-               floor-changed (not= (:depth new-world) (:depth world))]
-           (if (or floor-changed resized (:screen new-world))
-             (do (when-not (:screen new-world)
-                   (render/render-full new-world))
-                 (recur new-world new-world cur-size))
-             (do (render/render-dirty new-world world)
-                 ;; animate vfx between turns
-                 (when (seq (:vfx new-world))
-                   (let [[tw th] cur-size
-                         panels (ui/layout tw th)]
-                     (render/animate-vfx! new-world (:map panels))))
-                 (recur (dissoc new-world :vfx) world cur-size)))))))))
+         ;; default: game screen — the poll-based turn loop (input +
+         ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         (let [result (play/run-play-loop world prev-size)]
+           (if (:running result)
+             (recur result result (term/size))
+             result)))))))
 
 (defn -main []
   (init-terminal)

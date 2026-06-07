@@ -1,0 +1,64 @@
+(ns xsofy.test.play-test
+  "Tests for the poll-based play loop (xsofy.play, PR3a of #56). The headline
+   guarantee: routing turns through the unified event loop preserves the
+   deterministic (seed, :action-log) contract — explicit keys dispatch, cosmetic
+   ticks never touch :world, and an in-flight auto-mode advances one step per
+   tick (cancelled by an explicit key in the same batch)."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.world :as world]
+            [xsofy.dispatch :as dispatch]
+            [xsofy.play :as play]))
+
+(defn- state [w] {:world w :size [100 36] :ui {:frame 0}})
+(defn- world-of [st] (if (reduced? st) (deref st) (:world st)))
+
+(deftest play-step-dispatches-explicit-action
+  (testing "an explicit [:action] dispatches a turn and keeps looping"
+    (let [st' (play/play-step (state (world/make-world 79 30 4242)) [:action :wait])]
+      (is (not (reduced? st')) "no screen opened → not a loop exit")
+      (is (= [:wait] (get-in st' [:world :action-log])) "the action was dispatched + logged"))))
+
+(deftest play-step-exits-when-a-screen-opens
+  (testing "a UI action opens a screen → the loop exits (reduced) so game-loop dispatches it"
+    (let [st' (play/play-step (state (world/make-world 79 30 4242)) [:action :inventory])]
+      (is (reduced? st') "screen-open is a loop exit")
+      (is (= :inventory (:screen (deref st'))) "the opened screen is handed back"))))
+
+(deftest tick-without-auto-mode-never-touches-the-world
+  (testing "a cosmetic [:tick] advances ambient :ui only — :world untouched"
+    (let [w  (world/make-world 79 30 4242)
+          st' (play/play-step (state w) [:tick 5])]
+      (is (= (:seed w) (get-in st' [:world :seed])) "seed unchanged")
+      (is (= [] (get-in st' [:world :action-log])) "nothing dispatched/logged")
+      (is (= 1 (get-in st' [:ui :frame])) "ambient frame advanced"))))
+
+(deftest tick-with-auto-mode-advances-one-step
+  (testing "an in-flight auto-mode (resting) dispatches its implicit action on a tick"
+    (let [w   (assoc (world/make-world 79 30 4242) :resting true)
+          st' (play/play-step (state w) [:tick 0])]
+      (is (= [:wait] (:action-log (world-of st'))) "resting auto-dispatched :wait"))))
+
+(deftest explicit-key-cancels-in-flight-auto-mode
+  (testing "a real keypress cancels auto-mode and acts (the interrupt)"
+    (let [w   (assoc (world/make-world 79 30 4242) :resting true)
+          w'  (world-of (play/play-step (state w) [:action :left]))]
+      (is (not (:resting w')) "resting was cancelled")
+      (is (= [:left] (:action-log w')) "the explicit key was dispatched"))))
+
+(deftest play-loop-preserves-replay-determinism
+  (testing "driving play-step with actions (interleaved with noise ticks) yields
+            the same (seed, action-log, entities) as a pure dispatch/replay —
+            ticks never perturb the deterministic world"
+    (let [actions [:right :wait :down :left :wait :up :pickup :down-right]
+          seed    777
+          ref     (dispatch/replay 79 30 seed actions)
+          final   (reduce (fn [st a]
+                            (let [st (play/play-step st [:tick 0])      ;; cosmetic noise
+                                  st (play/play-step st [:action a])]
+                              st))
+                          (state (world/make-world 79 30 seed))
+                          actions)
+          w       (:world final)]
+      (is (= (:seed ref) (:seed w)) "seed bit-identical")
+      (is (= (:action-log ref) (:action-log w)) "action-log bit-identical")
+      (is (= (:entities ref) (:entities w)) "entity state bit-identical"))))
