@@ -17,7 +17,8 @@
   (:require [xsofy.hash :as hash]
             [xsofy.serialize :as ser]
             [xsofy.world :as world]
-            [xsofy.dispatch :as dispatch]))
+            [xsofy.dispatch :as dispatch]
+            [xsofy.det :as det]))
 
 (def default-budget
   "Retention budget: max commits kept on HEAD's chain before GC advances the
@@ -123,6 +124,82 @@
                                :turn (:turn world')})
         (assoc :head id :world world'))))
 
+(defn- clone-terrain
+  [world]
+  (if-let [t (:terrain world)]
+    (assoc world :terrain (aclone t))
+    world))
+
+(defn- start-replay-action
+  "Mirror dispatch/dispatch's seed+log contract for game-state-only replay
+   actions that can't be resolved at the world layer."
+  [world action]
+  (let [turn (:turn world)
+        fresh (clone-terrain world)
+        salted (det/advance fresh [:action turn (dispatch/action-type action)])]
+    (update salted :action-log conj action)))
+
+(defn- held-item-ids
+  [player]
+  (let [inv (or (:inventory player) [])
+        equip (vals (or (:equipment player) {}))]
+    (vec (distinct (concat inv (filter some? equip))))))
+
+(defn- drop-held-item
+  [player item-id]
+  (let [inv (vec (remove #(= item-id %) (or (:inventory player) [])))
+        equip (reduce (fn [m [slot id]]
+                        (if (= item-id id) (dissoc m slot) (assoc m slot id)))
+                      {}
+                      (seq (or (:equipment player) {})))]
+    (assoc player :inventory inv :equipment equip)))
+
+(defn- current-item-entities
+  [world player]
+  (reduce (fn [m id]
+            (if-let [item (get-in world [:entities id])]
+              (assoc m id (assoc item :pos nil))
+              m))
+          {}
+          (held-item-ids player)))
+
+(defn- rewind-world
+  [current-world target-world cord-id]
+  (let [current-player (drop-held-item (get-in current-world [:entities :player]) cord-id)
+        target-pos (:pos (get-in target-world [:entities :player]))
+        current-items (current-item-entities current-world current-player)
+        remove-ids (conj (set (keys current-items)) :player)
+        entities (reduce dissoc (:entities target-world) remove-ids)
+        entities (assoc entities :player (assoc current-player :pos target-pos))
+        entities (reduce (fn [m [id item]] (assoc m id item)) entities current-items)]
+    (assoc target-world
+           :entities entities
+           :turn (:turn current-world)
+           :seed (:seed current-world)
+           :seed-input (:seed-input current-world)
+           :action-log (:action-log current-world))))
+
+(defn- cast-knot
+  [gs action]
+  (let [base (start-replay-action (:world gs) action)
+        pair (world/give-item base :knotted-cord :player)
+        w' (first pair)
+        cord-id (second pair)]
+    (if cord-id
+      (assoc-in (commit gs action w') [:refs cord-id] (:head gs))
+      gs)))
+
+(defn- use-unwind-cord
+  [gs action cord-id]
+  (if-let [target-id (get-in gs [:refs cord-id])]
+    (if-let [target-world (materialize gs target-id)]
+      (let [base (start-replay-action (:world gs) action)
+            rewound (rewind-world base target-world cord-id)
+            branched (commit (assoc gs :head target-id :world target-world) action rewound)]
+        (update branched :refs dissoc cord-id))
+      gs)
+    gs))
+
 (defn dispatch-gs
   "Game-state-level dispatch. Resolve `action` against HEAD's world via the
    world-level dispatch. Replay (state-mutating) actions append a node and
@@ -132,10 +209,27 @@
    turn: forward play never creates unreachable nodes, and re-walking the chain
    every turn would be O(turns²).)"
   [gs action]
-  (let [w' (dispatch/dispatch (:world gs) action)]
-    (if (dispatch/replay-action? action)
-      (commit gs action w')
-      (assoc gs :world w'))))
+  (let [action-type (dispatch/action-type action)]
+    (cond
+      (= action-type :cast-runes)
+      (if (= [:knot] (:runes action))
+        (cast-knot gs action)
+        (let [w' (dispatch/dispatch (:world gs) action)]
+          (commit gs action w')))
+
+      (= action-type :use-item)
+      (let [item-id (:id action)
+            effect (get-in gs [:world :entities item-id :item :effect])]
+        (if (= :unwind effect)
+          (use-unwind-cord gs action item-id)
+          (let [w' (dispatch/dispatch (:world gs) action)]
+            (commit gs action w'))))
+
+      :else
+      (let [w' (dispatch/dispatch (:world gs) action)]
+        (if (dispatch/replay-action? action)
+          (commit gs action w')
+          (assoc gs :world w'))))))
 
 (defn replay-gs
   "Rebuild a game-state by dispatching `actions` on a fresh deterministic world."

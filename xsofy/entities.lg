@@ -94,7 +94,8 @@
 (defn consumable [m]
   {:item {:slot :consumable
           :effect (:effect m)
-          :count (or (:count m) 1)}})
+          :count (or (:count m) 1)
+          :stackable (if (contains? m :stackable) (:stackable m) true)}})
 
 (defn item-name [n]
   {:item-name n})
@@ -268,7 +269,7 @@
     ;; no owner = no pickup (avoid resurrecting a dead entity as {:inventory ...})
     (when owner
       ;; stackable consumables
-      (if (and (= slot :consumable) template)
+      (if (and (= slot :consumable) template (not= false (get-in item [:item :stackable])))
         (if-let [existing (find-stack world owner-id template)]
           ;; stack: add incoming count to existing, remove picked-up entity
           (let [old-count (or (get-in world [:entities existing :item :count]) 1)

@@ -6,6 +6,15 @@
 
 (defn- gs0 [] (dag/make-game-state (world/make-world 40 20 7)))
 
+(defn- item-with-slot [w slot]
+  (first (filter #(= slot (get-in w [:entities % :item :slot]))
+                 (get-in w [:entities :player :inventory]))))
+
+(defn- cord-ids [w]
+  (vec
+    (filter #(= :knotted-cord (get-in w [:entities % :template]))
+            (get-in w [:entities :player :inventory]))))
+
 ;; --- commit-id is the rolling :seed hash (O(1), already computed per turn) ---
 
 (deftest commit-id-is-the-seed-hash
@@ -63,6 +72,54 @@
     ;; the world update MUST still propagate so the screen toggles — otherwise
     ;; help/inventory/menu screens would silently never open
     (is (= :help (:screen (dag/head-world g1))) "screen toggled into :world")))
+
+(deftest cast-runes-knot-creates-a-cord-and-pins-head
+  (let [g0      (gs0)
+        root    (:head g0)
+        action  {:type :cast-runes :runes [:knot]}
+        g1      (dag/dispatch-gs g0 action)
+        cords   (cord-ids (dag/head-world g1))
+        cord-id (first cords)]
+    (is (= 1 (count cords)) "exactly one knot cord added to inventory")
+    (is (= 2 (count (:nodes g1))) "casting knot records a new commit")
+    (is (not= root (:head g1)) "HEAD advances to the post-knot commit")
+    (is (= root (get-in g1 [:refs cord-id])) "cord ref pins the pre-cast HEAD")
+    (is (= :knotted-cord (get-in (dag/head-world g1) [:entities cord-id :template])))))
+
+(deftest use-knot-cord-restores-world-but-keeps-current-self
+  (let [g0        (gs0)
+        weapon    (item-with-slot (dag/head-world g0) :weapon)
+        knot-gs   (dag/dispatch-gs g0 {:type :cast-runes :runes [:knot]})
+        cord-id   (first (cord-ids (dag/head-world knot-gs)))
+        knot-head (get-in knot-gs [:refs cord-id])
+        root-pos  (get-in (dag/peek knot-gs knot-head) [:entities :player :pos])
+        moved-gs  (-> knot-gs
+                      (dag/dispatch-gs {:type :unequip :id weapon})
+                      (dag/dispatch-gs :up))
+        before    (dag/head-world moved-gs)
+        turn-now  (:turn before)
+        hp-now    (get-in before [:entities :player :body :hp])
+        g'        (dag/dispatch-gs moved-gs {:type :use-item :id cord-id})
+        after     (dag/head-world g')]
+    (is (not= root-pos (get-in before [:entities :player :pos])) "precondition: player moved away from knot")
+    (is (= root-pos (get-in after [:entities :player :pos])) "player snaps back to the knot position")
+    (is (nil? (get-in after [:entities :player :equipment :weapon])) "current equipment state is preserved")
+    (is (some #{weapon} (get-in after [:entities :player :inventory])) "unequipped weapon stays in inventory")
+    (is (= hp-now (get-in after [:entities :player :body :hp])) "current HP is preserved")
+    (is (= turn-now (:turn after)) "global turn counter does not rewind")
+    (is (empty? (cord-ids after)) "the knot cord is consumed")
+    (is (nil? (get-in g' [:refs cord-id])) "the consumed cord ref is removed")
+    (is (= knot-head (dag/parent-id g' (:head g'))) "the unwind commit branches from the knot")))
+
+(deftest use-knot-cord-with-dangling-ref-fizzles-cleanly
+  (let [g0      (dag/dispatch-gs (gs0) {:type :cast-runes :runes [:knot]})
+        cord-id (first (cord-ids (dag/head-world g0)))
+        broken  (assoc-in g0 [:refs cord-id] 424242)
+        g'      (dag/dispatch-gs broken {:type :use-item :id cord-id})
+        after   (dag/head-world g')]
+    (is (= (:head broken) (:head g')) "HEAD stays put when the knot target is gone")
+    (is (some #{cord-id} (get-in after [:entities :player :inventory])) "cord is not consumed on a fizzle")
+    (is (= 424242 (get-in g' [:refs cord-id])) "broken ref stays intact for now")))
 
 ;; --- materialize / peek: regenerate a past world by replay ---
 

@@ -1084,8 +1084,10 @@
   (let [item (get-in world [:entities item-id])
         effect (get-in item [:item :effect])
         iname (or (:item-name item)
-                   (name (or (:template item) (:id item))))]
-    (case effect
+                  (when item (name (or (:template item) (:id item)))))]
+    (if-not item
+      world
+      (case effect
       :heal
       (let [heal-amt 15
             player (get-in world [:entities :player])
@@ -1132,7 +1134,7 @@
               (log-msg "The scroll crumbles. All runes are already known."))))
 
       ;; default
-      (log-msg world (str "You can't use the " iname ".")))))
+      (log-msg world (str "You can't use the " iname "."))))))
 
 ;; --- Enchanting ---
 
