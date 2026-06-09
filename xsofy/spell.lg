@@ -14,16 +14,20 @@
 ;; Each rune primitive is a fn: ctx -> ctx
 ;; Context flows through the pipeline via ->
 
-(defn make-context [world caster-id target-pos]
-  (let [caster (get-in world [:entities caster-id])
-        origin (or (:pos caster) [0 0])]
-    {:world world
-     :caster caster-id
-     :origin origin
-     :cursors (if target-pos #{target-pos} #{origin})
-     :result nil
-     :hits #{}
-     :vfx []}))
+(defn make-context
+  ([world caster-id target-pos]
+   (make-context world caster-id target-pos nil))
+  ([world caster-id target-pos opts]
+   (let [caster (get-in world [:entities caster-id])
+         origin (or (:pos caster) [0 0])]
+     {:world world
+      :caster caster-id
+      :origin origin
+      :cursors (if target-pos #{target-pos} #{origin})
+      :container (:container opts)
+      :result nil
+      :hits #{}
+      :vfx []})))
 
 ;; --- Visual Events ---
 ;; Spells emit visual events. The game loop renders them.
@@ -422,12 +426,16 @@
     ;; numbers or other literals are invalid as bare pipeline steps
     :else (spell-error ctx step :bad-step [])))
 
-(defn eval-spell [world caster-id target-pos raw-tokens]
-  "Parse flat rune tokens and evaluate. Returns {:world w :vfx [events]}."
+(defn eval-spell*
+  [world caster-id target-pos raw-tokens opts]
   (let [steps (xsofy.runes/parse-runes raw-tokens)
-        ctx (make-context world caster-id target-pos)
+        ctx (make-context world caster-id target-pos opts)
         result (reduce eval-step ctx steps)]
     {:world (:world result)
      :vfx (or (:vfx result) [])
      :error (:error result)
      :fizzle (:fizzle result)}))
+
+(defn eval-spell [world caster-id target-pos raw-tokens]
+  "Parse flat rune tokens and evaluate. Returns {:world w :vfx [events]}."
+  (eval-spell* world caster-id target-pos raw-tokens nil))
