@@ -155,6 +155,12 @@
   (item-desc "A smooth stone etched with a glowing rune. Touch it to learn its meaning.")
   (consumable {:effect :runestone :count 1}))
 
+(defitem knotted-cord
+  (visual "~" [210 190 120])
+  (item-name "knotted cord")
+  (item-desc "A loop of fate-thread tied to a remembered moment. Use it to jump back.")
+  (consumable {:effect :unwind :count 1 :stackable false}))
+
 ;; --- Arrows ---
 
 (defitem arrow
