@@ -4,6 +4,7 @@
 (ns xsofy.main
   (:require [term]
             [os]
+            [io :refer [write! flush! *err*]]
             [string]
             [xsofy.world :as world]
             [xsofy.entities :as ent]
@@ -427,12 +428,18 @@
          :death
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
-               ;; compute ONCE — encode is O(n) per call. encode-run-safe yields
-               ;; nil for runs whose log has map actions (item use/equip/etc via
-               ;; dispatch); the death screen then shows the seed alone, instead
-               ;; of crashing the game on encode-run's keyword-only guard.
-               replay-code (replay/encode-run-safe world)
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
+               ;; Dev repro capture: XSOFY_DUMP_REPLAY=1 dumps this organic run's
+               ;; replay code to stderr (redirect 2>file to capture past the TUI).
+               ;; Gated on the env var so players never see it; the WASM worker
+               ;; doesn't bridge the var, so it's effectively native-only.
+               _ (when (seq (or (os/getenv "XSOFY_DUMP_REPLAY") ""))
+                   (let [code (replay/encode-run-safe world)]
+                     (write! *err*
+                             (str "replay-code: "
+                                  (or code "(unavailable: run has parameterized actions)")
+                                  "\n"))
+                     (flush! *err*)))
                ;; Animate the death screen via the poll-based event loop: a
                ;; cosmetic clock pulses the runes each tick while we wait for a
                ;; key, instead of freezing on a blocking read (see xsofy.ui /
@@ -455,7 +462,7 @@
                         {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
                          :state    {:frame 0 :scroll 0}
                          :step     step
-                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st) replay-code))
+                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st)))
                          :frame-ms 120})]
            (cond
              (= result :new-game)
