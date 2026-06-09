@@ -67,7 +67,23 @@
 ;; the main game thread).
 (def last-camera (atom nil))
 
-(def camera-margin 8)
+;; Dead-zone as a fraction of the EFFECTIVE viewport, per axis. The camera
+;; holds while the player roams this central box; crossing it scrolls the
+;; camera 1 cell/step to keep the player on the boundary (clamped at the
+;; world edge). Fractional (not fixed cells) so the feel stays constant as
+;; the terminal resizes. Smaller frac = tighter box = more centered = more
+;; forward look-ahead + more scrolling. 0 ⇒ always-centered (option 3).
+;; Cells are ~2.3x taller than wide, so horizontal runs looser than vertical.
+(def deadzone-pct-x 60)
+(def deadzone-pct-y 35)
+
+(defn- deadzone-margin
+  "Half-margin in cells for a dead-zone covering `pct`% of `eff` cells.
+   Capped at eff/2 so the zone can't invert on tiny viewports (collapses
+   to pure-centering instead)."
+  [pct eff]
+  (min (quot eff 2)
+       (quot (* eff (- 100 pct)) 200)))
 
 (defn- center-camera
   "Centered-on-player offset, clamped to world bounds. Used on first
@@ -77,12 +93,12 @@
    (if (<= wh rh) 0 (max 0 (min (- wh rh) (- py (quot rh 2)))))])
 
 (defn camera-for
-  "Dead-zone camera for map rect r. If the player is at least
-   camera-margin cells from each edge of the previously-committed camera
+  "Dead-zone camera for map rect r. If the player is at least the dead-zone
+   margin (deadzone-margin) from each edge of the previously-committed camera
    window, returns the previous camera unchanged — the FOV-delta render
    path then writes only the cells that actually changed. Otherwise the
-   camera shifts just enough to put the player camera-margin cells from
-   whichever edge they were crossing.
+   camera shifts just enough to put the player that margin from whichever
+   edge they were crossing.
 
    On first render of a floor (no last-camera, or different :depth), the
    camera centers on the player."
@@ -108,12 +124,11 @@
                             (center-camera ww wh rw rh px py))
         rel-x (- px prev-cx)
         rel-y (- py prev-cy)
-        ;; Clamp margin so the dead-zone never inverts on small viewports.
-        ;; When rw < 2*camera-margin the two cond branches below overlap;
-        ;; without this clamp the camera oscillates by (2m - rw) cells per
-        ;; turn, leaving a 1-row ghost behind the incremental render.
-        mx (min camera-margin (quot rw 2))
-        my (min camera-margin (quot rh 2))
+        ;; Proportional dead-zone half-margin. deadzone-margin caps at rw/2
+        ;; (resp. rh/2), so the two cond branches below never overlap and
+        ;; the camera can't oscillate / leave a ghost row on small viewports.
+        mx (deadzone-margin deadzone-pct-x rw)
+        my (deadzone-margin deadzone-pct-y rh)
         new-cx (cond
                  (<= ww rw)             0
                  (< rel-x mx)           (max 0 (- px mx))
