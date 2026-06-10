@@ -1,0 +1,15 @@
+(ns xsofy.test.input-test
+  "Tests for xsofy.input — key→action resolution and help-key labels."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.input :as input]))
+
+(deftest quit-binds-esc-and-ctrl-c
+  (testing "both Esc (0x1b) and Ctrl-C (0x03) resolve to :quit"
+    (is (= :quit (input/parse-key (str (char 27)))))
+    (is (= :quit (input/parse-key (str (char 3))))))
+  (testing "the keybindings screen advertises both, Esc first"
+    (is (= "Esc, Ctrl-C" (input/action-key-labels :quit)))))
+
+(deftest unbound-keys-resolve-to-unknown
+  (testing "a nearby unbound key is :unknown, not a stray action"
+    (is (= :unknown (input/parse-key "Q")))))
