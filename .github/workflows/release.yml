@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.GORELEASER_PAT }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          version="${TAG#v}"
+          branch="xsofy-${version}"
+          url="https://github.com/nooga/xsofy/archive/refs/tags/${TAG}.tar.gz"
+          sha256="$(curl -fsSL "$url" | sha256sum | awk '{print $1}')"
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/nooga/homebrew-tap.git" tap
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          mkdir -p Formula
+
+          cat > Formula/xsofy.rb <<RUBY
+          class Xsofy < Formula
+            desc "Roguelike written in let-go where the magic system is Lisp"
+            homepage "https://github.com/nooga/xsofy"
+            url "$url"
+            version "$version"
+            sha256 "$sha256"
+            license "MIT"
+
+            depends_on "let-go"
+
+            def install
+              libexec.install "main.lg", "xsofy"
+              (bin/"xsofy").write <<~EOS
+                #!/bin/sh
+                cd "#{libexec}" || exit 1
+                exec "#{Formula["let-go"].opt_bin}/lg" main.lg "\$@"
+              EOS
+            end
+
+            test do
+              assert_path_exists libexec/"main.lg"
+              assert_path_exists libexec/"xsofy/title.lg"
+            end
+          end
+          RUBY
+
+          git add Formula/xsofy.rb
+          if git diff --cached --quiet; then
+            echo "Formula/xsofy.rb is already current for ${TAG}."
+            exit 0
+          fi
+
+          git commit -m "Update xsofy to ${TAG}"
+          git push --force-with-lease origin "$branch"
+          gh pr create \
+            --repo nooga/homebrew-tap \
+            --head "$branch" \
+            --base main \
+            --title "Update xsofy to ${TAG}" \
+            --body "Updates xsofy formula for ${TAG}."
+          gh pr merge "$branch" --repo nooga/homebrew-tap --squash --admin --delete-branch

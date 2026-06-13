@@ -18,7 +18,14 @@ Written in [let-go](https://github.com/nooga/let-go) - a Clojure dialect on a Go
 
 If you like how this game looks check out [Brogue](https://sites.google.com/site/broguegame/) - my main inspiration.
 
-## Running
+## Install
+
+```bash
+brew install nooga/tap/xsofy
+xsofy
+```
+
+## Running from source
 
 ```bash
 lg main.lg
@@ -27,6 +34,5 @@ lg main.lg
 Get `lg` from [let-go](https://github.com/nooga/let-go), or:
 
 ```bash
-brew tap nooga/let-go https://github.com/nooga/let-go
-brew install let-go
+brew install nooga/tap/let-go
 ```
