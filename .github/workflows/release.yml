@@ -42,7 +42,7 @@ jobs:
             sha256 "$sha256"
             license "MIT"
 
-            depends_on "let-go"
+            depends_on "nooga/tap/let-go"
 
             def install
               libexec.install "main.lg", "xsofy"
