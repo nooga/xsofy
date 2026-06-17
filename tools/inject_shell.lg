@@ -1,0 +1,42 @@
+(ns tools.inject-shell
+  "Inject xsofy's own shell (tools/xsofy-shell.html) into the lg -w -w-shell none
+   bundle, just before </body>. Replaces patching let-go's xterm shell: instead
+   of reaching into let-go's generated artifact, we append our shell against the
+   public window.LetGoHost contract. Idempotent and fail-closed, like the
+   patch_wasm_* tools."
+  (:require [string :as str]
+            [os]))
+
+(def index-path
+  (let [path (os/getenv "XSOFY_WASM_INDEX")]
+    (if (and path (> (count path) 0)) path "dist/index.html")))
+
+(def shell-path "tools/xsofy-shell.html")
+
+;; Marker that proves our shell is already present (idempotent re-run guard).
+(def shell-marker "xsofy's own client shell")
+
+(defn abort! [m] (println m) (os/exit 1))
+
+(let [html (slurp index-path)]
+  (cond
+    ;; Already injected — nothing to do.
+    (str/includes? html shell-marker)
+    (println (str "shell already injected in " index-path))
+
+    ;; The shell-less bundle must expose LetGoHost and a </body> to inject into.
+    (not (str/includes? html "window.LetGoHost"))
+    (abort! (str "no window.LetGoHost in " index-path
+                 " — build with `lg -w -w-shell none` first"))
+
+    (not (str/includes? html "</body>"))
+    (abort! (str "no </body> in " index-path))
+
+    :else
+    (let [shell (slurp shell-path)
+          parts (vec (str/split html "</body>"))]
+      (when (not= 2 (count parts))
+        (abort! "expected exactly one </body>"))
+      (spit index-path
+            (str (nth parts 0) shell "\n</body>" (nth parts 1)))
+      (println (str "injected " shell-path " into " index-path)))))

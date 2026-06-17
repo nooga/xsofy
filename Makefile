@@ -18,8 +18,14 @@ test: ## Run the let-go test suite
 smoke-lg: ## Layer-1 headless runtime smoke (frozen-title guard + render-survives-turns)
 	LG=$(LG) python3 xsofy/test/check_smoke.py
 
-wasm: ## Build the WASM web app into $(DIST) and apply COI + ?seed= patches
-	$(LG) -w $(DIST) main.lg
+wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI/?seed= bridges
+	# Build glue-only (no let-go xterm shell), then inject xsofy's own shell.
+	# Requires a let-go with -w-shell (mparrett/let-go feat/shell-extraction).
+	$(LG) -w $(DIST) -w-shell none main.lg
+	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/inject_shell.lg
+	# COI bounded-retry and the ?seed=/?replay= env bridge still patch the core
+	# glue: they touch the COI lifecycle and the worker VM env, which the shell
+	# contract (window.LetGoHost) does not cover. Tracked as follow-up seams.
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/patch_wasm_coi.lg
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/patch_wasm_seed.lg
 
