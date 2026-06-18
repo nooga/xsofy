@@ -20,7 +20,7 @@ smoke-lg: ## Layer-1 headless runtime smoke (frozen-title guard + render-survive
 
 wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI/?seed= bridges
 	# Build glue-only (no let-go xterm shell), then inject xsofy's own shell.
-	# Requires a let-go with -w-shell (mparrett/let-go feat/shell-extraction).
+	# Requires a let-go with -w-shell none (nooga/let-go, merged in #245).
 	$(LG) -w $(DIST) -w-shell none main.lg
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/inject_shell.lg
 	# COI bounded-retry and the ?seed=/?replay= env bridge still patch the core
