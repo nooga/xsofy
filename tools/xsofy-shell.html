@@ -2,16 +2,25 @@
      tools/inject_shell.lg. Binds to the let-go runtime only through the public
      window.LetGoHost surface (onReady / onOutput / sendInput / setSize) — no
      patching of let-go's generated glue. xsofy owns the terminal, theme, and
-     font. (Runic-block glyphs (U+16A0-16FF) fall back to the platform face here;
-     a dedicated rune font is a follow-up PR stacked on this one.) -->
+     font here; in particular the Runic-block glyphs (U+16A0-16FF) get the
+     Fairfax HD rune face (from a web-font CDN) instead of the platform's
+     proportional fallback. -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<!-- The held rune font (Fairfax HD, OFL) from a web-font CDN — no woff2 to ship.
+     crossorigin: loads under the bundle's COEP require-corp (the CDN sends
+     Access-Control-Allow-Origin: *, fonts fetch in CORS mode).
+     media=print + onload swap: load it non-render-blocking so a slow/down CDN
+     can't stall first paint; the terminal falls back to a system mono until it
+     arrives (and re-fits when it does — see onReady). -->
+<link rel="stylesheet" href="https://fonts.cdnfonts.com/css/fairfax-hd" crossorigin
+      media="print" onload="this.media='all'">
 <script>
 (function () {
   const termEl = document.getElementById('terminal');
   const term = new Terminal({
-    fontFamily: '"DejaVu Sans Mono", "Menlo", monospace',
+    fontFamily: '"Fairfax HD", "DejaVu Sans Mono", "Menlo", monospace',
     fontSize: 16,
     theme: { background: '#0a0e14', foreground: '#d4c5a0', cursor: '#ff6b35' },
     allowProposedApi: true,
@@ -30,6 +39,9 @@
       term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
       term.onData((d) => window.LetGoHost.sendInput(d));
     }
+    // Rune font loads async (non-blocking). When it arrives, re-fit so xterm
+    // re-measures glyph cells with Fairfax HD instead of the fallback mono.
+    document.fonts.ready.then(() => { try { fit.fit(); } catch (e) {} });
   });
   window.addEventListener('resize', () => fit.fit());
 })();
