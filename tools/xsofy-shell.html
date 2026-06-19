@@ -2,26 +2,16 @@
      tools/inject_shell.lg. Binds to the let-go runtime only through the public
      window.LetGoHost surface (onReady / onOutput / sendInput / setSize) — no
      patching of let-go's generated glue. xsofy owns the terminal, theme, and
-     font here; in particular the Runic-block glyphs (U+16A0-16FF) get a bundled
-     monospace face instead of the platform's proportional fallback. -->
+     font. (Runic-block glyphs (U+16A0-16FF) fall back to the platform face here;
+     a dedicated rune font is a follow-up PR stacked on this one.) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-<style>
-  /* The held rune font (Fairfax HD, OFL). Ship fonts/FairfaxHD.woff2 alongside
-     the bundle; under COEP require-corp it must be same-origin (it is). Falls
-     back to a system monospace until the woff2 is added. */
-  @font-face {
-    font-family: "Fairfax HD";
-    src: url("fonts/FairfaxHD.woff2") format("woff2");
-    font-display: swap;
-  }
-</style>
 <script>
 (function () {
   const termEl = document.getElementById('terminal');
   const term = new Terminal({
-    fontFamily: '"Fairfax HD", "DejaVu Sans Mono", "Menlo", monospace',
+    fontFamily: '"DejaVu Sans Mono", "Menlo", monospace',
     fontSize: 16,
     theme: { background: '#0a0e14', foreground: '#d4c5a0', cursor: '#ff6b35' },
     allowProposedApi: true,
