@@ -3,19 +3,28 @@
      window.LetGoHost surface (onReady / onOutput / sendInput / setSize) — no
      patching of let-go's generated glue. xsofy owns the terminal, theme, and
      font here; in particular the Runic-block glyphs (U+16A0-16FF) get the
-     Fairfax HD rune face (from a web-font CDN) instead of the platform's
-     proportional fallback. -->
+     Fairfax HD rune face (inlined below, OFL — no external request) instead of
+     the platform's proportional fallback. -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-<!-- The held rune font (Fairfax HD, OFL) from a web-font CDN — no woff2 to ship.
-     crossorigin: loads under the bundle's COEP require-corp (the CDN sends
-     Access-Control-Allow-Origin: *, fonts fetch in CORS mode).
-     media=print + onload swap: load it non-render-blocking so a slow/down CDN
-     can't stall first paint; the terminal falls back to a system mono until it
-     arrives (and re-fits when it does — see onReady). -->
-<link rel="stylesheet" href="https://fonts.cdnfonts.com/css/fairfax-hd" crossorigin
-      media="print" onload="this.media='all'">
+<!-- Rune font (Fairfax HD, OFL — Kreative Software), inlined as a base64 WOFF2 so
+     it ships in the bundle: no external request, no CDN, and no COEP crossorigin
+     dance under the bundle's require-corp. unicode-range scopes it to the Runic
+     block so it composites with the fallback mono — only runes use this face, and
+     IBM Plex/DejaVu still set the cell width. Subset to the assigned Runic block
+     (U+16A0-16F8, 89 glyphs, ~2.4 KB). Fairfax HD has no Reserved Font Name, so the
+     subset keeps the family name. License: tools/fonts/LICENSE-FairfaxHD-OFL.txt. -->
+<style>
+@font-face {
+  font-family: 'Fairfax HD';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+16A0-16F8;
+  src: url(data:font/woff2;base64,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) format('woff2');
+}
+</style>
 <script>
 (function () {
   const termEl = document.getElementById('terminal');
@@ -39,8 +48,8 @@
       term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
       term.onData((d) => window.LetGoHost.sendInput(d));
     }
-    // Rune font loads async (non-blocking). When it arrives, re-fit so xterm
-    // re-measures glyph cells with Fairfax HD instead of the fallback mono.
+    // Rune font is inlined (present at parse), so this re-fit is just a cheap
+    // safety net to re-measure glyph cells with Fairfax HD once fonts settle.
     document.fonts.ready.then(() => { try { fit.fit(); } catch (e) {} });
   });
   window.addEventListener('resize', () => fit.fit());
