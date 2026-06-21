@@ -23,15 +23,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to a let-go commit, not a tag: the client-shell WASM glue these
+      # patch scripts target (markers, worker init protocol) landed after #245
+      # and is not in any release yet (v1.10.0 predates it). Bump to a tagged
+      # release once one ships with it.
+      - name: Check out let-go (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: nooga/let-go
+          ref: 8087f9979f511a9dc89266c9d84a41af00d98287
+          path: let-go-src
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26'
 
       - name: Install let-go
-        run: go install github.com/nooga/let-go@v1.9.0
+        run: go install github.com/nooga/let-go@8087f9979f511a9dc89266c9d84a41af00d98287
 
+      # LETGO_SRC pins the WASM *runtime* to the same commit as the binary above;
+      # without it `lg -w` compiles the runtime from let-go@latest (the old
+      # v1.10.0 glue), which mismatches the binary's worker protocol.
       - name: Build WASM
+        env:
+          LETGO_SRC: ${{ github.workspace }}/let-go-src
         run: let-go -w dist main.lg
 
       - name: Patch COI startup guard
