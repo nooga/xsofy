@@ -6,7 +6,7 @@
             [os]))
 
 (def index-path
-  (let [path (getenv "XSOFY_WASM_INDEX")]
+  (let [path (os/getenv "XSOFY_WASM_INDEX")]
     (if (and path (> (count path) 0)) path "dist/index.html")))
 
 (defn abort! [m] (println m) (os/exit 1))
@@ -22,22 +22,23 @@
 
 ;; 1) Main thread: read ?seed= / ?replay= and include them in the worker init.
 (def post-before
-  "worker.postMessage({ t: 'init', sab, wasmGzB64: WASM_GZ_B64, wasmExecJS: WASM_EXEC_JS });")
+  "const initMsg = { t: 'init', sab, mode: WASM_MODE, wasmExecJS: WASM_EXEC_JS };")
 (def post-after
   (str "const __lgParams = new URLSearchParams(location.search);\n"
        "  const __lgSeed = __lgParams.get('seed');\n"
        "  const __lgReplay = __lgParams.get('replay');\n"
-       "  worker.postMessage({ t: 'init', sab, wasmGzB64: WASM_GZ_B64, wasmExecJS: WASM_EXEC_JS, seed: __lgSeed, replay: __lgReplay });"))
+       "  const initMsg = { t: 'init', sab, mode: WASM_MODE, wasmExecJS: WASM_EXEC_JS, seed: __lgSeed, replay: __lgReplay };"))
 
 ;; 2) Worker: destructure seed + replay out of the init message.
-(def destr-before "const { sab, wasmGzB64, wasmExecJS } = e.data;")
-(def destr-after  "const { sab, wasmGzB64, wasmExecJS, seed, replay } = e.data;")
+(def destr-before "const { sab, mode, wasmModule, wasmGzB64, wasmExecJS } = e.data;")
+(def destr-after  "const { sab, mode, wasmModule, wasmGzB64, wasmExecJS, seed, replay } = e.data;")
 
-;; 3) Worker: set go.env from seed/replay before running. Anchored on the unique
-;;    "// Run Go WASM" comment so it can't match the main-thread new Go().
-(def go-before  "// Run Go WASM\n      const go = new Go();")
+;; 3) Worker: set go.env from seed/replay before running. Anchored on the worker's
+;;    lowercase eval(wasmExecJS) (the main thread uses eval(WASM_EXEC_JS)), so it
+;;    can't match the main-thread new Go().
+(def go-before  "eval(wasmExecJS);\n      const go = new Go();")
 (def go-after
-  (str "// Run Go WASM\n      const go = new Go();\n"
+  (str "eval(wasmExecJS);\n      const go = new Go();\n"
        "      { const __lgEnv = Object.assign({}, go.env);\n"
        "        if (seed != null && seed !== '') __lgEnv.XSOFY_SEED = String(seed);\n"
        "        if (replay != null && replay !== '') __lgEnv.XSOFY_REPLAY = String(replay);\n"

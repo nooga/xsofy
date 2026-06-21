@@ -3,7 +3,7 @@
             [os]))
 
 (def index-path
-  (let [path (getenv "XSOFY_WASM_INDEX")]
+  (let [path (os/getenv "XSOFY_WASM_INDEX")]
     (if (and path (> (count path) 0))
       path
       "dist/index.html")))
@@ -12,7 +12,7 @@
   "// --- Cross-origin isolation: prefer server headers, fall back to SW ---")
 
 (def wasm-marker
-  "// --- Inline wasm_exec.js and WASM data ---")
+  "// --- wasm_exec.js + WASM payload ---")
 
 (def wasm-const-marker
   "const WASM_EXEC_JS")
