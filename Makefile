@@ -6,7 +6,7 @@ DIST ?= dist
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test smoke-lg wasm e2e browser-smoke clean
+.PHONY: help test smoke-lg rune-font wasm e2e browser-smoke clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -17,6 +17,11 @@ test: ## Run the let-go test suite
 
 smoke-lg: ## Layer-1 headless runtime smoke (frozen-title guard + render-survives-turns)
 	LG=$(LG) python3 xsofy/test/check_smoke.py
+
+rune-font: ## Regenerate the inlined terminal font in tools/xsofy-shell.html from xsofy/*.lg
+	# On-demand only (regenerates a committed asset, not a per-build artifact):
+	# re-run after the game starts drawing a glyph it didn't before.
+	uv run --with fonttools --with brotli python3 tools/gen-terminal-font.py
 
 wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI/?seed= bridges
 	# Build glue-only (no let-go xterm shell), then inject xsofy's own shell.
