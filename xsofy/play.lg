@@ -96,7 +96,13 @@
 (defn play-step
   "The play loop's scan. [:action] dispatches an explicit key (cancelling any
    auto-mode first); [:tick] advances ambient :ui and, if auto-moving, dispatches
-   one auto-step. Both route through play-advance / the deterministic dispatch."
+   one auto-step. Both route through play-advance / the deterministic dispatch.
+
+   An idle [:tick] also repaints when the terminal resized or a :redraw? request
+   is pending. The size poll otherwise lives only in play-advance, which idle
+   ticks skip — so without this a resize stays invisible until the next keypress.
+   The repaint is off the dispatch path (no seed/action-log mutation), so it's
+   replay-safe; :redraw? is the extension point for future force-repaint triggers."
   [state ev]
   (let [[tag payload] ev
         world (:world state)]
@@ -105,8 +111,14 @@
                             (dissoc world :resting :running-dir :autoexploring :auto-target)
                             payload)
       :tick (let [st (update-in state [:ui :frame] (fn [f] (inc (or f 0))))
-                  ak (auto-key-for world)]
-              (if ak (play-advance st world ak) st))
+                  ak (auto-key-for world)
+                  sz (term/size)]
+              (cond
+                ak (play-advance st world ak)
+                (or (:redraw? st) (and sz (not= sz (:size st))))
+                (do (render/render-full world)
+                    (assoc st :size sz :redraw? false))
+                :else st))
       state)))
 
 (defn run-play-loop
