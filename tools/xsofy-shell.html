@@ -58,6 +58,16 @@
     // safety net to re-measure glyph cells with Fairfax HD once fonts settle.
     document.fonts.ready.then(() => { try { fit.fit(); } catch (e) {} });
   });
-  window.addEventListener('resize', () => fit.fit());
+  // Debounced so a drag/rotate burst settles on the final size, not an
+  // intermediate one. visualViewport catches the mobile URL-bar show/hide,
+  // which a window 'resize' can miss. Guarded: a resize can fire pre-onReady.
+  let refitPending;
+  function refit() {
+    clearTimeout(refitPending);
+    refitPending = setTimeout(() => { try { fit.fit(); } catch (_) {} }, 100);
+  }
+  window.addEventListener('resize', refit);
+  window.addEventListener('orientationchange', refit);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', refit);
 })();
 </script>
