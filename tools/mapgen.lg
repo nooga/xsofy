@@ -1,0 +1,79 @@
+(ns mapgen
+  "Standalone dungeon map generator / debug viewer.
+
+   Generates a level with xsofy.terrain and dumps the grid to stdout as ASCII
+   (optionally 24-bit ANSI color), then prints a one-line audit (see
+   tools.mapaudit), so you can eyeball layouts and flip through seeds without
+   booting the game. Reuses the live generator and its tile tables untouched.
+
+   Config is an EDN map, given inline or as a file path argument:
+     lg tools/mapgen.lg '{:seed 42 :depth 5}'
+     lg tools/mapgen.lg my-scenario.edn
+   Keys (all optional): :seed (default random), :w 79, :h 30, :depth 1,
+   :count 1 (consecutive seeds to dump), :color true."
+  (:require [tools.mapaudit :as audit]
+            [xsofy.terrain :as terrain]))
+
+;; --- config: defaults < EDN argument ---
+
+(def defaults {:w 79 :h 30 :depth 1 :count 1 :color true}) ; :seed → random if absent
+
+(defn- edn-arg [arg]
+  ;; an inline EDN map ("{...}") or a path to an .edn file
+  (cond
+    (or (nil? arg) (= arg "")) {}
+    (= \{ (first arg))         (read-string arg)
+    :else                      (read-string (slurp arg))))
+
+;; --- the generator under the viewer ---
+;; Single dispatch point: the tool renders/audits whatever this returns
+;; ({:grid :rooms}). Kept as a one-liner so the viewer stays decoupled from how
+;; a level is produced.
+
+(defn gen-level [seed w h depth]
+  (first (terrain/generate-level w h depth {:seed seed})))
+
+;; --- ANSI 24-bit color (the game renders through `term`; for a stdout dump
+;;     raw escapes are simpler and pull in no terminal-buffer machinery) ---
+
+(def esc (str (char 27)))
+(def reset (str esc "[0m"))
+
+(defn ansi [code rgb]
+  (str esc "[" code ";2;" (nth rgb 0) ";" (nth rgb 1) ";" (nth rgb 2) "m"))
+
+(defn cell-glyph [code color?]
+  (let [ch (get terrain/tile-chars code "?")]
+    (if color?
+      (let [st (get terrain/tile-styles code)]
+        (if st
+          (str (ansi "38" (:fg st)) (ansi "48" (:bg st)) ch reset)
+          ch))
+      ch)))
+
+(defn render-grid [grid w h color?]
+  (dotimes [y h]
+    (let [line (loop [x 0 acc ""]
+                 (if (>= x w)
+                   acc
+                   (recur (inc x)
+                          (str acc (cell-glyph (terrain/tget grid w x y) color?)))))]
+      (println line))))
+
+(defn render-one [seed w h depth color?]
+  (let [result (gen-level seed w h depth)
+        grid (:grid result)
+        rooms (:rooms result)
+        {:keys [doors floating unreach]} (audit/audit grid w h)]
+    (println (str "seed=" seed "  " w "x" h "  depth=" depth
+                  "  rooms=" (count rooms) "  doors=" doors
+                  "  floating=" floating "  unreach=" unreach))
+    (render-grid grid w h color?)
+    (println)))
+
+;; --- entry ---
+
+(let [cfg  (merge defaults (edn-arg (first *command-line-args*)))
+      seed (or (:seed cfg) (rand-int 1000000000))]
+  (dotimes [i (:count cfg)]
+    (render-one (+ seed i) (:w cfg) (:h cfg) (:depth cfg) (:color cfg))))

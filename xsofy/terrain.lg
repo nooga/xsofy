@@ -324,60 +324,9 @@
             [(nth @carved mid) w3])
           [nil w3])))))
 
-;; --- Connectivity Check ---
-;; Array-based BFS flood fill — no atoms, no allocations in the hot loop.
-
+;; Floor set shared by the connectivity pass (ensure-connectivity-dsu!) and the
+;; door/feature phases.
 (def floor-tiles #{1 2 3 5 10 11 12 13 14 15 16 17 18 19})
-
-(defn flood-count [grid w h sx sy]
-  "Count reachable floor tiles from (sx,sy) using array-based BFS.
-   Marks visited before enqueueing so queue stays bounded to w*h."
-  (let [sz (* w h)
-        visited (int-array sz)
-        qx (int-array sz)
-        qy (int-array sz)
-        si (+ sx (* sy w))]
-    (if (or (< sx 0) (>= sx w) (< sy 0) (>= sy h)
-            (not (contains? floor-tiles (aget grid si))))
-      0
-      (do (aset visited si 1)
-          (aset qx 0 sx)
-          (aset qy 0 sy)
-          (loop [head 0 tail 1 cnt 1]
-            (if (>= head tail)
-              cnt
-              (let [cx (aget qx head) cy (aget qy head)
-                    t (loop [di 0 t tail]
-                        (if (>= di 4) t
-                          (let [nx (+ cx (aget dir-dx di)) ny (+ cy (aget dir-dy di))]
-                            (if (in-grid? w h nx ny)
-                              (let [ni (+ nx (* ny w))]
-                                (if (and (= (aget visited ni) 0)
-                                         (contains? floor-tiles (aget grid ni)))
-                                  (do (aset visited ni 1)
-                                      (aset qx t nx)
-                                      (aset qy t ny)
-                                      (recur (inc di) (inc t)))
-                                  (recur (inc di) t)))
-                              (recur (inc di) t)))))
-                    added (- t tail)]
-                (recur (inc head) t (+ cnt added)))))))))
-
-(defn is-connected? [grid w h]
-  "Check if all floor tiles are reachable from some floor tile.
-   Single pass: count total floors while finding start, then BFS once."
-  (let [sz (* w h)]
-    (loop [i 0 total 0 sx -1 sy -1]
-      (if (>= i sz)
-        (if (< sx 0)
-          true  ;; no floor tiles = trivially connected
-          (= (flood-count grid w h sx sy) total))
-        (let [t (aget grid i)]
-          (if (contains? floor-tiles t)
-            (if (< sx 0)
-              (recur (inc i) (inc total) (rem i w) (quot i w))
-              (recur (inc i) (inc total) sx sy))
-            (recur (inc i) total sx sy)))))))
 
 ;; --- Lake Placement ---
 ;; Generate blob-shaped lakes and place them without breaking connectivity.
@@ -748,35 +697,74 @@
 
 ;; --- Level Generation ---
 
-(defn ensure-connectivity!
-  "If the map is disconnected, carve extra corridors deterministically
-   between room centers until everything is reachable. Returns world'."
-  [world grid w h rooms]
-  (let [rs (vec rooms)
-        n (count rs)]
-    (if (<= n 1)
-      world
-      (let [w-ctx (det/with-context world [:terrain :ensure-conn])]
-        (loop [attempt 0 w-cur w-ctx]
-          (if (or (>= attempt 20) (is-connected? grid w h))
-            w-cur
-            (let [p1 (det/int-in w-cur 0 n)
-                  i1 (first p1)
-                  w1 (second p1)
-                  p2 (det/int-in w1 0 n)
-                  i2 (first p2)
-                  w2 (second p2)
-                  pd (det/percent? w2 50)
-                  go-h-first (first pd)
-                  w3 (second pd)
-                  [x1 y1] (nth rs i1)
-                  [x2 y2] (nth rs i2)]
-              (if go-h-first
-                (do (carve-h-corridor! grid w x1 x2 y1)
-                    (carve-v-corridor! grid w y1 y2 x2))
-                (do (carve-v-corridor! grid w y1 y2 x1)
-                    (carve-h-corridor! grid w x1 x2 y2)))
-              (recur (inc attempt) w3))))))))
+;; --- Disjoint-set (union-find) connectivity --------------------------------
+;; Guarantee a fully-connected level in ~O(alpha(n)). Replaces the old
+;; best-effort BFS-retry, which carved random room-to-room corridors for up to
+;; 20 attempts and could still leave the level disconnected. parent[] is the
+;; whole structure; union by smaller root index (deterministic, no rank
+;; tie-breaks); iterative find with path-halving (no recursion).
+
+(defn dsu-make [n]
+  (let [parent (int-array n)]
+    (dotimes [i n] (aset parent i i))
+    parent))
+
+(defn dsu-find [parent i]
+  (loop [i i]
+    (let [p (aget parent i)]
+      (if (= p i)
+        i
+        (let [gp (aget parent p)]
+          (aset parent i gp)            ; path halving
+          (recur gp))))))
+
+(defn dsu-union! [parent a b]
+  (let [ra (dsu-find parent a)
+        rb (dsu-find parent b)]
+    (if (= ra rb)
+      false
+      (do (if (< ra rb) (aset parent rb ra) (aset parent ra rb))
+          true))))
+
+(defn ensure-connectivity-dsu!
+  "Guarantee a fully-connected level. One pass unions adjacent floor tiles, then
+   connects every distinct floor *component* to the first floor tile's component
+   with a single corridor. Unlike the BFS-retry version this never gives up, so
+   it can't leave the level disconnected. Deterministic (index order, union by
+   min index); consumes no det rolls, so it threads `world` through unchanged."
+  [world grid w h]
+  (let [total (* w h)
+        parent (dsu-make total)
+        floor0 (int-array total)]      ; marks tiles that were floor at pass 1
+    ;; pass 1: record floor tiles, union each with its right/down floor neighbor
+    (dotimes [y h]
+      (dotimes [x w]
+        (when (contains? floor-tiles (tget grid w x y))
+          (let [i (+ x (* y w))]
+            (aset floor0 i 1)
+            (when (and (< (inc x) w) (contains? floor-tiles (tget grid w (inc x) y)))
+              (dsu-union! parent i (+ (inc x) (* y w))))
+            (when (and (< (inc y) h) (contains? floor-tiles (tget grid w x (inc y))))
+              (dsu-union! parent i (+ x (* (inc y) w))))))))
+    ;; pass 2: connect every floor component to the first floor tile's component
+    (let [main (loop [i 0]
+                 (cond (>= i total) -1
+                       (= 1 (aget floor0 i)) i
+                       :else (recur (inc i))))]
+      (if (< main 0)
+        world
+        (let [fx (rem main w) fy (quot main w)]
+          (loop [i (inc main)]
+            (if (>= i total)
+              world
+              (do
+                (when (and (= 1 (aget floor0 i))
+                           (not= (dsu-find parent i) (dsu-find parent main)))
+                  (let [x1 (rem i w) y1 (quot i w)]
+                    (carve-h-corridor! grid w x1 fx y1)
+                    (carve-v-corridor! grid w y1 fy fx)
+                    (dsu-union! parent i main)))
+                (recur (inc i))))))))))
 
 (defn place-room-in-sector!
   "Place a room (rect or cave) in a given sector deterministically.
@@ -891,7 +879,7 @@
               (recur (inc i) (second r)))))
 
         ;; === Phase 2c: ensure connectivity ===
-        w-phase2c (ensure-connectivity! w-phase2b grid w h @rooms)
+        w-phase2c (ensure-connectivity-dsu! w-phase2b grid w h)
 
         ;; === Phase 3: doors at corridor junctions ===
         w-phase3
@@ -976,7 +964,7 @@
         ;; Lakes and chasms can cut walking paths; reconnect once after all
         ;; terrain decoration rather than copying/checking the whole grid for
         ;; every individual placement attempt.
-        w-final-connectivity (ensure-connectivity! w-bridges grid w h @rooms)
+        w-final-connectivity (ensure-connectivity-dsu! w-bridges grid w h)
 
         ;; === Phase 7: Torches on walls — 4% chance per wall ===
         w-torches
