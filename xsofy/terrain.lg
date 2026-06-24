@@ -800,6 +800,24 @@
         (swap! rooms conj [(quot (+ x1 x2) 2) (quot (+ y1 y2) 2)])
         w6))))
 
+(defn stair-tile
+  "First (or last, if reversed?) room center that is a passable floor tile
+   (1/2), so a stair never lands on a lake- or chasm-carved hazard. Stairs are
+   the last mutation and run after the final connectivity repair, so a floor
+   room center is reachable. Falls back to the first/last room if none qualify."
+  [grid w rooms reversed?]
+  (let [v (vec rooms)
+        n (count v)]
+    (loop [k 0]
+      (if (>= k n)
+        (if reversed? (last v) (first v))
+        (let [idx (if reversed? (- n 1 k) k)
+              [x y] (nth v idx)
+              t (tget grid w x y)]
+          (if (or (= t 1) (= t 2))
+            [x y]
+            (recur (inc k))))))))
+
 (defn generate-level
   ([w h] (generate-level w h 1 {:seed 0}))
   ([w h depth] (generate-level w h depth {:seed depth}))
@@ -989,9 +1007,9 @@
                         (recur (inc x) w-x))))]
               (recur (inc y) w-row))))
 
-        ;; === Phase 8: Stairs (no rolls) ===
-        [sx sy] (first @rooms)
-        [ex ey] (last @rooms)
+        ;; === Phase 8: Stairs (no rolls; on a passable, reachable room center) ===
+        [sx sy] (stair-tile grid w @rooms false)
+        [ex ey] (stair-tile grid w @rooms true)
         _ (tset! grid w sx sy 14)
         _ (tset! grid w ex ey 13)]
 
