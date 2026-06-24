@@ -1,0 +1,41 @@
+(ns xsofy.test.mapgen-audit-test
+  "Regression lock for the dungeon generator's connectivity guarantee.
+
+   Loads a scenario matrix (test/fixtures/dungeon-scenarios.edn), regenerates
+   each level, and asserts tools.mapaudit metrics:
+
+   - unreach=0 everywhere — the real guarantee from the union-find connectivity
+     and reachable-stair fixes. A failure here means a level has tiles cut off
+     from the rest, which is a genuine generator regression.
+   - floating <= a loose ceiling — a coarse tripwire only. Floating doors are a
+     known, not-yet-fixed wart (3-42 per level across this matrix), so the
+     ceiling guards against a generator that drowns levels in them, not against
+     their existence.
+
+   tools.mapaudit is pure (no load-time side effects); tools.mapgen is the
+   viewer and must NOT be required here."
+  (:require [test :refer [deftest is]]
+            [tools.mapaudit :as audit]
+            [xsofy.terrain :as terrain]))
+
+;; cwd is the repo root (the suite runs as `lg xsofy/test/run.lg` from there),
+;; so the fixture path is relative to that root.
+(def scenario
+  (read-string (slurp "xsofy/test/fixtures/dungeon-scenarios.edn")))
+
+(defn- scenario-seeds [sc]
+  (let [[lo hi] (:seed-range sc)]
+    (range lo hi)))
+
+(deftest dungeon-generator-regression
+  (let [{:keys [w h depths expect]} scenario
+        ceiling (:max-floating expect)]
+    (doseq [depth depths]
+      (doseq [seed (scenario-seeds scenario)]
+        (let [lvl (first (terrain/generate-level w h depth {:seed seed}))
+              a (audit/audit (:grid lvl) w h)]
+          (is (= (:unreach expect) (:unreach a))
+              (str "unreachable tiles at seed=" seed " depth=" depth ": " a))
+          (is (<= (:floating a) ceiling)
+              (str "floating doors " (:floating a) " exceeded ceiling " ceiling
+                   " at seed=" seed " depth=" depth)))))))
