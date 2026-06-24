@@ -30,25 +30,37 @@
                      (get-in world [:entities :player :pos])))))
       movement-actions)))
 
+;; Ring effect is measured as a DELTA against a no-ring run of the same world
+;; and action, not as an absolute HP. The generated world can deal incidental
+;; damage on a turn (a monster reaching the player), which both runs share — so
+;; the difference isolates the ring and stays stable across map-generation
+;; changes that shift the seed's layout.
+
+(defn- base-world []
+  (-> (world/make-world 79 30 4242)
+      (assoc-in [:entities :player :body :hp] 20)))
+
+(defn- hp-after [world action]
+  (get-in (dispatch/dispatch world action) [:entities :player :body :hp]))
+
 (deftest equipped-ring-fires-on-wait
-  (testing "an equipped ring with runes fires once on :wait"
-    (let [w0 (-> (world/make-world 79 30 4242)
-                 equip-test-ring
-                 (assoc-in [:entities :player :body :hp] 20))
-          w1 (dispatch/dispatch w0 :wait)]
-      (is (= 22 (get-in w1 [:entities :player :body :hp])))
+  (testing "an equipped ring with runes heals +2 on :wait"
+    (let [base (base-world)
+          w1 (dispatch/dispatch (equip-test-ring base) :wait)]
+      (is (= 2 (- (get-in w1 [:entities :player :body :hp])
+                  (hp-after base :wait)))
+          "equipped ring heals +2 over the no-ring baseline")
       (is (= [:wait] (:action-log w1))))))
 
 (deftest equipped-ring-fires-on-movement
-  (testing "an equipped ring with runes fires after a replayed move"
-    (let [base (world/make-world 79 30 4242)
+  (testing "an equipped ring with runes heals +2 after a replayed move"
+    (let [base (base-world)
           action (first-safe-move base)
-          w0 (-> base
-                 equip-test-ring
-                 (assoc-in [:entities :player :body :hp] 20))
-          w1 (dispatch/dispatch w0 action)]
+          w1 (dispatch/dispatch (equip-test-ring base) action)]
       (is (some? action) "fixture found a legal movement action")
-      (is (= 22 (get-in w1 [:entities :player :body :hp])))
+      (is (= 2 (- (get-in w1 [:entities :player :body :hp])
+                  (hp-after base action)))
+          "equipped ring heals +2 over the no-ring baseline")
       (is (= [action] (:action-log w1))))))
 
 (deftest ring-does-not-fire-on-ui-actions
@@ -62,12 +74,13 @@
 
 (deftest unequipped-ring-does-not-fire
   (testing "a ring in inventory but not equipped does not trigger"
-    (let [w0 (-> (world/make-world 79 30 4242)
-                 equip-test-ring
-                 (assoc-in [:entities :player :body :hp] 20)
-                 (assoc-in [:entities :player :equipment :ring] nil))
-          w1 (dispatch/dispatch w0 :wait)]
-      (is (= 20 (get-in w1 [:entities :player :body :hp])))
+    (let [base (base-world)
+          unequipped (-> (equip-test-ring base)
+                         (assoc-in [:entities :player :equipment :ring] nil))
+          w1 (dispatch/dispatch unequipped :wait)]
+      (is (= 0 (- (get-in w1 [:entities :player :body :hp])
+                  (hp-after base :wait)))
+          "unequipped ring heals nothing vs the no-ring baseline")
       (is (= [:wait] (:action-log w1))))))
 
 (deftest ring-turn-trigger-is-deterministic
