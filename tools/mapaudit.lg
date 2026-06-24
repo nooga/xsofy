@@ -1,0 +1,101 @@
+(ns tools.mapaudit
+  "Quality metrics over a generated dungeon grid, as pure functions so both the
+   mapgen viewer and the test suite can call them. Each takes the raw tile grid
+   (xsofy.terrain's byte layout) plus width/height.
+
+   - floating-door? / count-floating: doors that aren't a real room threshold.
+   - count-unreachable: passable tiles cut off from the rest of the level.
+   - audit: the three together, as a map — the testable surface.
+
+   A clean level has floating=0 and unreach=0."
+  (:require [xsofy.terrain :as terrain]))
+
+(defn count-where [grid w h pred]
+  (loop [i 0 n 0]
+    (if (>= i (* w h))
+      n
+      (recur (inc i) (if (pred (aget grid i)) (inc n) n)))))
+
+;; --- door audit ---------------------------------------------------------
+;; A door is a genuine threshold when it sits in a 1-wide passage (walls on two
+;; opposite sides, open on the other two) AND the passage opens into a room on
+;; at least one side. Anything else — a door mid-corridor, or not in a clean
+;; passage — is "floating". floating-door? is the canonical definition.
+
+(defn- a-wall? [t] (or (= t 8) (= t 9)))            ; wall-stone or wall-torch
+(defn- a-open? [t] (and (not (a-wall? t)) (not (= t 0)))) ; carved/passable, not void
+
+(defn floating-door? [grid w h x y]
+  (let [g (fn [dx dy] (terrain/tget grid w (+ x dx) (+ y dy)))
+        n (g 0 -1) s (g 0 1) e (g 1 0) wt (g -1 0)
+        h-pass (and (a-wall? n) (a-wall? s) (a-open? e) (a-open? wt))
+        v-pass (and (a-wall? e) (a-wall? wt) (a-open? n) (a-open? s))]
+    (cond
+      h-pass (let [e-opens (or (a-open? (g 1 -1)) (a-open? (g 1 1)))
+                   w-opens (or (a-open? (g -1 -1)) (a-open? (g -1 1)))]
+               (not (or e-opens w-opens)))
+      v-pass (let [n-opens (or (a-open? (g -1 -1)) (a-open? (g 1 -1)))
+                   s-opens (or (a-open? (g -1 1)) (a-open? (g 1 1)))]
+               (not (or n-opens s-opens)))
+      :else true)))   ; door not in a clean 1-wide passage = floating
+
+(defn count-floating [grid w h]
+  (loop [i 0 n 0]
+    (if (>= i (* w h))
+      n
+      (let [t (aget grid i)
+            x (rem i w) y (quot i w)]
+        (recur (inc i)
+               (if (and (or (= t 11) (= t 12))
+                        (> x 0) (< x (dec w)) (> y 0) (< y (dec h))
+                        (floating-door? grid w h x y))
+                 (inc n) n))))))
+
+;; --- connectivity audit -------------------------------------------------
+;; Flood from the first passable tile; count passable tiles not reached.
+;; "passable" = everything except void, the deep hazards (water 4 / chasm 6 /
+;; lava 7), and walls (8/9). unreach=0 means the level is fully connected.
+
+(defn- passable-c? [t]
+  (not (or (= t 0) (= t 4) (= t 6) (= t 7) (= t 8) (= t 9))))
+
+(defn count-unreachable [grid w h]
+  (let [total (* w h)
+        visited (int-array total)
+        start (loop [i 0]
+                (cond (>= i total) -1
+                      (passable-c? (aget grid i)) i
+                      :else (recur (inc i))))]
+    (if (< start 0)
+      0
+      (do
+        (aset visited start 1)
+        (loop [q [start]]
+          (when (seq q)
+            (let [i (peek q)
+                  q2 (pop q)
+                  x (rem i w) y (quot i w)
+                  cand [(if (> x 0) (dec i) -1)
+                        (if (< x (dec w)) (inc i) -1)
+                        (if (> y 0) (- i w) -1)
+                        (if (< y (dec h)) (+ i w) -1)]
+                  nbrs (filter (fn [j] (and (>= j 0)
+                                            (= 0 (aget visited j))
+                                            (passable-c? (aget grid j))))
+                               cand)]
+              (doseq [j nbrs] (aset visited j 1))
+              (recur (into q2 nbrs)))))
+        (loop [i 0 n 0]
+          (if (>= i total)
+            n
+            (recur (inc i)
+                   (if (and (passable-c? (aget grid i)) (= 0 (aget visited i)))
+                     (inc n) n))))))))
+
+(defn audit
+  "The metric bundle for one grid: {:doors :floating :unreach}. The surface a
+   regression test asserts over."
+  [grid w h]
+  {:doors    (count-where grid w h #(or (= % 11) (= % 12)))
+   :floating (count-floating grid w h)
+   :unreach  (count-unreachable grid w h)})

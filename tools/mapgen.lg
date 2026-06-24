@@ -2,38 +2,28 @@
   "Standalone dungeon map generator / debug viewer.
 
    Generates a level with xsofy.terrain and dumps the grid to stdout as ASCII
-   (optionally 24-bit ANSI color), then prints a one-line audit, so you can
-   eyeball layouts and flip through seeds without booting the game. Reuses the
-   live generator and its tile tables untouched — no duplication.
+   (optionally 24-bit ANSI color), then prints a one-line audit (see
+   tools.mapaudit), so you can eyeball layouts and flip through seeds without
+   booting the game. Reuses the live generator and its tile tables untouched.
 
-   Config via env vars (so a justfile recipe can pass them):
-     MAPGEN_SEED   integer base seed         (default: random)
-     MAPGEN_W      width in tiles            (default: 79)
-     MAPGEN_H      height in tiles           (default: 30)
-     MAPGEN_DEPTH  dungeon depth             (default: 1)
-     MAPGEN_COUNT  consecutive seeds to dump (default: 1)
-     MAPGEN_COLOR  \"0\"/\"false\" disables ANSI color (default: on)
+   Config is an EDN map, given inline or as a file path argument:
+     lg tools/mapgen.lg '{:seed 42 :depth 5}'
+     lg tools/mapgen.lg my-scenario.edn
+   Keys (all optional): :seed (default random), :w 79, :h 30, :depth 1,
+   :count 1 (consecutive seeds to dump), :color true."
+  (:require [tools.mapaudit :as audit]
+            [xsofy.terrain :as terrain]))
 
-   Run from the xsofy root:
-     MAPGEN_SEED=42 lg tools/mapgen.lg
-     MAPGEN_SEED=42 MAPGEN_DEPTH=5 MAPGEN_COLOR=0 lg tools/mapgen.lg"
-  (:require [xsofy.terrain :as terrain]
-            [os]))
+;; --- config: defaults < EDN argument ---
 
-;; --- env config (read-string + integer? at the boundary) ---
+(def defaults {:w 79 :h 30 :depth 1 :count 1 :color true}) ; :seed → random if absent
 
-(defn env-int [name default]
-  (let [s (os/getenv name)]
-    (if (and s (> (count s) 0))
-      (let [n (read-string s)]
-        (if (integer? n) n default))
-      default)))
-
-(defn env-on? [name default]
-  (let [s (os/getenv name)]
-    (if (and s (> (count s) 0))
-      (not (or (= s "0") (= s "false")))
-      default)))
+(defn- edn-arg [arg]
+  ;; an inline EDN map ("{...}") or a path to an .edn file
+  (cond
+    (or (nil? arg) (= arg "")) {}
+    (= \{ (first arg))         (read-string arg)
+    :else                      (read-string (slurp arg))))
 
 ;; --- the generator under the viewer ---
 ;; Single dispatch point: the tool renders/audits whatever this returns
@@ -61,8 +51,6 @@
           ch))
       ch)))
 
-;; --- rendering ---
-
 (defn render-grid [grid w h color?]
   (dotimes [y h]
     (let [line (loop [x 0 acc ""]
@@ -72,96 +60,11 @@
                           (str acc (cell-glyph (terrain/tget grid w x y) color?)))))]
       (println line))))
 
-(defn count-where [grid w h pred]
-  (loop [i 0 n 0]
-    (if (>= i (* w h))
-      n
-      (recur (inc i) (if (pred (aget grid i)) (inc n) n)))))
-
-;; --- door audit ---------------------------------------------------------
-;; A door is a genuine threshold when it sits in a 1-wide passage (walls on two
-;; opposite sides, open on the other two) AND the passage opens into a room on
-;; at least one side. Anything else — a door mid-corridor, or not in a clean
-;; passage — is "floating". `floating-door?` is the canonical definition; a
-;; level with floating=0 has every door at a real room mouth.
-
-(defn- a-wall? [t] (or (= t 8) (= t 9)))            ; wall-stone or wall-torch
-(defn- a-open? [t] (and (not (a-wall? t)) (not (= t 0)))) ; carved/passable, not void
-
-(defn floating-door? [grid w h x y]
-  (let [g (fn [dx dy] (terrain/tget grid w (+ x dx) (+ y dy)))
-        n (g 0 -1) s (g 0 1) e (g 1 0) wt (g -1 0)
-        h-pass (and (a-wall? n) (a-wall? s) (a-open? e) (a-open? wt))
-        v-pass (and (a-wall? e) (a-wall? wt) (a-open? n) (a-open? s))]
-    (cond
-      h-pass (let [e-opens (or (a-open? (g 1 -1)) (a-open? (g 1 1)))
-                   w-opens (or (a-open? (g -1 -1)) (a-open? (g -1 1)))]
-               (not (or e-opens w-opens)))
-      v-pass (let [n-opens (or (a-open? (g -1 -1)) (a-open? (g 1 -1)))
-                   s-opens (or (a-open? (g -1 1)) (a-open? (g 1 1)))]
-               (not (or n-opens s-opens)))
-      :else true)))   ; door not in a clean 1-wide passage = floating
-
-(defn count-floating [grid w h]
-  (loop [i 0 n 0]
-    (if (>= i (* w h))
-      n
-      (let [t (aget grid i)
-            x (rem i w) y (quot i w)]
-        (recur (inc i)
-               (if (and (or (= t 11) (= t 12))
-                        (> x 0) (< x (dec w)) (> y 0) (< y (dec h))
-                        (floating-door? grid w h x y))
-                 (inc n) n))))))
-
-;; --- connectivity audit -------------------------------------------------
-;; Flood from the first passable tile; count passable tiles not reached.
-;; "passable" = everything except void, the deep hazards (water 4 / chasm 6 /
-;; lava 7), and walls (8/9). unreach=0 means the level is fully connected.
-
-(defn- passable-c? [t]
-  (not (or (= t 0) (= t 4) (= t 6) (= t 7) (= t 8) (= t 9))))
-
-(defn count-unreachable [grid w h]
-  (let [total (* w h)
-        visited (int-array total)
-        start (loop [i 0]
-                (cond (>= i total) -1
-                      (passable-c? (aget grid i)) i
-                      :else (recur (inc i))))]
-    (if (< start 0)
-      0
-      (do
-        (aset visited start 1)
-        (loop [q [start]]
-          (when (seq q)
-            (let [i (peek q)
-                  q2 (pop q)
-                  x (rem i w) y (quot i w)
-                  cand [(if (> x 0) (dec i) -1)
-                        (if (< x (dec w)) (inc i) -1)
-                        (if (> y 0) (- i w) -1)
-                        (if (< y (dec h)) (+ i w) -1)]
-                  nbrs (filter (fn [j] (and (>= j 0)
-                                            (= 0 (aget visited j))
-                                            (passable-c? (aget grid j))))
-                               cand)]
-              (doseq [j nbrs] (aset visited j 1))
-              (recur (into q2 nbrs)))))
-        (loop [i 0 n 0]
-          (if (>= i total)
-            n
-            (recur (inc i)
-                   (if (and (passable-c? (aget grid i)) (= 0 (aget visited i)))
-                     (inc n) n))))))))
-
 (defn render-one [seed w h depth color?]
   (let [result (gen-level seed w h depth)
         grid (:grid result)
         rooms (:rooms result)
-        doors (count-where grid w h #(or (= % 11) (= % 12)))
-        floating (count-floating grid w h)
-        unreach (count-unreachable grid w h)]
+        {:keys [doors floating unreach]} (audit/audit grid w h)]
     (println (str "seed=" seed "  " w "x" h "  depth=" depth
                   "  rooms=" (count rooms) "  doors=" doors
                   "  floating=" floating "  unreach=" unreach))
@@ -170,11 +73,7 @@
 
 ;; --- entry ---
 
-(let [w      (env-int "MAPGEN_W" 79)
-      h      (env-int "MAPGEN_H" 30)
-      depth  (env-int "MAPGEN_DEPTH" 1)
-      n      (env-int "MAPGEN_COUNT" 1)
-      color? (env-on? "MAPGEN_COLOR" true)
-      base   (env-int "MAPGEN_SEED" (rand-int 1000000000))]
-  (dotimes [i n]
-    (render-one (+ base i) w h depth color?)))
+(let [cfg  (merge defaults (edn-arg (first *command-line-args*)))
+      seed (or (:seed cfg) (rand-int 1000000000))]
+  (dotimes [i (:count cfg)]
+    (render-one (+ seed i) (:w cfg) (:h cfg) (:depth cfg) (:color cfg))))
