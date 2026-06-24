@@ -1,0 +1,15 @@
+;; Regression matrix for the dungeon generator's connectivity guarantee.
+;; Consumed by xsofy.test.mapgen-audit-test; metrics defined in tools/mapaudit.lg.
+;;
+;; :expect is the contract:
+;;   :unreach      hard guarantee — every level fully connected (union-find +
+;;                 reachable-stair fixes). A regression here is a real bug.
+;;   :max-floating coarse tripwire, NOT a cleanliness target. Floating doors are
+;;                 a known, unfixed wart (observed 3-42 across this matrix); the
+;;                 ceiling only catches a generator that drowns levels in them.
+{:w 79
+ :h 30
+ :depths [1 3 5 10]
+ :seed-range [42 92]          ; 42..91 inclusive — the connectivity-validated range
+ :expect {:unreach 0
+          :max-floating 60}}
