@@ -74,6 +74,7 @@
     line-height:14px; font-size:11px; box-shadow:0 0 0 1px rgba(255,255,255,.06) inset; }
   #statsBody .snm { color:#b8b2a3; }
   #statsBody .sct { color:#8a8475; font-variant-numeric:tabular-nums; }
+  #statsBody .srow.zero { opacity:.38; }   /* type absent on this floor */
 
   /* collapsible "view & tuning" drawer in the panel */
   #viewHd { display:flex; align-items:center; gap:7px; padding:6px 2px; cursor:pointer;
@@ -136,8 +137,9 @@
   <div id="floors"></div>
 
   <p class="hint">Drag to orbit · scroll to zoom · shift/space-drag to pan ·
-    <b>click a floor</b> for a flat top-down view (click again, click off, or
-    double-click to return; <b>↑↓</b> or <b>j/k</b> cycle depths). Per floor:
+    <b>click a floor</b> for a flat top-down view; click it again to descend
+    (loops), click off (or double-click) to return; <b>↑↓</b> or <b>j/k</b> step
+    depths. Per floor:
     <b>show</b> toggles visibility, <b>dim</b> fades it so you see floors beneath;
     "dim ↑" dims everything above the deepest shown floor.</p>
 </div>
@@ -166,12 +168,11 @@ const bgLift = a => `rgb(${lift(a[0])},${lift(a[1])},${lift(a[2])})`;
 const NAMES = {0:'void',1:'floor',2:'grass',3:'water',4:'deep water',5:'blood',
   6:'chasm',7:'lava',8:'wall',9:'torch',10:'ledge',11:'door',12:'open door',
   13:'stairs ↓',14:'stairs ↑',15:'fire',16:'ash',17:'bridge',18:'trampled',19:'web'};
-// tile counts for one floor's grid, present types only (skip void), most first
+// tile counts for one floor's grid as a {type: count} map (skip void)
 function tileHist(grid){
   const c={};
-  for(const t of grid) c[t]=(c[t]||0)+1;
-  return Object.keys(c).map(Number).filter(t=>t!==0)
-    .sort((a,b)=>c[b]-c[a]).map(t=>({t,n:c[t]}));
+  for(const t of grid){ if(t!==0) c[t]=(c[t]||0)+1; }
+  return c;
 }
 // Cell width and height are separate: a square cell stretches a 79x30 map to
 // ~2.6:1, but a terminal char cell is ~2:1 tall:wide, so the map reads ~4:3
@@ -181,6 +182,7 @@ let CELLW = 6, CELLH = 12;
 // map data — (re)assigned by loadData() so an uploaded file can replace it
 let w=0, h=0, floors=[], N=0, seed=0;
 let FW=0, FH=0;
+let legendTypes=[];   // fixed legend rows: types present anywhere, fixed order
 
 // Paint a floor's tiles into its (re-sized) canvas. Re-run on aspect change.
 function paintFace(L) {
@@ -275,11 +277,13 @@ function frontVisible(){ let b=null;
   for(const L of layers) if(L.visible && (!b||L.depth<b.depth)) b=L; return b; }
 function updateStats(){
   const L=frontVisible(), body=$('statsBody');
-  $('statsLabel').textContent = L ? `depth ${L.depth}` : 'stats';
-  if(!L){ body.innerHTML='<div class="srow">no floor shown</div>'; return; }
+  $('statsLabel').textContent = L ? `depth ${L.depth}` : '—';
   body.innerHTML='';
-  for(const {t,n} of L.stats){
-    const row=document.createElement('div'); row.className='srow';
+  // always render the SAME row set (legendTypes); only the counts change. Rows
+  // absent on this floor show 0, dimmed — fixed size, nothing jumps.
+  for(const t of legendTypes){
+    const n = L ? (L.stats[t]||0) : 0;
+    const row=document.createElement('div'); row.className='srow'+(n===0?' zero':'');
     const sw=document.createElement('span'); sw.className='ssw';
     sw.style.background=bgLift(STYLE[t][1]); sw.style.color=rgb(STYLE[t][0]);
     sw.textContent = GLYPH[t]===' ' ? '·' : GLYPH[t];
@@ -325,12 +329,20 @@ addEventListener('pointermove',e=>{ if(!drag)return;
     ctl.rx.value=spin.x; ctl.rz.value=spin.z; }
   layout(); });
 addEventListener('pointerup',e=>{
-  // click (no drag): in facing view → back to stack; else, on a floor → face it
+  // click (no drag): on a floor → face it, or descend (cycle) if already facing;
+  // off a floor while facing → back to the exploded stack.
   if(drag && !drag.moved && !drag.pan){
-    if(facing!==null) exitToStack();
-    else if(drag.tgt?.dataset?.depth) focusDepth(+drag.tgt.dataset.depth);
+    const onFloor=drag.tgt?.dataset?.depth;
+    if(facing!==null){ if(onFloor) cycleFacing(1); else exitToStack(); }
+    else if(onFloor) focusDepth(+onFloor);
   }
   drag=null; });
+// while facing, step to the next/prev depth, wrapping (click descends + loops)
+function cycleFacing(dir){
+  const depths=layers.map(L=>L.depth).sort((a,b)=>a-b);
+  const i=(depths.indexOf(facing)+dir+depths.length)%depths.length;
+  focusDepth(depths[i]);
+}
 
 // flat top-down view of floor d, hiding every floor above it (like in-game)
 function focusDepth(d){
@@ -390,6 +402,11 @@ function loadData(d){
       stats:tileHist(f.grid)});   // cache the histogram once per floor
   }
   layers.sort((a,b)=>a.depth-b.depth); // index 0 == depth 1 (top)
+  // fixed legend rows: every type present in ANY floor, ordered by total count
+  // (so the legend keeps the same rows + order while you navigate — no jumping)
+  const totals={};
+  for(const L of layers) for(const t in L.stats) totals[t]=(totals[t]||0)+L.stats[t];
+  legendTypes=Object.keys(totals).map(Number).sort((a,b)=>totals[b]-totals[a]);
   // rebuild floor list rows
   flist.innerHTML='';
   flist.insertAdjacentHTML('beforeend',
