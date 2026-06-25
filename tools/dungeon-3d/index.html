@@ -19,81 +19,127 @@
   .floor { position:absolute; transform-style:preserve-3d; left:50%; top:50%;
     transition:transform .12s ease, opacity .12s ease; }
   .floor canvas { display:block; image-rendering:pixelated;
-    box-shadow:0 0 0 1px rgba(255,255,255,.06); transition:opacity .1s linear; }
+    box-shadow:0 0 0 1px rgba(255,255,255,.06);
+    transition:opacity .1s linear, box-shadow .12s ease; }
+  /* subtle per-layer hover — the frontmost floor under the cursor (3D hit-test) */
+  .floor > canvas:hover { box-shadow:0 0 0 1px rgba(255,210,127,.55),
+    0 0 16px rgba(255,210,127,.16); }
   /* Extrusion: solid dark plates stacked behind the face along the tower axis,
      so the floor reads as a slab with thickness. The container must establish
      its own 3D context or the plates flatten onto the face and just darken it. */
   .floor .slabs { position:absolute; left:0; top:0; transform-style:preserve-3d; }
   .slab { position:absolute; left:0; top:0; }
 
-  #panel { position:absolute; top:12px; left:12px; width:260px; padding:12px 14px;
+  #panel { position:absolute; top:12px; left:12px; width:260px; padding:14px 16px;
     background:rgba(22,22,28,.92); border:1px solid #2a2a33; border-radius:8px;
     backdrop-filter:blur(4px); }
   #panel h1 { font-size:12px; letter-spacing:.04em; text-transform:uppercase;
-    color:var(--accent); margin:0 0 2px; }
-  #panel .sub { color:#7c7768; margin:0 0 10px; font-size:11px; }
+    color:var(--accent); margin:0 0 3px; }
+  #panel .sub { color:#7c7768; margin:0 0 13px; font-size:11px; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:8px;
-    margin:7px 0; }
+    margin:10px 0; }
   .row label { white-space:nowrap; }
   /* min-width:0 lets the range shrink (its intrinsic min is ~129px and would
      otherwise push the value box off the panel's right edge). */
   .row input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
   .row .val { flex:none; width:44px; text-align:right; color:#9b9585; }
-  hr { border:0; border-top:1px solid #2a2a33; margin:10px 0; }
+  hr { border:0; border-top:1px solid #2a2a33; margin:13px 0; }
   #floors { display:grid; grid-template-columns:1fr 34px 34px; align-items:center;
-    column-gap:6px; row-gap:3px; margin-top:5px; }
+    column-gap:6px; row-gap:6px; margin-top:8px; }
   #floors .fhdr { font-size:10px; letter-spacing:.04em; text-transform:uppercase;
     color:#6c6758; text-align:center; padding-bottom:1px; }
   #floors .flabel { white-space:nowrap; }
   #floors .flabel.off { color:#56524833; color:#565248; }
   #floors input { justify-self:center; margin:0; cursor:pointer; }
-  .hint { color:#6c6758; font-size:11px; margin-top:8px; }
+  .hint { color:#6c6758; font-size:11px; margin-top:12px; line-height:1.5; }
   button.mini { background:#23232c; color:var(--ink); border:1px solid #34343f;
-    border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit; }
+    border-radius:5px; padding:4px 9px; cursor:pointer; font:inherit;
+    white-space:nowrap; }
   button.mini:hover { border-color:var(--accent); }
+
+  /* stats legend — bottom-right, collapsible */
+  #stats { position:absolute; right:12px; bottom:12px; width:158px;
+    background:rgba(22,22,28,.92); border:1px solid #2a2a33; border-radius:8px;
+    backdrop-filter:blur(4px); overflow:hidden; }
+  #statsHd { display:flex; align-items:center; gap:7px; padding:7px 10px;
+    cursor:pointer; user-select:none; color:var(--accent); font-size:11px;
+    letter-spacing:.04em; text-transform:uppercase; }
+  #statsHd .caret { font-size:9px; transition:transform .12s; }
+  #stats.collapsed .caret { transform:rotate(-90deg); }
+  #stats.collapsed #statsBody { display:none; }
+  #statsBody { padding:1px 10px 8px; }
+  #statsBody .srow { display:grid; grid-template-columns:17px 1fr auto;
+    align-items:center; gap:8px; padding:1px 0; }
+  #statsBody .ssw { width:17px; height:14px; border-radius:3px; text-align:center;
+    line-height:14px; font-size:11px; box-shadow:0 0 0 1px rgba(255,255,255,.06) inset; }
+  #statsBody .snm { color:#b8b2a3; }
+  #statsBody .sct { color:#8a8475; font-variant-numeric:tabular-nums; }
+
+  /* collapsible "view & tuning" drawer in the panel */
+  #viewHd { display:flex; align-items:center; gap:7px; padding:6px 2px; cursor:pointer;
+    user-select:none; color:#8a8475; font-size:11px; letter-spacing:.04em;
+    text-transform:uppercase; }
+  #viewHd:hover { color:var(--accent); }
+  #viewHd .caret { font-size:9px; transition:transform .12s; }
+  #viewDrawer.collapsed .caret { transform:rotate(-90deg); }
+  #viewDrawer.collapsed #viewBody { display:none; }
 </style>
 </head>
 <body>
 <div id="stage"><div id="stack"></div></div>
 
+<div id="stats">
+  <div id="statsHd"><span class="caret">▾</span><span id="statsLabel">stats</span></div>
+  <div id="statsBody"></div>
+</div>
+
 <div id="panel">
   <h1>Dungeon · exploded</h1>
   <p class="sub" id="meta">loading…</p>
-  <div class="row" style="margin:-2px 0 8px">
+  <div class="row" style="margin:2px 0 12px; justify-content:flex-start; gap:11px">
     <button class="mini" id="loadBtn">load export…</button>
-    <span style="color:#6c6758;font-size:10px">or drop a .json/.js file</span>
+    <span style="color:#6c6758;font-size:10px;line-height:1.4">or drop a .json/.js file</span>
   </div>
   <input id="fileIn" type="file" accept=".json,.js,application/json" hidden>
 
   <div class="row"><label>Explode</label>
     <input id="gap" type="range" min="0" max="320" value="120"><span class="val" id="gapv"></span></div>
-  <div class="row"><label>Tilt&nbsp;X</label>
-    <input id="rx" type="range" min="0" max="85" value="58"><span class="val" id="rxv"></span></div>
-  <div class="row"><label>Spin&nbsp;Z</label>
-    <input id="rz" type="range" min="-90" max="90" value="-38"><span class="val" id="rzv"></span></div>
-  <div class="row"><label>Zoom</label>
-    <input id="zoom" type="range" min="40" max="160" value="90"><span class="val" id="zoomv"></span></div>
-  <div class="row"><label>Aspect</label>
-    <input id="aspect" type="range" min="3" max="12" value="6"><span class="val" id="aspectv"></span></div>
-  <div class="row"><label>Thickness</label>
-    <input id="thick" type="range" min="0" max="14" value="5"><span class="val" id="thickv"></span></div>
-  <div class="row"><label>Dim&nbsp;level</label>
-    <input id="under" type="range" min="5" max="100" value="20"><span class="val" id="underv"></span></div>
+
+  <!-- non-essentials: orbit/zoom are redundant with drag/scroll on desktop;
+       aspect/thickness/dim are set-once. Collapsed by default; the drawer is
+       also the touch fallback for the gestures. -->
+  <div id="viewDrawer" class="collapsed">
+    <div id="viewHd"><span class="caret">▾</span><span>view &amp; tuning</span></div>
+    <div id="viewBody">
+      <div class="row"><label>Tilt&nbsp;X</label>
+        <input id="rx" type="range" min="0" max="85" value="58"><span class="val" id="rxv"></span></div>
+      <div class="row"><label>Spin&nbsp;Z</label>
+        <input id="rz" type="range" min="-90" max="90" value="-38"><span class="val" id="rzv"></span></div>
+      <div class="row"><label>Zoom</label>
+        <input id="zoom" type="range" min="40" max="160" value="90"><span class="val" id="zoomv"></span></div>
+      <div class="row"><label>Aspect</label>
+        <input id="aspect" type="range" min="3" max="12" value="6"><span class="val" id="aspectv"></span></div>
+      <div class="row"><label>Thickness</label>
+        <input id="thick" type="range" min="0" max="14" value="5"><span class="val" id="thickv"></span></div>
+      <div class="row"><label>Dim&nbsp;level</label>
+        <input id="under" type="range" min="5" max="100" value="20"><span class="val" id="underv"></span></div>
+    </div>
+  </div>
 
   <hr>
   <div class="row" style="margin-top:0">
     <strong>Floors</strong>
-    <span><button class="mini" id="allOn">all</button>
+    <span style="white-space:nowrap"><button class="mini" id="allOn">all</button>
           <button class="mini" id="topOnly">top</button>
           <button class="mini" id="dimUpper">dim&nbsp;↑</button></span>
   </div>
   <div id="floors"></div>
 
   <p class="hint">Drag to orbit · scroll to zoom · shift/space-drag to pan ·
-    <b>click a floor</b> for a flat top-down view of it (hiding floors above) ·
-    double-click to reset. Per floor: <b>show</b> toggles visibility, <b>dim</b>
-    fades it so you see floors beneath; "dim ↑" dims everything above the deepest
-    shown floor.</p>
+    <b>click a floor</b> for a flat top-down view (click again, click off, or
+    double-click to return; <b>↑↓</b> or <b>j/k</b> cycle depths). Per floor:
+    <b>show</b> toggles visibility, <b>dim</b> fades it so you see floors beneath;
+    "dim ↑" dims everything above the deepest shown floor.</p>
 </div>
 
 <script src="floors.js"></script>
@@ -117,6 +163,16 @@ const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
 // rooms dark voids and walls a grey speckled mass, as on the terminal.
 const lift = c => Math.min(255, Math.round(c*1.1 + 3));
 const bgLift = a => `rgb(${lift(a[0])},${lift(a[1])},${lift(a[2])})`;
+const NAMES = {0:'void',1:'floor',2:'grass',3:'water',4:'deep water',5:'blood',
+  6:'chasm',7:'lava',8:'wall',9:'torch',10:'ledge',11:'door',12:'open door',
+  13:'stairs ↓',14:'stairs ↑',15:'fire',16:'ash',17:'bridge',18:'trampled',19:'web'};
+// tile counts for one floor's grid, present types only (skip void), most first
+function tileHist(grid){
+  const c={};
+  for(const t of grid) c[t]=(c[t]||0)+1;
+  return Object.keys(c).map(Number).filter(t=>t!==0)
+    .sort((a,b)=>c[b]-c[a]).map(t=>({t,n:c[t]}));
+}
 // Cell width and height are separate: a square cell stretches a 79x30 map to
 // ~2.6:1, but a terminal char cell is ~2:1 tall:wide, so the map reads ~4:3
 // (79*6 x 30*12 = 474x360). CELLH fixes row height; the Aspect slider sets CELLW.
@@ -160,6 +216,7 @@ const $ = id => document.getElementById(id);
 const ctl = { gap:$('gap'), rx:$('rx'), rz:$('rz'), zoom:$('zoom'),
   aspect:$('aspect'), thick:$('thick'), under:$('under') };
 let drag=null, spin={x:+ctl.rx.value, z:+ctl.rz.value}, pan={x:0,y:0}, spaceHeld=false;
+let facing=null;   // depth currently in flat top-down "facing" view, else null
 
 function applyThickness(){
   const n=+ctl.thick.value;
@@ -184,7 +241,10 @@ function layout(){
   // Opacity goes on the leaf canvases (face + every slab), NOT the floor div —
   // opacity<1 on a preserve-3d node flattens its 3D children (a hard pop), and
   // a dimmed face alone would still show its opaque slabs, hiding the floor below.
-  const mid=(N-1)/2;   // center the tower around its midpoint so it rotates in place
+  // center on the VISIBLE floors (so hiding layers recenters the stack), not the
+  // full tower — use the midpoint of the visible depth range.
+  const visIdx=layers.filter(L=>L.visible).map(L=>L.depth-1);
+  const mid=visIdx.length ? (Math.min(...visIdx)+Math.max(...visIdx))/2 : (N-1)/2;
   for (const L of layers){
     const idx=L.depth-1;
     const z=(mid-idx)*gap;            // depth 1 highest (+Z toward viewer)
@@ -210,8 +270,29 @@ const flist=$('floors');
 function syncRow(L){ L.showCb.checked=L.visible; L.dimCb.checked=L.dim;
   L.lab.classList.toggle('off',!L.visible); }
 
-$('allOn').onclick=()=>{ layers.forEach(L=>{L.visible=true;L.dim=false;syncRow(L);}); layout(); };
-$('topOnly').onclick=()=>{ layers.forEach(L=>{L.visible=(L.depth===1);L.dim=false;syncRow(L);}); layout(); };
+// stats legend reflects the frontmost (shallowest) shown floor
+function frontVisible(){ let b=null;
+  for(const L of layers) if(L.visible && (!b||L.depth<b.depth)) b=L; return b; }
+function updateStats(){
+  const L=frontVisible(), body=$('statsBody');
+  $('statsLabel').textContent = L ? `depth ${L.depth}` : 'stats';
+  if(!L){ body.innerHTML='<div class="srow">no floor shown</div>'; return; }
+  body.innerHTML='';
+  for(const {t,n} of L.stats){
+    const row=document.createElement('div'); row.className='srow';
+    const sw=document.createElement('span'); sw.className='ssw';
+    sw.style.background=bgLift(STYLE[t][1]); sw.style.color=rgb(STYLE[t][0]);
+    sw.textContent = GLYPH[t]===' ' ? '·' : GLYPH[t];
+    const nm=document.createElement('span'); nm.className='snm'; nm.textContent=NAMES[t]||('#'+t);
+    const ct=document.createElement('span'); ct.className='sct'; ct.textContent=n;
+    row.append(sw,nm,ct); body.append(row);
+  }
+}
+$('statsHd').onclick=()=>$('stats').classList.toggle('collapsed');
+$('viewHd').onclick=()=>$('viewDrawer').classList.toggle('collapsed');
+
+$('allOn').onclick=()=>{ layers.forEach(L=>{L.visible=true;L.dim=false;syncRow(L);}); layout(); updateStats(); };
+$('topOnly').onclick=()=>{ layers.forEach(L=>{L.visible=(L.depth===1);L.dim=false;syncRow(L);}); layout(); updateStats(); };
 // dim every shown floor above the deepest shown one — look down through the stack
 $('dimUpper').onclick=()=>{
   const shown=layers.filter(L=>L.visible).map(L=>L.depth);
@@ -232,36 +313,57 @@ addEventListener('keydown',e=>{ if(e.code==='Space'){ spaceHeld=true;
 addEventListener('keyup',e=>{ if(e.code==='Space') spaceHeld=false; });
 
 // drag: Shift/Space → pan, otherwise orbit. A press with no drag is a click.
-addEventListener('pointerdown',e=>{ if(e.target.closest('#panel'))return;
+addEventListener('pointerdown',e=>{ if(e.target.closest('#panel,#stats'))return;
   drag={x:e.clientX,y:e.clientY,sx:spin.x,sz:spin.z,px:pan.x,py:pan.y,
         pan:(e.shiftKey||spaceHeld), tgt:e.target, moved:false}; });
 addEventListener('pointermove',e=>{ if(!drag)return;
   if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3) drag.moved=true;
   if(drag.pan){ pan.x=drag.px+(e.clientX-drag.x); pan.y=drag.py+(e.clientY-drag.y); }
-  else { spin.z=drag.sz+(e.clientX-drag.x)*0.4;
+  else { facing=null;   // orbiting tilts back into 3D — no longer facing a floor
+    spin.z=drag.sz+(e.clientX-drag.x)*0.4;
     spin.x=Math.max(0,Math.min(85,drag.sx+(e.clientY-drag.y)*0.4));
     ctl.rx.value=spin.x; ctl.rz.value=spin.z; }
   layout(); });
 addEventListener('pointerup',e=>{
-  // click (no drag) on a floor → snap to flat top-down of that floor
-  if(drag && !drag.moved && !drag.pan && drag.tgt?.dataset?.depth)
-    focusDepth(+drag.tgt.dataset.depth);
+  // click (no drag): in facing view → back to stack; else, on a floor → face it
+  if(drag && !drag.moved && !drag.pan){
+    if(facing!==null) exitToStack();
+    else if(drag.tgt?.dataset?.depth) focusDepth(+drag.tgt.dataset.depth);
+  }
   drag=null; });
 
 // flat top-down view of floor d, hiding every floor above it (like in-game)
 function focusDepth(d){
+  facing=d;
   spin.x=0; spin.z=0; ctl.rx.value=0; ctl.rz.value=0; pan.x=0; pan.y=0;
   layers.forEach(L=>{ L.visible=L.depth>=d; L.dim=false; syncRow(L); });
-  layout();
+  updateStats(); layout();
 }
-// double-click → back to the default exploded 3D view
-addEventListener('dblclick',e=>{ if(e.target.closest('#panel'))return;
+// back to the default exploded 3D view
+function exitToStack(){
+  facing=null;
   spin.x=58; spin.z=-38; ctl.rx.value=58; ctl.rz.value=-38; pan.x=0; pan.y=0;
   layers.forEach(L=>{ L.visible=true; L.dim=false; syncRow(L); });
-  layout(); });
+  updateStats(); layout();
+}
+addEventListener('dblclick',e=>{ if(e.target.closest('#panel,#stats'))return; exitToStack(); });
+
+// in facing view: ↑/k = shallower (toward depth 1), ↓/j = deeper
+addEventListener('keydown',e=>{
+  if(facing===null) return;
+  if(document.activeElement?.tagName==='INPUT') return;   // let sliders keep arrows
+  const deeper  = e.key==='ArrowDown'||e.key==='j';
+  const shallow = e.key==='ArrowUp'  ||e.key==='k';
+  if(!deeper && !shallow) return;
+  e.preventDefault();
+  const depths=layers.map(L=>L.depth).sort((a,b)=>a-b);
+  let i=depths.indexOf(facing);
+  i = deeper ? Math.min(depths.length-1,i+1) : Math.max(0,i-1);
+  if(depths[i]!==facing) focusDepth(depths[i]);
+});
 
 // scroll to zoom (passive:false so we can stop the page from scrolling)
-addEventListener('wheel',e=>{ if(e.target.closest('#panel'))return;
+addEventListener('wheel',e=>{ if(e.target.closest('#panel,#stats'))return;
   e.preventDefault();
   const z=ctl.zoom, step=Math.sign(e.deltaY)*-6;
   z.value=Math.max(+z.min, Math.min(+z.max, +z.value+step));
@@ -274,6 +376,9 @@ function loadData(d){
     throw new Error('not a floors export (need {w,h,floors:[{grid:[…]}]})');
   w=d.w; h=d.h; floors=d.floors; N=floors.length; seed=d.seed??'?';
   FW=w*CELLW; FH=h*CELLH;
+  // fit the default explode to floor count so the tower keeps a roughly constant
+  // on-screen height regardless of N (5 floors → 120, the original feel)
+  ctl.gap.value = Math.max(0, Math.min(+ctl.gap.max, Math.round(480/Math.max(1,N-1))));
   // rebuild floor DOM — deepest first so translucency composites correctly
   stack.innerHTML=''; layers.length=0;
   for(const f of floors.slice().sort((a,b)=>b.depth-a.depth)){
@@ -281,7 +386,8 @@ function loadData(d){
     const face=document.createElement('canvas'); face.dataset.depth=f.depth;
     const slabWrap=document.createElement('div'); slabWrap.className='slabs';
     el.append(slabWrap,face); stack.appendChild(el);
-    layers.push({el,face,slabWrap,depth:f.depth,visible:true,dim:false,data:f});
+    layers.push({el,face,slabWrap,depth:f.depth,visible:true,dim:false,data:f,
+      stats:tileHist(f.grid)});   // cache the histogram once per floor
   }
   layers.sort((a,b)=>a.depth-b.depth); // index 0 == depth 1 (top)
   // rebuild floor list rows
@@ -294,13 +400,13 @@ function loadData(d){
     const show=document.createElement('input'); show.type='checkbox'; show.checked=L.visible;
     const dim=document.createElement('input'); dim.type='checkbox';
     show.addEventListener('change',()=>{ L.visible=show.checked;
-      lab.classList.toggle('off',!show.checked); layout(); });
+      lab.classList.toggle('off',!show.checked); layout(); updateStats(); });
     dim.addEventListener('change',()=>{ L.dim=dim.checked; layout(); });
     L.showCb=show; L.dimCb=dim; L.lab=lab;
     flist.append(lab,show,dim);
   }
   $('meta').textContent=`${N} floors · ${w}×${h} · seed ${seed}`;
-  rebuild(); layout();
+  rebuild(); layout(); updateStats();
 }
 
 // accept an exported .json OR the .js wrapper: slice the {…} and JSON.parse it
