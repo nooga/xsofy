@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>xsofy — dungeon exploded view (prototype)</title>
+<link rel="icon" href="data:,">  <!-- silence favicon 404 -->
+<style>
+  :root { --bg:#0c0c10; --panel:#16161c; --ink:#cfcabb; --accent:#ffd27f;
+    --reserve:258px; }   /* sidebar reserve; tuned by eye to center in usable area */
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow:hidden; }
+  /* reserve the sidebar's width so content centers in the usable area, not
+     under the panel. all centering (initial, click-focus, reset) rides this. */
+  #stage { position:absolute; inset:0; display:grid; place-items:center;
+    padding-left:var(--reserve); perspective:2200px; }
+  /* The tumbling container: all floors share one 3D transform. */
+  #stack { transform-style:preserve-3d; transition:transform .08s linear; }
+  .floor { position:absolute; transform-style:preserve-3d; left:50%; top:50%;
+    transition:transform .12s ease, opacity .12s ease; }
+  .floor canvas { display:block; image-rendering:pixelated;
+    box-shadow:0 0 0 1px rgba(255,255,255,.06); transition:opacity .1s linear; }
+  /* Extrusion: solid dark plates stacked behind the face along the tower axis,
+     so the floor reads as a slab with thickness. The container must establish
+     its own 3D context or the plates flatten onto the face and just darken it. */
+  .floor .slabs { position:absolute; left:0; top:0; transform-style:preserve-3d; }
+  .slab { position:absolute; left:0; top:0; }
+
+  #panel { position:absolute; top:12px; left:12px; width:260px; padding:12px 14px;
+    background:rgba(22,22,28,.92); border:1px solid #2a2a33; border-radius:8px;
+    backdrop-filter:blur(4px); }
+  #panel h1 { font-size:12px; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 2px; }
+  #panel .sub { color:#7c7768; margin:0 0 10px; font-size:11px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    margin:7px 0; }
+  .row label { white-space:nowrap; }
+  /* min-width:0 lets the range shrink (its intrinsic min is ~129px and would
+     otherwise push the value box off the panel's right edge). */
+  .row input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
+  .row .val { flex:none; width:44px; text-align:right; color:#9b9585; }
+  hr { border:0; border-top:1px solid #2a2a33; margin:10px 0; }
+  #floors { display:grid; grid-template-columns:1fr 34px 34px; align-items:center;
+    column-gap:6px; row-gap:3px; margin-top:5px; }
+  #floors .fhdr { font-size:10px; letter-spacing:.04em; text-transform:uppercase;
+    color:#6c6758; text-align:center; padding-bottom:1px; }
+  #floors .flabel { white-space:nowrap; }
+  #floors .flabel.off { color:#56524833; color:#565248; }
+  #floors input { justify-self:center; margin:0; cursor:pointer; }
+  .hint { color:#6c6758; font-size:11px; margin-top:8px; }
+  button.mini { background:#23232c; color:var(--ink); border:1px solid #34343f;
+    border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit; }
+  button.mini:hover { border-color:var(--accent); }
+</style>
+</head>
+<body>
+<div id="stage"><div id="stack"></div></div>
+
+<div id="panel">
+  <h1>Dungeon · exploded</h1>
+  <p class="sub" id="meta">loading…</p>
+  <div class="row" style="margin:-2px 0 8px">
+    <button class="mini" id="loadBtn">load export…</button>
+    <span style="color:#6c6758;font-size:10px">or drop a .json/.js file</span>
+  </div>
+  <input id="fileIn" type="file" accept=".json,.js,application/json" hidden>
+
+  <div class="row"><label>Explode</label>
+    <input id="gap" type="range" min="0" max="320" value="120"><span class="val" id="gapv"></span></div>
+  <div class="row"><label>Tilt&nbsp;X</label>
+    <input id="rx" type="range" min="0" max="85" value="58"><span class="val" id="rxv"></span></div>
+  <div class="row"><label>Spin&nbsp;Z</label>
+    <input id="rz" type="range" min="-90" max="90" value="-38"><span class="val" id="rzv"></span></div>
+  <div class="row"><label>Zoom</label>
+    <input id="zoom" type="range" min="40" max="160" value="90"><span class="val" id="zoomv"></span></div>
+  <div class="row"><label>Aspect</label>
+    <input id="aspect" type="range" min="3" max="12" value="6"><span class="val" id="aspectv"></span></div>
+  <div class="row"><label>Thickness</label>
+    <input id="thick" type="range" min="0" max="14" value="5"><span class="val" id="thickv"></span></div>
+  <div class="row"><label>Dim&nbsp;level</label>
+    <input id="under" type="range" min="5" max="100" value="20"><span class="val" id="underv"></span></div>
+
+  <hr>
+  <div class="row" style="margin-top:0">
+    <strong>Floors</strong>
+    <span><button class="mini" id="allOn">all</button>
+          <button class="mini" id="topOnly">top</button>
+          <button class="mini" id="dimUpper">dim&nbsp;↑</button></span>
+  </div>
+  <div id="floors"></div>
+
+  <p class="hint">Drag to orbit · scroll to zoom · shift/space-drag to pan ·
+    <b>click a floor</b> for a flat top-down view of it (hiding floors above) ·
+    double-click to reset. Per floor: <b>show</b> toggles visibility, <b>dim</b>
+    fades it so you see floors beneath; "dim ↑" dims everything above the deepest
+    shown floor.</p>
+</div>
+
+<script src="floors.js"></script>
+<script>
+// ---- palette inlined from xsofy/terrain.lg (tile-chars / tile-styles) ----
+const GLYPH = {0:" ",1:".",2:'"',3:"~",4:"~",5:".",6:" ",7:"~",8:"#",9:"#",
+  10:".",11:"+",12:"'",13:">",14:"<",15:"^",16:".",17:"=",18:".",19:":"};
+const STYLE = {
+  0:[[30,30,30],[10,10,10]], 1:[[80,70,55],[22,20,18]], 2:[[40,90,30],[18,28,14]],
+  3:[[60,120,140],[15,35,45]], 4:[[25,45,120],[8,12,38]], 5:[[120,20,20],[35,10,10]],
+  6:[[15,10,25],[4,2,8]], 7:[[255,120,20],[140,40,10]], 8:[[90,85,75],[45,42,38]],
+  9:[[200,160,60],[55,48,38]], 10:[[50,45,70],[20,18,40]], 11:[[140,110,60],[40,35,25]],
+  12:[[100,80,45],[22,20,18]], 13:[[255,255,200],[22,20,18]], 14:[[200,200,150],[22,20,18]],
+  15:[[255,160,30],[120,40,10]], 16:[[50,48,45],[18,17,16]], 17:[[120,85,40],[55,35,15]],
+  18:[[30,55,22],[20,24,16]], 19:[[200,200,210],[22,20,18]] };
+const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+// The in-game palette is tuned for a black terminal: backgrounds sit near
+// [20,20,20] and the glyph (fg) is LIGHTER than its bg, so e.g. wall '#' pops.
+// Lift bg just enough to read in an overview WITHOUT crossing above the fg —
+// over-lifting inverts figure/ground and the map flattens to muddy grey. Keep
+// rooms dark voids and walls a grey speckled mass, as on the terminal.
+const lift = c => Math.min(255, Math.round(c*1.1 + 3));
+const bgLift = a => `rgb(${lift(a[0])},${lift(a[1])},${lift(a[2])})`;
+// Cell width and height are separate: a square cell stretches a 79x30 map to
+// ~2.6:1, but a terminal char cell is ~2:1 tall:wide, so the map reads ~4:3
+// (79*6 x 30*12 = 474x360). CELLH fixes row height; the Aspect slider sets CELLW.
+let CELLW = 6, CELLH = 12;
+
+// map data — (re)assigned by loadData() so an uploaded file can replace it
+let w=0, h=0, floors=[], N=0, seed=0;
+let FW=0, FH=0;
+
+// Paint a floor's tiles into its (re-sized) canvas. Re-run on aspect change.
+function paintFace(L) {
+  const cv = L.face;
+  cv.width = FW; cv.height = FH;
+  const ctx = cv.getContext('2d');
+  ctx.font = `${CELLH}px ui-monospace, monospace`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const grid = L.data.grid;
+  for (let i=0;i<grid.length;i++){
+    const t=grid[i], x=(i%w)*CELLW, y=((i/w)|0)*CELLH, st=STYLE[t]||STYLE[0],
+          cx=x+CELLW/2, cy=y+CELLH/2;
+    // every tile (stairs included) renders faithfully: lifted bg + raw fg glyph.
+    // stairs are cream '>'/'<' on the dark void bg, exactly as in-game.
+    ctx.fillStyle = bgLift(st[1]); ctx.fillRect(x,y,CELLW,CELLH);
+    const g=GLYPH[t];
+    if (g && g!==' '){ ctx.fillStyle = rgb(st[0]); ctx.fillText(g,cx,cy); }
+  }
+}
+
+const stack = document.getElementById('stack');
+const layers = [];   // rebuilt by loadData(): {el,face,slabWrap,depth,visible,dim,data,showCb,dimCb,lab}
+
+// (re)render every face + slab at the current cell size
+function rebuild(){
+  FW = w*CELLW; FH = h*CELLH;
+  for (const L of layers) paintFace(L);
+  applyThickness();
+}
+
+// ---- controls ----
+const $ = id => document.getElementById(id);
+const ctl = { gap:$('gap'), rx:$('rx'), rz:$('rz'), zoom:$('zoom'),
+  aspect:$('aspect'), thick:$('thick'), under:$('under') };
+let drag=null, spin={x:+ctl.rx.value, z:+ctl.rz.value}, pan={x:0,y:0}, spaceHeld=false;
+
+function applyThickness(){
+  const n=+ctl.thick.value;
+  for (const L of layers){
+    L.slabWrap.innerHTML='';
+    for (let k=1;k<=n;k++){
+      const s=document.createElement('canvas'); // solid dark slab plate
+      s.className='slab';
+      s.width=FW; s.height=FH;
+      const sx=s.getContext('2d');
+      sx.fillStyle='#14130e'; sx.fillRect(0,0,FW,FH);  // opaque rock
+      s.style.transform=`translateZ(${-k}px)`;          // behind the face
+      L.slabWrap.appendChild(s);
+    }
+  }
+}
+
+function layout(){
+  const gap=+ctl.gap.value, zoom=+ctl.zoom.value/100, dimLevel=+ctl.under.value/100;
+  // each floor is independently shown/hidden and full/dimmed (the two-column
+  // grid). A dimmed floor fades to `dimLevel` so you can see floors beneath it.
+  // Opacity goes on the leaf canvases (face + every slab), NOT the floor div —
+  // opacity<1 on a preserve-3d node flattens its 3D children (a hard pop), and
+  // a dimmed face alone would still show its opaque slabs, hiding the floor below.
+  const mid=(N-1)/2;   // center the tower around its midpoint so it rotates in place
+  for (const L of layers){
+    const idx=L.depth-1;
+    const z=(mid-idx)*gap;            // depth 1 highest (+Z toward viewer)
+    L.el.style.transform=
+      `translate(-50%,-50%) translateZ(${z}px)`;
+    L.el.style.display=L.visible?'block':'none';
+    const op = L.dim ? dimLevel : 1;
+    L.el.querySelectorAll('canvas').forEach(c=>c.style.opacity=op);
+  }
+  // pan translates in screen space (outside the rotate) so it stays flat
+  stack.style.transform=
+    `translate(${pan.x}px,${pan.y}px) scale(${zoom}) rotateX(${spin.x}deg) rotateZ(${spin.z}deg)`;
+  $('gapv').textContent=gap;
+  $('rxv').textContent=spin.x|0; $('rzv').textContent=spin.z|0;
+  $('zoomv').textContent=(zoom).toFixed(2);
+  $('aspectv').textContent=(CELLW/CELLH).toFixed(2);
+  $('thickv').textContent=ctl.thick.value;
+  $('underv').textContent=Math.round(dimLevel*100)+'%';
+}
+
+// per-floor show/dim grid (the rows themselves are built in loadData)
+const flist=$('floors');
+function syncRow(L){ L.showCb.checked=L.visible; L.dimCb.checked=L.dim;
+  L.lab.classList.toggle('off',!L.visible); }
+
+$('allOn').onclick=()=>{ layers.forEach(L=>{L.visible=true;L.dim=false;syncRow(L);}); layout(); };
+$('topOnly').onclick=()=>{ layers.forEach(L=>{L.visible=(L.depth===1);L.dim=false;syncRow(L);}); layout(); };
+// dim every shown floor above the deepest shown one — look down through the stack
+$('dimUpper').onclick=()=>{
+  const shown=layers.filter(L=>L.visible).map(L=>L.depth);
+  const deepest=shown.length?Math.max(...shown):1;
+  layers.forEach(L=>{ L.dim = L.visible && L.depth<deepest; syncRow(L); }); layout(); };
+
+for (const k in ctl) ctl[k].addEventListener('input',()=>{
+  if (k==='rx') spin.x=+ctl.rx.value;
+  if (k==='rz') spin.z=+ctl.rz.value;
+  if (k==='thick') applyThickness();
+  if (k==='aspect'){ CELLW=+ctl.aspect.value; rebuild(); }
+  layout();
+});
+
+// Space held → pan instead of orbit (Shift works too, via e.shiftKey)
+addEventListener('keydown',e=>{ if(e.code==='Space'){ spaceHeld=true;
+  if(!e.target.closest('input,button')) e.preventDefault(); } });
+addEventListener('keyup',e=>{ if(e.code==='Space') spaceHeld=false; });
+
+// drag: Shift/Space → pan, otherwise orbit. A press with no drag is a click.
+addEventListener('pointerdown',e=>{ if(e.target.closest('#panel'))return;
+  drag={x:e.clientX,y:e.clientY,sx:spin.x,sz:spin.z,px:pan.x,py:pan.y,
+        pan:(e.shiftKey||spaceHeld), tgt:e.target, moved:false}; });
+addEventListener('pointermove',e=>{ if(!drag)return;
+  if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3) drag.moved=true;
+  if(drag.pan){ pan.x=drag.px+(e.clientX-drag.x); pan.y=drag.py+(e.clientY-drag.y); }
+  else { spin.z=drag.sz+(e.clientX-drag.x)*0.4;
+    spin.x=Math.max(0,Math.min(85,drag.sx+(e.clientY-drag.y)*0.4));
+    ctl.rx.value=spin.x; ctl.rz.value=spin.z; }
+  layout(); });
+addEventListener('pointerup',e=>{
+  // click (no drag) on a floor → snap to flat top-down of that floor
+  if(drag && !drag.moved && !drag.pan && drag.tgt?.dataset?.depth)
+    focusDepth(+drag.tgt.dataset.depth);
+  drag=null; });
+
+// flat top-down view of floor d, hiding every floor above it (like in-game)
+function focusDepth(d){
+  spin.x=0; spin.z=0; ctl.rx.value=0; ctl.rz.value=0; pan.x=0; pan.y=0;
+  layers.forEach(L=>{ L.visible=L.depth>=d; L.dim=false; syncRow(L); });
+  layout();
+}
+// double-click → back to the default exploded 3D view
+addEventListener('dblclick',e=>{ if(e.target.closest('#panel'))return;
+  spin.x=58; spin.z=-38; ctl.rx.value=58; ctl.rz.value=-38; pan.x=0; pan.y=0;
+  layers.forEach(L=>{ L.visible=true; L.dim=false; syncRow(L); });
+  layout(); });
+
+// scroll to zoom (passive:false so we can stop the page from scrolling)
+addEventListener('wheel',e=>{ if(e.target.closest('#panel'))return;
+  e.preventDefault();
+  const z=ctl.zoom, step=Math.sign(e.deltaY)*-6;
+  z.value=Math.max(+z.min, Math.min(+z.max, +z.value+step));
+  layout();
+},{passive:false});
+
+// (re)build everything from a floors export — the initial bundle or an upload
+function loadData(d){
+  if(!d || !Array.isArray(d.floors) || !d.floors.length || !Array.isArray(d.floors[0].grid))
+    throw new Error('not a floors export (need {w,h,floors:[{grid:[…]}]})');
+  w=d.w; h=d.h; floors=d.floors; N=floors.length; seed=d.seed??'?';
+  FW=w*CELLW; FH=h*CELLH;
+  // rebuild floor DOM — deepest first so translucency composites correctly
+  stack.innerHTML=''; layers.length=0;
+  for(const f of floors.slice().sort((a,b)=>b.depth-a.depth)){
+    const el=document.createElement('div'); el.className='floor';
+    const face=document.createElement('canvas'); face.dataset.depth=f.depth;
+    const slabWrap=document.createElement('div'); slabWrap.className='slabs';
+    el.append(slabWrap,face); stack.appendChild(el);
+    layers.push({el,face,slabWrap,depth:f.depth,visible:true,dim:false,data:f});
+  }
+  layers.sort((a,b)=>a.depth-b.depth); // index 0 == depth 1 (top)
+  // rebuild floor list rows
+  flist.innerHTML='';
+  flist.insertAdjacentHTML('beforeend',
+    '<span></span><span class="fhdr">show</span><span class="fhdr">dim</span>');
+  for(const L of layers){
+    const lab=document.createElement('span'); lab.className='flabel';
+    lab.textContent=`depth ${L.depth}${L.data.grid.includes(7)?' · lava':''}`;
+    const show=document.createElement('input'); show.type='checkbox'; show.checked=L.visible;
+    const dim=document.createElement('input'); dim.type='checkbox';
+    show.addEventListener('change',()=>{ L.visible=show.checked;
+      lab.classList.toggle('off',!show.checked); layout(); });
+    dim.addEventListener('change',()=>{ L.dim=dim.checked; layout(); });
+    L.showCb=show; L.dimCb=dim; L.lab=lab;
+    flist.append(lab,show,dim);
+  }
+  $('meta').textContent=`${N} floors · ${w}×${h} · seed ${seed}`;
+  rebuild(); layout();
+}
+
+// accept an exported .json OR the .js wrapper: slice the {…} and JSON.parse it
+function parseFloors(text){
+  const s=text.indexOf('{'), e=text.lastIndexOf('}');
+  if(s<0||e<=s) throw new Error('no JSON object found in file');
+  return JSON.parse(text.slice(s,e+1));
+}
+function loadFile(file){
+  const r=new FileReader();
+  r.onload=()=>{ try{ loadData(parseFloors(r.result)); }
+    catch(err){ $('meta').textContent='load failed: '+err.message; } };
+  r.readAsText(file);
+}
+$('loadBtn').onclick=()=>$('fileIn').click();
+$('fileIn').addEventListener('change',e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+addEventListener('dragover',e=>e.preventDefault());            // allow drop
+addEventListener('drop',e=>{ e.preventDefault();
+  const f=e.dataTransfer?.files?.[0]; if(f) loadFile(f); });
+
+loadData(window.FLOORS);   // initial bundled data
+</script>
+</body>
+</html>

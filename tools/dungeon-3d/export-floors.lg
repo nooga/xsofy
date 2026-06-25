@@ -1,0 +1,55 @@
+(ns export-floors
+  "Dump N successive dungeon floors (depths 1..N, one seed) for the
+   tools/dungeon-3d exploded-stack viewer. Calls xsofy.terrain/generate-level
+   directly, so what you see is what the game generates. Run from the xsofy root:
+
+     lg tools/dungeon-3d/export-floors.lg > tools/dungeon-3d/floors.js
+
+   Emits `window.FLOORS = {w,h,seed,floors:[{depth,grid:[tile-codes...],
+   down:[x y]|null,up:...}]};` as a plain <script>-loadable file, so the viewer
+   opens from file:// with no server or CORS dance. The tile->glyph/color
+   palette is NOT exported — the viewer inlines it from terrain.lg
+   (tile-chars / tile-styles). Needs the native-xxh3 lg (xsofy.det)."
+  (:require [xsofy.terrain :as terrain]))
+
+(def W 79)
+(def H 30)
+
+;; CLI args (any order): "json" → raw JSON; bare numbers → seed then depths.
+;;   lg export-floors.lg            → js, seed 42, 5 depths
+;;   lg export-floors.lg 64 8       → js, seed 64, 8 depths
+;;   lg export-floors.lg json 64    → raw JSON, seed 64, 5 depths
+(def args  *command-line-args*)
+(def json? (boolean (some #(= "json" %) args)))
+(def nums  (filter number? (map read-string (remove #(= "json" %) args))))
+(def SEED   (if (>= (count nums) 1) (nth nums 0) 42))
+(def DEPTHS (if (>= (count nums) 2) (nth nums 1) 5))
+
+(defn find-tile [grid w h code]
+  (loop [i 0]
+    (cond
+      (>= i (* w h))         nil
+      (= code (aget grid i)) [(rem i w) (quot i w)]
+      :else                  (recur (inc i)))))
+
+(defn grid->json [grid w h]
+  (let [cells (mapv #(terrain/tget grid w (rem % w) (quot % w)) (range (* w h)))]
+    (str "[" (apply str (interpose "," cells)) "]")))
+
+(defn xy->json [xy]
+  (if xy (str "[" (nth xy 0) "," (nth xy 1) "]") "null"))
+
+(defn floor->json [depth]
+  (let [result (first (terrain/generate-level W H depth {:seed SEED})) ; {:grid :rooms}
+        grid   (:grid result)]
+    (str "{\"depth\":" depth
+         ",\"down\":" (xy->json (find-tile grid W H 13))
+         ",\"up\":"   (xy->json (find-tile grid W H 14))
+         ",\"grid\":" (grid->json grid W H) "}")))
+
+;; Default emits a <script>-loadable `window.FLOORS = {…};`; `json` arg emits raw
+;; JSON. The viewer's upload accepts either, but a bare .json is the portable form.
+(let [floors (mapv floor->json (map inc (range DEPTHS)))
+      body   (str "{\"w\":" W ",\"h\":" H ",\"seed\":" SEED
+                  ",\"floors\":[" (apply str (interpose "," floors)) "]}")]
+  (println (if json? body (str "window.FLOORS = " body ";"))))
