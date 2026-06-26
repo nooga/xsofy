@@ -187,6 +187,8 @@
         data-code="(defn place-grass-patch! [world grid w h] world)">kill grass</button>
       <button class="mini eg"
         data-code="(defn place-lake! [world grid w h deep-tile shallow-tile wreath-width size-class] [false world])">kill lakes</button>
+      <button class="mini eg"
+        data-code="(defn carve-room! [grid w x1 y1 x2 y2] (doseq [y (range y1 (inc y2))] (doseq [x (range x1 (inc x2))] (tset! grid w x y 15))))">add fire</button>
     </div>
   </div>
 </div>
