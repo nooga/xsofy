@@ -232,6 +232,24 @@ let w=0, h=0, floors=[], N=0, seed=0;
 let FW=0, FH=0;
 let legendTypes=[];   // fixed legend rows: types present anywhere, fixed order
 
+// ---- Backend: the two data-access points the UI needs (generate floors, eval
+// code), behind one interface so a hosted-wasm backend (in-page window.Eval into
+// the let-go image) can replace the server without touching rendering/controls.
+// ServerBackend talks to terrain-server.lg; `Backend` is the active one.
+const ServerBackend = {
+  failHint: 'is terrain-server.lg running?',   // shown in the meta line on generate failure
+  async generate(seed, depths){
+    const r = await fetch(`/floors?seed=${seed}&depths=${depths}`);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();                            // {w,h,seed,floors:[…]}
+  },
+  async evalCode(code){
+    const r = await fetch('/eval',{method:'POST',body:code});
+    return r.json();                            // {ok, value|error}
+  },
+};
+let Backend = ServerBackend;   // hosted-wasm mode swaps this in
+
 // Paint a floor's tiles into its (re-sized) canvas. Re-run on aspect change.
 function paintFace(L) {
   const cv = L.face;
@@ -541,16 +559,15 @@ async function generate(){
   const st=$('genStatus'); st.textContent='generating…';
   try{
     const t0=performance.now();
-    const r=await fetch(`/floors?seed=${seed}&depths=${depths}`);
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const d=await r.json();
+    const d=await Backend.generate(seed, depths);
     if(myToken!==genToken) return;                // a newer step won — drop this stale result
     loadData(d); renderMetrics(d);
     st.textContent=`${(performance.now()-t0)|0}ms`;
   }catch(err){
     if(myToken!==genToken) return;
     st.textContent='';
-    $('meta').textContent='fetch failed: '+err.message+' — is terrain-server.lg running?';
+    $('meta').textContent='generate failed: '+err.message
+      +(Backend.failHint?' — '+Backend.failHint:'');
   }
 }
 // Stepping seed/depth (spinner, ↑/↓, or typing) auto-regenerates, debounced so a
@@ -566,8 +583,7 @@ async function evalCode(){
   if(!code){ out.textContent=''; return; }
   out.style.color='#6c6758'; out.textContent='eval…';
   try{
-    const r=await fetch('/eval',{method:'POST',body:code});
-    const d=await r.json();
+    const d=await Backend.evalCode(code);
     if(d.ok){ out.style.color='#7bb274'; out.textContent='✓ '+d.value; generate(); }  // re-render with the new code
     else    { out.style.color='#e08a6a'; out.textContent='✗ '+d.error; }
   }catch(err){ out.style.color='#e08a6a'; out.textContent='✗ '+err.message; }
