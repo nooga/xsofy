@@ -16,7 +16,7 @@
   (:require [xsofy.terrain :as terrain]
             [xsofy.det :as det]
             [string :as str]
-            [http :refer :all]
+            [http :as http]        ; :as, not :refer :all — http/get would shadow core get
             [json :refer :all]
             [io :as io]))
 
@@ -137,4 +137,4 @@
 (def ADDR (str "127.0.0.1:" PORT))                        ; localhost-only — /eval runs code
 (println (str "terrain workbench: http://localhost:" PORT
               "  (GET /floors?seed=&depths=  ·  POST /eval)"))
-(serve handler ADDR)
+(http/serve handler ADDR)
