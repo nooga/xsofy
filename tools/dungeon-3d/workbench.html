@@ -32,7 +32,26 @@
 
   #panel { position:absolute; top:12px; left:12px; width:260px; padding:14px 16px;
     background:rgba(22,22,28,.92); border:1px solid #2a2a33; border-radius:8px;
+    backdrop-filter:blur(4px); max-height:calc(100vh - 24px); overflow-y:auto; }
+  /* live-coding console: docked bottom, centered in the usable strip, collapsible */
+  #eval { position:absolute; bottom:12px; left:var(--reserve); right:196px;
+    max-width:780px; margin:0 auto; z-index:5;   /* right gap clears the legend */
+    background:rgba(22,22,28,.94); border:1px solid #2a2a33; border-radius:8px;
     backdrop-filter:blur(4px); }
+  #evalHd { display:flex; align-items:center; gap:9px; padding:8px 12px; cursor:pointer;
+    user-select:none; }
+  #evalHd strong { color:var(--accent); font-size:11px; letter-spacing:.04em;
+    text-transform:uppercase; }
+  #evalHd .dim { color:#7c7768; font-size:10px; }
+  #evalHd #evalCaret { color:#9b9585; width:9px; }
+  #evalHd #evalOut { margin-left:auto; font:11px ui-monospace,monospace;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:55%; }
+  #evalBody { display:none; padding:0 12px 12px; }
+  #eval.open #evalBody { display:block; }
+  #evalIn { width:100%; height:120px; background:#0d0c08; color:#cdc6b2;
+    border:1px solid #2a2820; border-radius:5px; font:12px/1.45 ui-monospace,monospace;
+    padding:8px; resize:vertical; box-sizing:border-box; }
+  #evalIn:focus { outline:none; border-color:var(--accent); }
   #panel h1 { font-size:12px; letter-spacing:.04em; text-transform:uppercase;
     color:var(--accent); margin:0 0 3px; }
   #panel .sub { color:#7c7768; margin:0 0 13px; font-size:11px; }
@@ -143,24 +162,33 @@
   <div id="floors"></div>
   <div id="metrics" style="margin-top:10px;font-size:11px"></div>
 
-  <hr>
-  <div class="row" style="margin-top:0"><strong>live-coding</strong>
-    <span style="color:#6c6758;font-size:10px">eval → xsofy.terrain</span></div>
-  <textarea id="evalIn" spellcheck="false" style="width:100%;height:84px;margin-top:6px;
-    background:#0d0c08;color:#cdc6b2;border:1px solid #2a2820;border-radius:5px;
-    font:12px/1.45 ui-monospace,monospace;padding:7px;resize:vertical;box-sizing:border-box"
-    placeholder=";; redefine a generator fn, then it re-renders, e.g.&#10;;; (defn carve-room! [grid w x1 y1 x2 y2] ...)"></textarea>
-  <div class="row" style="margin:6px 0 0; justify-content:flex-start; gap:9px">
-    <button class="mini" id="evalBtn">eval &amp; regenerate</button>
-    <span id="evalOut" style="font-size:11px;font-family:ui-monospace,monospace"></span>
-  </div>
-
   <p class="hint">Drag to orbit · scroll to zoom · shift/space-drag to pan ·
     <b>click a floor</b> for a flat top-down view; click it again to descend
     (loops), click off (or double-click) to return; <b>↑↓</b> or <b>j/k</b> step
     depths. Per floor:
     <b>show</b> toggles visibility, <b>dim</b> fades it so you see floors beneath;
     "dim ↑" dims everything above the deepest shown floor.</p>
+</div>
+
+<!-- bottom-docked, collapsible live-coding console (centered in the usable strip) -->
+<div id="eval">
+  <div id="evalHd">
+    <span id="evalCaret">▸</span>
+    <strong>live-coding</strong>
+    <span class="dim">eval → xsofy.terrain · ⌘/Ctrl+Enter</span>
+    <span id="evalOut"></span>
+  </div>
+  <div id="evalBody">
+    <textarea id="evalIn" spellcheck="false"
+      placeholder=";; redefine a generator fn in xsofy.terrain, then it re-renders. e.g.&#10;;; (defn place-grass-patch! [world grid w h] world)   ; kills grass"></textarea>
+    <div class="row" style="margin:7px 0 0; justify-content:flex-start; gap:9px">
+      <button class="mini" id="evalBtn">eval &amp; regenerate</button>
+      <button class="mini eg" style="margin-left:10px"
+        data-code="(defn place-grass-patch! [world grid w h] world)">kill grass</button>
+      <button class="mini eg"
+        data-code="(defn place-lake! [world grid w h deep-tile shallow-tile wreath-width size-class] [false world])">kill lakes</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -543,7 +571,12 @@ async function evalCode(){
   }catch(err){ out.style.color='#e08a6a'; out.textContent='✗ '+err.message; }
 }
 $('evalBtn').onclick=evalCode;
+$('evalHd').onclick=()=>{ const el=$('eval'); el.classList.toggle('open');
+  $('evalCaret').textContent=el.classList.contains('open')?'▾':'▸';
+  if(el.classList.contains('open')) $('evalIn').focus(); };
 $('evalIn').addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter') evalCode(); });  // ⌘/Ctrl+Enter
+// quick examples: drop the snippet into the box and eval it in one click
+document.querySelectorAll('#eval .eg').forEach(b=>b.onclick=()=>{ $('evalIn').value=b.dataset.code; evalCode(); });
 
 generate();   // initial fetch
 </script>
