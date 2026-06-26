@@ -492,7 +492,9 @@ function renderMetrics(d){
     +`${bad?('<span style="color:#e08a6a">⚠ '+bad+' disconnected</span>'):'all connected'}</div>`;
 }
 
+let genToken=0, regenTimer=0;
 async function generate(){
+  const myToken=++genToken;                       // supersede any in-flight fetch
   const seed=+$('seedIn').value||0, depths=+$('depthIn').value||5;
   const st=$('genStatus'); st.textContent='generating…';
   try{
@@ -500,15 +502,22 @@ async function generate(){
     const r=await fetch(`/floors?seed=${seed}&depths=${depths}`);
     if(!r.ok) throw new Error('HTTP '+r.status);
     const d=await r.json();
+    if(myToken!==genToken) return;                // a newer step won — drop this stale result
     loadData(d); renderMetrics(d);
     st.textContent=`${(performance.now()-t0)|0}ms`;
   }catch(err){
+    if(myToken!==genToken) return;
     st.textContent='';
     $('meta').textContent='fetch failed: '+err.message+' — is terrain-server.lg running?';
   }
 }
-$('genBtn').onclick=generate;
-['seedIn','depthIn'].forEach(id=>$(id).addEventListener('keydown',e=>{ if(e.key==='Enter') generate(); }));
+// Stepping seed/depth (spinner, ↑/↓, or typing) auto-regenerates, debounced so a
+// held arrow or fast typing fires one fetch once it settles; Enter / button = now.
+function scheduleGenerate(){ clearTimeout(regenTimer); regenTimer=setTimeout(generate, 220); }
+$('genBtn').onclick=()=>{ clearTimeout(regenTimer); generate(); };
+['seedIn','depthIn'].forEach(id=>{ const el=$(id);
+  el.addEventListener('input', scheduleGenerate);
+  el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ clearTimeout(regenTimer); generate(); } }); });
 generate();   // initial fetch
 </script>
 </body>
