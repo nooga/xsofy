@@ -818,6 +818,37 @@
             [x y]
             (recur (inc k))))))))
 
+;; --- Floating-door cleanup -------------------------------------------------
+;; Phase 3 places doors at clean room thresholds, but a LATER phase — the
+;; post-bridge connectivity repair especially, plus lakes flooding a door's
+;; flanks — can break that 1-wide passage, leaving a floating door at a junction
+;; or mid-water. Revert any such door to plain floor after all terrain settles.
+;; Mirrors the mapgen auditor's floating-door? predicate. Purely subtractive
+;; (door→floor, both passable), so it can neither disconnect the level nor
+;; create a new floating door.
+
+(defn- a-wall? [t] (or (= t 8) (= t 9)))
+(defn- a-open? [t] (and (not (a-wall? t)) (not (= t 0))))
+
+(defn door-floating? [grid w h x y]
+  (let [g (fn [dx dy] (tget grid w (+ x dx) (+ y dy)))
+        n (g 0 -1) s (g 0 1) e (g 1 0) wt (g -1 0)
+        h-pass (and (a-wall? n) (a-wall? s) (a-open? e) (a-open? wt))
+        v-pass (and (a-wall? e) (a-wall? wt) (a-open? n) (a-open? s))]
+    (cond
+      h-pass (not (or (a-open? (g 1 -1)) (a-open? (g 1 1))
+                      (a-open? (g -1 -1)) (a-open? (g -1 1))))
+      v-pass (not (or (a-open? (g -1 -1)) (a-open? (g 1 -1))
+                      (a-open? (g -1 1)) (a-open? (g 1 1))))
+      :else true)))   ; door not in a clean 1-wide passage = floating
+
+(defn cleanup-floating-doors! [grid w h]
+  (doseq [y (range 1 (dec h))]
+    (doseq [x (range 1 (dec w))]
+      (let [t (tget grid w x y)]
+        (when (and (or (= t 11) (= t 12)) (door-floating? grid w h x y))
+          (tset! grid w x y 1))))))
+
 (defn generate-level
   ([w h] (generate-level w h 1 {:seed 0}))
   ([w h depth] (generate-level w h depth {:seed depth}))
@@ -983,6 +1014,9 @@
         ;; terrain decoration rather than copying/checking the whole grid for
         ;; every individual placement attempt.
         w-final-connectivity (ensure-connectivity-dsu! w-bridges grid w h)
+        ;; later carving (esp. the repair above) and lake flooding can break a
+        ;; door's 1-wide passage → floating door; revert those to floor.
+        _ (cleanup-floating-doors! grid w h)
 
         ;; === Phase 7: Torches on walls — 4% chance per wall ===
         w-torches
