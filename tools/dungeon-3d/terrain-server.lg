@@ -3,6 +3,9 @@
    live generation endpoint, so editing xsofy.terrain and refetching shows the new
    algorithm immediately — no wasm, no cross-origin isolation, native-speed gen.
 
+   Floor generation + metrics live in tools.dungeon-3d.dungeon-build (shared with
+   the planned hosted-wasm backend); this file is just the HTTP wrapper.
+
      lg tools/dungeon-3d/terrain-server.lg [port]      ; serve (default :7070)
      lg -n tools/dungeon-3d/terrain-server.lg [port]   ; + nREPL on :2137 — connect
         a REPL, redefine generator fns in the live image, refetch to see the change
@@ -13,86 +16,13 @@
      GET /                         -> workbench.html
 
    Tracks let-go main (native xxh3 + *command-line-args* + http/io/json/System)."
-  (:require [xsofy.terrain :as terrain]
-            [xsofy.det :as det]
+  (:require [tools.dungeon-3d.dungeon-build :as dungeon]
             [string :as str]
             [http :as http]        ; :as, not :refer :all — http/get would shadow core get
             [json :refer :all]
             [io :as io]))
 
-(def W 79)
-(def H 30)
 (def HTML-PATH "tools/dungeon-3d/workbench.html")
-
-;; --- metrics over a generated grid ---------------------------------------
-;; floor-tiles is what the generator's connectivity pass treats as floor
-;; (walkable + closed doors), so components/loops measured here match the
-;; invariant generate-level is trying to satisfy.
-
-(defn- floor? [grid x y]
-  (and (terrain/in-grid? W H x y)
-       (contains? terrain/floor-tiles (terrain/tget grid W x y))))
-
-(defn- graph-stats [grid]
-  ;; one pass: V (floor cells), E (right+down floor adjacencies), dead-ends
-  (let [V (atom 0) E (atom 0) D (atom 0)]
-    (dotimes [y H]
-      (dotimes [x W]
-        (when (floor? grid x y)
-          (swap! V inc)
-          (when (floor? grid (inc x) y) (swap! E inc))
-          (when (floor? grid x (inc y)) (swap! E inc))
-          (let [deg (+ (if (floor? grid (inc x) y) 1 0)
-                       (if (floor? grid (dec x) y) 1 0)
-                       (if (floor? grid x (inc y)) 1 0)
-                       (if (floor? grid x (dec y)) 1 0))]
-            (when (= deg 1) (swap! D inc))))))
-    {:V @V :E @E :dead-ends @D}))
-
-(defn- count-components [grid]
-  (let [sz (* W H)
-        cells (int-array sz)
-        labels (int-array sz)]
-    (dotimes [i sz]
-      (aset cells i (if (contains? terrain/floor-tiles (aget grid i)) 1 0)))
-    (loop [i 0 lid 0]
-      (cond
-        (>= i sz) lid
-        (and (> (aget cells i) 0) (zero? (aget labels i)))
-        (do (terrain/bfs-flood-label! cells labels W H (rem i W) (quot i W) (inc lid))
-            (recur (inc i) (inc lid)))
-        :else (recur (inc i) lid)))))
-
-(defn- find-tile [grid code]
-  (loop [i 0]
-    (cond
-      (>= i (* W H)) nil
-      (= code (aget grid i)) [(rem i W) (quot i W)]
-      :else (recur (inc i)))))
-
-;; --- one floor, generated the same way the game does (det/combine seed) ---
-(defn floor-data [seed depth]
-  (let [floor-seed (det/combine seed [:floor depth])
-        t0 (System/nanoTime)
-        result (first (terrain/generate-level W H depth {:seed floor-seed}))
-        t1 (System/nanoTime)
-        grid (:grid result)
-        rooms (:rooms result)
-        gs (graph-stats grid)
-        comps (count-components grid)]
-    {:depth depth
-     :down (find-tile grid 13)
-     :up (find-tile grid 14)
-     :grid (vec grid)
-     :metrics {:rooms (count rooms)
-               :components comps
-               :loops (+ (- (:E gs) (:V gs)) comps)   ; independent cycles: E - V + C
-               :dead-ends (:dead-ends gs)
-               :gen-ms (/ (double (- t1 t0)) 1000000.0)}}))
-
-(defn build [seed depths]
-  {:w W :h H :seed seed
-   :floors (mapv #(floor-data seed %) (map inc (range depths)))})
 
 ;; --- query parsing (reduce, no for-comprehension dependency) --------------
 (defn- parse-query [qs]
@@ -113,7 +43,7 @@
 (defn floors-handler [req]
   (let [q (parse-query (:query-string req))]
     {:status 200 :headers json-headers
-     :body (write-json (build (qint q "seed" 42) (qint q "depths" 5)))}))
+     :body (write-json (dungeon/build (qint q "seed" 42) (qint q "depths" 5)))}))
 
 ;; POST /eval — live-coding. Eval the body in the xsofy.terrain namespace so a
 ;; redefined generator fn lands where generate-level looks for it; the next
