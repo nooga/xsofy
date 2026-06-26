@@ -143,6 +143,18 @@
   <div id="floors"></div>
   <div id="metrics" style="margin-top:10px;font-size:11px"></div>
 
+  <hr>
+  <div class="row" style="margin-top:0"><strong>live-coding</strong>
+    <span style="color:#6c6758;font-size:10px">eval → xsofy.terrain</span></div>
+  <textarea id="evalIn" spellcheck="false" style="width:100%;height:84px;margin-top:6px;
+    background:#0d0c08;color:#cdc6b2;border:1px solid #2a2820;border-radius:5px;
+    font:12px/1.45 ui-monospace,monospace;padding:7px;resize:vertical;box-sizing:border-box"
+    placeholder=";; redefine a generator fn, then it re-renders, e.g.&#10;;; (defn carve-room! [grid w x1 y1 x2 y2] ...)"></textarea>
+  <div class="row" style="margin:6px 0 0; justify-content:flex-start; gap:9px">
+    <button class="mini" id="evalBtn">eval &amp; regenerate</button>
+    <span id="evalOut" style="font-size:11px;font-family:ui-monospace,monospace"></span>
+  </div>
+
   <p class="hint">Drag to orbit · scroll to zoom · shift/space-drag to pan ·
     <b>click a floor</b> for a flat top-down view; click it again to descend
     (loops), click off (or double-click) to return; <b>↑↓</b> or <b>j/k</b> step
@@ -518,6 +530,21 @@ $('genBtn').onclick=()=>{ clearTimeout(regenTimer); generate(); };
 ['seedIn','depthIn'].forEach(id=>{ const el=$(id);
   el.addEventListener('input', scheduleGenerate);
   el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ clearTimeout(regenTimer); generate(); } }); });
+// ---- in-browser live-coding: POST /eval into the running let-go image ----
+async function evalCode(){
+  const code=$('evalIn').value.trim(), out=$('evalOut');
+  if(!code){ out.textContent=''; return; }
+  out.style.color='#6c6758'; out.textContent='eval…';
+  try{
+    const r=await fetch('/eval',{method:'POST',body:code});
+    const d=await r.json();
+    if(d.ok){ out.style.color='#7bb274'; out.textContent='✓ '+d.value; generate(); }  // re-render with the new code
+    else    { out.style.color='#e08a6a'; out.textContent='✗ '+d.error; }
+  }catch(err){ out.style.color='#e08a6a'; out.textContent='✗ '+err.message; }
+}
+$('evalBtn').onclick=evalCode;
+$('evalIn').addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter') evalCode(); });  // ⌘/Ctrl+Enter
+
 generate();   // initial fetch
 </script>
 </body>
