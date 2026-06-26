@@ -1,90 +1,99 @@
 # Terrain-gen workbench
 
-A streamlined `change generator code → regenerate → see + measure` loop for
-dungeon-algorithm work, built on the dungeon-3d viewer. The point: tighten the
-inner loop the substrate/connector proposals need to evaluate "did this actually
-improve connectivity / feel / cost."
+A `change generator code → regenerate → see + measure` loop for dungeon-algorithm
+work, built on the dungeon-3d viewer. Tightens the inner loop the substrate/connector
+proposals need to evaluate "did this actually improve connectivity / feel / cost."
 
-## Why a local lg server (not the wasm path)
+## What's built (this branch)
 
-`terrain.lg` is *interpreted*, so the dev loop doesn't need a Go/wasm rebuild —
-only edits to let-go's own Go code do. A native lg HTTP server wrapping
-`generate-level` beats both today's flow and the in-browser wasm version for dev:
-
-- **No build step for algorithm edits** — edit `terrain.lg`, restart the server
-  (sub-second) or redefine in a live REPL; no `just build`, no wasm bundle.
-- **No cross-origin isolation, no SharedArrayBuffer, no wasm payload** — the page
-  just `fetch()`es from localhost. The whole COI headache that gates the wasm
-  path disappears for local dev.
-- **Native-speed generation** + full seed/param control via query args.
-
-The wasm version (`dungeon-3d-live-wasm-interop.md`) still earns its place for a
-*shareable/hosted* demo (githack, no local server) — i.e. the upstream-PR
-audience. For the dev workbench, the local server wins.
-
-## Architecture
+A local lg HTTP server + a browser page, with in-browser live-coding:
 
 ```
-lg [-n] tools/dungeon-3d/terrain-server.lg [port]
-   │  http/serve (Ring-style)            nREPL (-n, :2137)
-   ├─ GET /floors?seed=42&depths=8  →  {w,h,seed,floors:[{depth,grid,down,up,metrics}]}
-   └─ GET /                         →  workbench.html
+lg [-n] tools/dungeon-3d/terrain-server.lg [port]    # binds 127.0.0.1 (/eval runs code)
+   ├─ GET  /floors?seed=42&depths=8  → {w,h,seed,floors:[{depth,grid,down,up,metrics}]}
+   ├─ POST /eval   (body = lg code)  → evals in xsofy.terrain → {ok,value|error}
+   └─ GET  /                         → workbench.html
                   ▲                                    │
-        workbench.html (reuses the viewer's canvas/CSS rendering)
-        seed/depth controls → fetch → render stack + metrics panel
+   workbench.html (reuses the viewer's canvas/CSS rendering)
+   seed/depth controls (auto-regen on step) → fetch → render stack + metrics panel
+   bottom live-coding console: eval into the running image + quick-example buttons
 ```
 
-## The spicy bit: live-coding the generator (nREPL)
+## Why a local lg server (for dev)
 
-`lg -n tools/dungeon-3d/terrain-server.lg` runs the HTTP server **and** an nREPL
-(:2137) in one process. Connect a REPL, redefine a generator fn (or a whole phase
-of `generate-level`) in the live image, then refetch in the workbench — the new
-algorithm renders immediately, **no restart, no rebuild**. Live-coding the dungeon
-generator with the 3D viewer + metrics updating in real time.
+`terrain.lg` is *interpreted*, so the dev loop needs no Go/wasm rebuild — only edits
+to let-go's own Go code do. The native server beats the wasm path for *local* dev:
+no build step (edit `.lg`, restart or live-redefine), no wasm payload, native-speed
+generation, full seed control via query args. The wasm path is the *hosted/shareable*
+sibling — see "Modes" below.
+
+## Live-coding
+
+Two ways to redefine generator fns in the running image; vars are late-bound, so the
+next `/floors` call uses the new code — no restart, no rebuild.
+
+- **In-browser eval console (primary).** The bottom console POSTs to `/eval`, which
+  evals in `xsofy.terrain`, shows the result, and auto-regenerates. Quick-example
+  buttons demonstrate it: **kill grass** (`place-grass-patch!` no-op), **kill lakes**
+  (`place-lake!` no-op), **add fire** (`carve-room!` carves fire tiles — walkable and
+  counts as floor, so connectivity holds). ⌘/Ctrl+Enter evals.
+- **Editor nREPL.** `lg -n` runs an nREPL on :2137 alongside the server; let-go's
+  nREPL works with CIDER/Calva/Conjure (writes `.nrepl-port`, so Conjure
+  auto-connects). Eval forms from your `terrain.lg` buffer; refetch to see them.
+
+### The VM model (important)
+
+The server holds the let-go *image*; the page is just a view. **Reloading the browser
+re-fetches from the same image, so redefs persist.** To reset everything, **restart
+the server** (fresh process = original source). let-go exposes no clean in-session
+namespace reload (`:reload` isn't a require flag; `load-file` doesn't resolve in the
+eval context), so restart is the reset today. (A hosted-wasm workbench would reset on
+reload instead — see Modes.)
 
 ## Metrics (per floor)
 
 Surfaced alongside each generated floor (tile counts already render in the viewer):
 
 - **components** — distinct reachable floor regions (flood over `floor-tiles`).
-  `1` = the connectivity invariant holds; `>1` means a change broke it. The
-  cheapest regression check for connectivity work.
+  `1` = the connectivity invariant holds; `>1` means a change broke it. The cheapest
+  regression check for connectivity work.
 - **dead-ends** — floor tiles with exactly one floor neighbour. Layout-density /
   "feels designed vs. maze" signal.
 - **rooms** — room-center count from `generate-level`.
 - **gen-ms** — per-floor `generate-level` wall time (`System/nanoTime`). Algorithm
   changes show their perf cost immediately; ties into the perf-grid harness.
-  (Currently ~80–125ms/floor — the CA blobs + lakes dominate.)
-- **loops** — *coarse for now.* Computed as cyclomatic `E − V + C` over the raw
-  tile graph, so open rooms (dense 4-connected meshes) inflate it to the hundreds.
-  **Refinement:** compute over a room/junction graph (or count extra-connectors)
-  to get the actual "designed loop" signal the connector proposal wants. v1 ships
-  the raw number; treat it as a placeholder.
+- **loops** — *coarse for now.* Cyclomatic `E − V + C` over the raw tile graph, so
+  open rooms (dense 4-connected meshes) inflate it to the hundreds. **Refinement:**
+  compute over a room/junction graph (or count extra-connectors) for the real
+  "designed loop" signal the connector proposal wants. Treat it as a placeholder.
 
-## Renderer
+## Modes: server today, +wasm planned
 
-Reuses the dungeon-3d viewer's **canvas/CSS 3D rendering** — clean, quick, and the
-multi-floor overview is ideal for algo work (every floor + its metrics at once).
-*Future alt:* an xterm renderer for the in-game terminal feel (lg's own wasm shell
-already uses xterm, so it's cheap to add) — noted, not built.
+- **Server (built):** persistent image, fastest local iteration, reset = restart.
+- **Hosted wasm (planned followup):** the let-go image runs *in the page*, so reload =
+  fresh VM (reset for free) and it hosts statically (githack, no local server) for
+  shareable demos. **COI assessed safe** — a generator-only wasm never calls
+  `read-key`, so no SharedArrayBuffer / no cross-origin isolation needed. Both modes
+  share the UI and a `dungeon-build.lg` floors+metrics builder; only a thin Backend
+  adapter (fetch vs in-page `window.Eval`) differs. Shaping + plan: the session
+  handoff (`docs/project_notes/handoffs/`).
 
-## Scope
+## Gotchas
 
-- **v1 (this branch):** `terrain-server.lg` (done + tested) + `workbench.html`
-  (next) + the metrics above. Controls: seed + floor count only — both are already
-  `generate-level` args, zero `terrain.lg` change.
-- **Later:** deeper gen-param sliders (cave density, water…) need a `generate-level`
-  overrides hook (a `terrain.lg` change, defaults preserve game behavior); A/B
-  (same seed under two code versions, diff metrics + tiles); the loops refinement.
+- `/eval` runs arbitrary code → the server binds `127.0.0.1` only (dev use).
+- `[http :refer :all]` refers `http/get`, which shadows core `get` — use `[http :as
+  http]`. (Bit us with a flaky `/floors` 500.)
+- `loops` is coarse (see Metrics).
 
 ## Run
 
 ```
-# from the xsofy root
-lg tools/dungeon-3d/terrain-server.lg            # serve on :7070
+# from the xsofy root (or the worktree at the workbench branch)
+lg tools/dungeon-3d/terrain-server.lg            # serve on :7070, open http://localhost:7070
 lg tools/dungeon-3d/terrain-server.lg 8080       # custom port
-lg -n tools/dungeon-3d/terrain-server.lg         # + nREPL :2137 (live-coding)
+lg -n tools/dungeon-3d/terrain-server.lg         # + nREPL :2137 (editor live-coding)
 ```
 
-Tracks let-go `main` (native xxh3 + `*command-line-args*` + `http`/`io`/`json`/
-`System`), same as the rest of the tool.
+Open the page, set/step seed & depths (auto-regenerates), and expand the **LIVE-CODING**
+console to eval into the running image. Tracks let-go `main` (native xxh3 +
+`*command-line-args*` + `http`/`io`/`json`/`System`), same as the rest of the tool.
