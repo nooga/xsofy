@@ -10,7 +10,8 @@
    down:[x y]|null,up:...}]};` as a plain <script>-loadable file, so the viewer
    opens from file:// with no server or CORS dance. The tile->glyph/color
    palette is NOT exported — the viewer inlines it from terrain.lg
-   (tile-chars / tile-styles). Needs the native-xxh3 lg (xsofy.det)."
+   (tile-chars / tile-styles). Tracks let-go main: needs native xxh3 (xsofy.det)
+   and core/*command-line-args* (main-only since #205 — in no tagged release yet)."
   (:require [xsofy.terrain :as terrain]
             [xsofy.det :as det]))
 
