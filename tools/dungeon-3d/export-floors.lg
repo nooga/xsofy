@@ -1,7 +1,8 @@
 (ns export-floors
   "Dump N successive dungeon floors (depths 1..N, one seed) for the
-   tools/dungeon-3d exploded-stack viewer. Calls xsofy.terrain/generate-level
-   directly, so what you see is what the game generates. Run from the xsofy root:
+   tools/dungeon-3d exploded-stack viewer. Derives each floor's seed the same way
+   the game does (xsofy.world/generate-floor), so what you see is what the game
+   generates at that origin seed. Run from the xsofy root:
 
      lg tools/dungeon-3d/export-floors.lg > tools/dungeon-3d/floors.js
 
@@ -10,7 +11,8 @@
    opens from file:// with no server or CORS dance. The tile->glyph/color
    palette is NOT exported — the viewer inlines it from terrain.lg
    (tile-chars / tile-styles). Needs the native-xxh3 lg (xsofy.det)."
-  (:require [xsofy.terrain :as terrain]))
+  (:require [xsofy.terrain :as terrain]
+            [xsofy.det :as det]))
 
 (def W 79)
 (def H 30)
@@ -40,7 +42,11 @@
   (if xy (str "[" (nth xy 0) "," (nth xy 1) "]") "null"))
 
 (defn floor->json [depth]
-  (let [result (first (terrain/generate-level W H depth {:seed SEED})) ; {:grid :rooms}
+  ;; Mirror xsofy.world/generate-floor: the layout seed is derived from the
+  ;; origin seed + depth via (det/combine SEED [:floor depth]), NOT the raw
+  ;; origin seed. Without this, the viewer shows terrain the game never builds.
+  (let [floor-seed (det/combine SEED [:floor depth])
+        result (first (terrain/generate-level W H depth {:seed floor-seed})) ; {:grid :rooms}
         grid   (:grid result)]
     (str "{\"depth\":" depth
          ",\"down\":" (xy->json (find-tile grid W H 13))
