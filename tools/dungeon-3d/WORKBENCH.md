@@ -90,7 +90,10 @@ Backend adapter differs: `ServerBackend` (fetch to `terrain-server.lg`) vs `Wasm
 
 ## Gotchas
 
-- `/eval` runs arbitrary code → the server binds `127.0.0.1` only (dev use).
+- `/eval` runs arbitrary code, so it's hardened against cross-origin abuse: the
+  server binds `127.0.0.1` only, sends no `Access-Control-Allow-Origin`, and rejects
+  any request whose `Origin` isn't the server's own (a page on another origin can't
+  POST code to it). Requests with no `Origin` (curl, local tooling) still pass.
 - `[http :refer :all]` refers `http/get`, which shadows core `get` — use `[http :as
   http]`. (Bit us with a flaky `/floors` 500.)
 - `loops` is coarse (see Metrics).

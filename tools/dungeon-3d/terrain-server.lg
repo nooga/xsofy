@@ -23,6 +23,7 @@
             [io :as io]))
 
 (def HTML-PATH "tools/dungeon-3d/workbench.html")
+(def PORT (if (seq *command-line-args*) (first *command-line-args*) "7070"))
 
 ;; --- query parsing (reduce, no for-comprehension dependency) --------------
 (defn- parse-query [qs]
@@ -37,8 +38,7 @@
     (if (and v (seq v)) (read-string v) default)))
 
 ;; --- handlers -------------------------------------------------------------
-(def json-headers {"Content-Type" "application/json"
-                   "Access-Control-Allow-Origin" "*"})    ; allow file:// / other-port viewer
+(def json-headers {"Content-Type" "application/json"})   ; same-origin only — no ACAO (see eval-handler)
 
 (defn floors-handler [req]
   (let [q (parse-query (:query-string req))]
@@ -47,9 +47,22 @@
 
 ;; POST /eval — live-coding. Eval the body in the xsofy.terrain namespace so a
 ;; redefined generator fn lands where generate-level looks for it; the next
-;; /floors call picks it up (vars are late-bound). Arbitrary code execution, so
-;; the server binds to localhost only (below) — dev use only.
-(defn eval-handler [req]
+;; /floors call picks it up (vars are late-bound).
+;;
+;; /eval executes arbitrary code, so it must not be reachable cross-origin: a page
+;; on another origin could POST here and run code on the machine — binding to
+;; 127.0.0.1 doesn't help, since the request comes from the dev's own browser.
+;; Browsers attach an Origin to such cross-origin POSTs, so reject any Origin that
+;; isn't this server's own. A request with no Origin (curl / local tooling) already
+;; needs local access, so it passes. (Header keys arrive lowercased.)
+(defn- same-origin? [origin]
+  (or (nil? origin)
+      (contains? #{(str "http://localhost:" PORT) (str "http://127.0.0.1:" PORT)} origin)))
+
+;; in-ns kept as a direct body form (not nested under the origin guard): nesting
+;; it inside (if … (do (in-ns …) …)) makes the compiler switch namespace mid-body
+;; and the later json-headers refs fail to resolve.
+(defn- eval-body [req]
   (in-ns 'xsofy.terrain)
   (try
     (let [v (eval (read-string (str "(do " (or (:body req) "") "\n)")))]
@@ -57,13 +70,17 @@
     (catch e
       {:status 200 :headers json-headers :body (write-json {:ok false :error (str e)})})))
 
+(defn eval-handler [req]
+  (if (same-origin? (get (:headers req) "origin"))
+    (eval-body req)
+    {:status 403 :headers json-headers :body (write-json {:ok false :error "cross-origin /eval rejected"})}))
+
 (defn handler [req]
   (cond
     (= (:path req) "/floors") (floors-handler req)
     (= (:path req) "/eval")   (eval-handler req)
     :else {:status 200 :headers {"Content-Type" "text/html"} :body (io/slurp HTML-PATH)}))
 
-(def PORT (if (seq *command-line-args*) (first *command-line-args*) "7070"))
 (def ADDR (str "127.0.0.1:" PORT))                        ; localhost-only — /eval runs code
 (println (str "terrain workbench: http://localhost:" PORT
               "  (GET /floors?seed=&depths=  ·  POST /eval)"))
