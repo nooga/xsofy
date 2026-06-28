@@ -187,8 +187,15 @@ let legendTypes=[];   // fixed legend rows: types present anywhere, fixed order
 // Paint a floor's tiles into its (re-sized) canvas. Re-run on aspect change.
 function paintFace(L) {
   const cv = L.face;
-  cv.width = FW; cv.height = FH;
+  // Render at devicePixelRatio so tiles/glyphs are crisp on hi-dpi screens.
+  // Backing store is scaled up; the CSS size stays FW×FH so the 3D layout
+  // (which positions floors by FW/FH) is unchanged. Faces only — the slab
+  // plates are solid fills and look identical at any resolution.
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = FW*dpr; cv.height = FH*dpr;
+  cv.style.width = FW+'px'; cv.style.height = FH+'px';
   const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
   ctx.font = `${CELLH}px ui-monospace, monospace`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const grid = L.data.grid;
@@ -237,7 +244,7 @@ function applyThickness(){
 }
 
 function layout(){
-  const gap=+ctl.gap.value, zoom=+ctl.zoom.value/100, dimLevel=+ctl.under.value/100;
+  const gap=+ctl.gap.value, dimLevel=+ctl.under.value/100;
   // each floor is independently shown/hidden and full/dimmed (the two-column
   // grid). A dimmed floor fades to `dimLevel` so you can see floors beneath it.
   // Opacity goes on the leaf canvases (face + every slab), NOT the floor div —
@@ -256,16 +263,32 @@ function layout(){
     const op = L.dim ? dimLevel : 1;
     L.el.querySelectorAll('canvas').forEach(c=>c.style.opacity=op);
   }
-  // pan translates in screen space (outside the rotate) so it stays flat
-  stack.style.transform=
-    `translate(${pan.x}px,${pan.y}px) scale(${zoom}) rotateX(${spin.x}deg) rotateZ(${spin.z}deg)`;
   $('gapv').textContent=gap;
-  $('rxv').textContent=spin.x|0; $('rzv').textContent=spin.z|0;
-  $('zoomv').textContent=(zoom).toFixed(2);
   $('aspectv').textContent=(CELLW/CELLH).toFixed(2);
   $('thickv').textContent=ctl.thick.value;
   $('underv').textContent=Math.round(dimLevel*100)+'%';
+  applyView();   // whole-stack transform + its readouts
 }
+
+// applyView writes ONLY the whole-stack transform (pan/zoom/orbit) and its
+// readouts — the cheap per-frame work. Zoom/drag/pan change only this, so they
+// skip layout()'s per-layer transform/opacity loop (the part that scales with
+// floors × slabs).
+function applyView(){
+  const zoom=+ctl.zoom.value/100;
+  // pan translates in screen space (outside the rotate) so it stays flat
+  stack.style.transform=
+    `translate(${pan.x}px,${pan.y}px) scale(${zoom}) rotateX(${spin.x}deg) rotateZ(${spin.z}deg)`;
+  $('rxv').textContent=spin.x|0; $('rzv').textContent=spin.z|0;
+  $('zoomv').textContent=(zoom).toFixed(2);
+}
+
+// rAF-coalesce so rapid events cause at most one update per frame (trackpads
+// fire faster than 60fps): structural changes throttle the full layout();
+// view-only changes (zoom/drag/pan) throttle the cheap applyView().
+let layoutRaf=0, viewRaf=0;
+function scheduleLayout(){ if(!layoutRaf) layoutRaf=requestAnimationFrame(()=>{ layoutRaf=0; layout(); }); }
+function scheduleView(){ if(!viewRaf) viewRaf=requestAnimationFrame(()=>{ viewRaf=0; applyView(); }); }
 
 // per-floor show/dim grid (the rows themselves are built in loadData)
 const flist=$('floors');
@@ -308,7 +331,7 @@ for (const k in ctl) ctl[k].addEventListener('input',()=>{
   if (k==='rz') spin.z=+ctl.rz.value;
   if (k==='thick') applyThickness();
   if (k==='aspect'){ CELLW=+ctl.aspect.value; rebuild(); }
-  layout();
+  scheduleLayout();
 });
 
 // Space held → pan instead of orbit (Shift works too, via e.shiftKey)
@@ -327,7 +350,7 @@ addEventListener('pointermove',e=>{ if(!drag)return;
     spin.z=drag.sz+(e.clientX-drag.x)*0.4;
     spin.x=Math.max(0,Math.min(85,drag.sx+(e.clientY-drag.y)*0.4));
     ctl.rx.value=spin.x; ctl.rz.value=spin.z; }
-  layout(); });
+  scheduleView(); });
 addEventListener('pointerup',e=>{
   // click (no drag): on a floor → face it, or descend (cycle) if already facing;
   // off a floor while facing → back to the exploded stack.
@@ -379,7 +402,7 @@ addEventListener('wheel',e=>{ if(e.target.closest('#panel,#stats'))return;
   e.preventDefault();
   const z=ctl.zoom, step=Math.sign(e.deltaY)*-6;
   z.value=Math.max(+z.min, Math.min(+z.max, +z.value+step));
-  layout();
+  scheduleView();
 },{passive:false});
 
 // (re)build everything from a floors export — the initial bundle or an upload
