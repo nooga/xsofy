@@ -194,6 +194,11 @@
 </div>
 
 <script>
+// IIFE so the workbench's top-level names stay private. In ?mode=wasm this page
+// is injected into let-go's host-core bundle (which shares global lexical scope),
+// where a bare top-level const like WASM_MODE collides with host-core's own —
+// a redeclare SyntaxError that kills the whole script. Scoping avoids that class.
+(() => {
 // ---- palette inlined from xsofy/terrain.lg (tile-chars / tile-styles) ----
 const GLYPH = {0:" ",1:".",2:'"',3:"~",4:"~",5:".",6:" ",7:"~",8:"#",9:"#",
   10:".",11:"+",12:"'",13:">",14:"<",15:"^",16:".",17:"=",18:".",19:":"};
@@ -650,6 +655,7 @@ function boot(){
   }
 }
 boot();
+})();
 </script>
 </body>
 </html>
