@@ -67,16 +67,26 @@ Surfaced alongside each generated floor (tile counts already render in the viewe
   compute over a room/junction graph (or count extra-connectors) for the real
   "designed loop" signal the connector proposal wants. Treat it as a placeholder.
 
-## Modes: server today, +wasm planned
+## Modes: server + hosted-wasm
+
+Both modes share the UI and the `dungeon-build.lg` floors+metrics builder; only a thin
+Backend adapter differs: `ServerBackend` (fetch to `terrain-server.lg`) vs `WasmBackend`
+(in-page `LetGoHost.eval`).
 
 - **Server (built):** persistent image, fastest local iteration, reset = restart.
-- **Hosted wasm (planned followup):** the let-go image runs *in the page*, so reload =
-  fresh VM (reset for free) and it hosts statically (githack, no local server) for
-  shareable demos. **COI assessed safe** — a generator-only wasm never calls
-  `read-key`, so no SharedArrayBuffer / no cross-origin isolation needed. Both modes
-  share the UI and a `dungeon-build.lg` floors+metrics builder; only a thin Backend
-  adapter (fetch vs in-page `window.Eval`) differs. Shaping + plan: the session
-  handoff (`docs/project_notes/handoffs/`).
+- **Hosted wasm (built, validated):** the let-go image runs *in the page*, so reload =
+  fresh VM (reset for free) and the workbench can host statically (no local server) for
+  shareable demos. `WasmBackend` drives it through the public `LetGoHost.eval(code)` API;
+  `generate` and `eval-str` return their payloads out of band via `js/emit` (the
+  `xsofy/floors` and `xsofy/eval-result` events), since `LetGoHost.eval` only hands back
+  a stringified value. Validated end-to-end in a browser: floors render in-page and the
+  console redefines into the live `xsofy.terrain` image, no server.
+  - **let-go requirement:** wasm mode needs a let-go built with **`-w-host-eval`**
+    (lands in the v1.11.0 release). Server mode needs only let-go `main`.
+  - **COI:** a generator-only wasm never calls `read-key`, so it can run on the main
+    thread without cross-origin isolation (the static-hosting path). `LetGoHost.eval` is
+    dual-mode (main-thread direct or worker relay under COI), so both work; validated so
+    far under COI (worker mode).
 
 ## Gotchas
 
@@ -97,3 +107,17 @@ lg -n tools/dungeon-3d/terrain-server.lg         # + nREPL :2137 (editor live-co
 Open the page, set/step seed & depths (auto-regenerates), and expand the **LIVE-CODING**
 console to eval into the running image. Tracks let-go `main` (native xxh3 +
 `*command-line-args*` + `http`/`io`/`json`/`System`), same as the rest of the tool.
+
+### Hosted-wasm mode (no server)
+
+Needs a let-go with `-w-host-eval` (v1.11.0+). Build the image, inject this page into
+the host-core bundle, and serve with cross-origin-isolation headers:
+
+```
+lg -w dist -w-shell none -w-host-eval -w-wasm external tools/dungeon-3d/wasm-entry.lg
+# inject workbench.html into dist/index.html, then serve dist/ with COOP/COEP headers
+# and open  …/index.html?mode=wasm
+```
+
+`?mode=wasm` swaps `WasmBackend` in: `generate`/`eval-str` run in the in-page image and
+return via `js/emit`. Reset = reload the page.
