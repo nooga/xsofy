@@ -1,18 +1,30 @@
 (ns tools.dungeon-3d.wasm-entry
   "Hosted-wasm entry for the terrain workbench. Loaded into the in-page let-go
-   image; the custom wasm main exposes window.lgGenerate / window.lgEval, which
-   invoke these fns directly (as values, no source-string round-trip).
+   image built with `lg -w -w-host-eval`; JS drives it through the public
+   `LetGoHost.eval(code)` bridge (the merged #340 API — not the old
+   window.lgGenerate / window.lgEval prototype globals).
 
-   `generate` produces the same {w,h,seed,floors:[…]} payload as
-   terrain-server.lg's /floors and ships it to JS via js/emit (→
-   window.LetGoHost.onEmit 'xsofy/floors'). `eval-str` mirrors the server's
-   /eval: redefs land in xsofy.terrain and are late-bound, so the next generate
-   picks them up — the live-coding loop, but in-page (reset = reload, no server)."
+   Both fns ship their payload OUT OF BAND via js/emit (→ LetGoHost.onEmit /
+   a CustomEvent), because LetGoHost.eval only hands back a stringified value
+   (a returned JSON string would arrive double-quoted via String's print form):
+     generate  -> emits :xsofy/floors       {w,h,seed,floors:[…]}  (mirrors /floors)
+     eval-str  -> emits :xsofy/eval-result  {:ok …}                (mirrors /eval)
+
+   eval-str redefs land in xsofy.terrain and are late-bound, so the next
+   generate picks them up — the live-coding loop, in-page (reset = reload)."
   (:require [tools.dungeon-3d.dungeon-build :as dungeon]))
 
 (defn generate [seed depths]
   (js/emit :xsofy/floors (dungeon/build seed depths)))
 
+;; Mirror terrain-server.lg's eval-handler: eval in xsofy.terrain so a redefined
+;; generator fn lands where generate-level looks for it; report {:ok …} so the
+;; console can show success/failure. The {:ok …} shape matches ServerBackend's
+;; /eval JSON so the workbench UI is backend-agnostic.
 (defn eval-str [code]
   (in-ns 'xsofy.terrain)
-  (eval (read-string (str "(do " code "\n)"))))
+  (js/emit :xsofy/eval-result
+    (try
+      {:ok true :value (pr-str (eval (read-string (str "(do " code "\n)"))))}
+      (catch e
+        {:ok false :error (str e)}))))
