@@ -275,8 +275,14 @@ const WasmBackend = {
   },
   // Arm a one-shot listener for the result emit, then fire the eval. The genToken
   // guard in generate() drops any stale floors that resolve after a newer step.
+  // Serialized: concurrent calls would each arm a listener for the same emit, and
+  // the first event would resolve all of them (a newer generate would then render
+  // the older payload — the genToken guard drops the stale render but can't tell
+  // the promises apart). Running one at a time means each call's listener is the
+  // only one live when its emit fires. The worker evals serially anyway and
+  // generate() is debounced, so the added latency is negligible.
   _call(emitName, lgForm){
-    return new Promise((resolve, reject) => {
+    const run = () => new Promise((resolve, reject) => {
       const onEmit = e => { cleanup(); resolve(e.detail); };
       const timer = setTimeout(() => { cleanup(); reject(new Error(emitName+': no emit within 10s')); }, 10000);
       const cleanup = () => { window.removeEventListener(emitName, onEmit); clearTimeout(timer); };
@@ -286,6 +292,9 @@ const WasmBackend = {
       // (worker-timeout net / bridge error) fails the call rather than hanging.
       window.LetGoHost.eval(lgForm).catch(err => { cleanup(); reject(err); });
     });
+    const result = (this._chain || Promise.resolve()).then(run, run);
+    this._chain = result.catch(() => {});   // queue tail never rejects, so it keeps flowing
+    return result;
   },
 };
 
@@ -452,7 +461,7 @@ addEventListener('keydown',e=>{ if(e.code==='Space'){ spaceHeld=true;
 addEventListener('keyup',e=>{ if(e.code==='Space') spaceHeld=false; });
 
 // drag: Shift/Space → pan, otherwise orbit. A press with no drag is a click.
-addEventListener('pointerdown',e=>{ if(e.target.closest('#panel,#stats'))return;
+addEventListener('pointerdown',e=>{ if(e.target.closest('#panel,#stats,#eval'))return;
   drag={x:e.clientX,y:e.clientY,sx:spin.x,sz:spin.z,px:pan.x,py:pan.y,
         pan:(e.shiftKey||spaceHeld), tgt:e.target, moved:false}; });
 addEventListener('pointermove',e=>{ if(!drag)return;
@@ -493,7 +502,7 @@ function exitToStack(){
   layers.forEach(L=>{ L.visible=true; L.dim=false; syncRow(L); });
   updateStats(); layout();
 }
-addEventListener('dblclick',e=>{ if(e.target.closest('#panel,#stats'))return; exitToStack(); });
+addEventListener('dblclick',e=>{ if(e.target.closest('#panel,#stats,#eval'))return; exitToStack(); });
 
 // in facing view: ↑/k = shallower (toward depth 1), ↓/j = deeper
 addEventListener('keydown',e=>{
@@ -510,7 +519,7 @@ addEventListener('keydown',e=>{
 });
 
 // scroll to zoom (passive:false so we can stop the page from scrolling)
-addEventListener('wheel',e=>{ if(e.target.closest('#panel,#stats'))return;
+addEventListener('wheel',e=>{ if(e.target.closest('#panel,#stats,#eval'))return;
   e.preventDefault();
   const z=ctl.zoom, step=Math.sign(e.deltaY)*-6;
   z.value=Math.max(+z.min, Math.min(+z.max, +z.value+step));
