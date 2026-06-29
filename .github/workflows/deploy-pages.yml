@@ -23,15 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to a let-go commit, not a tag: the client-shell WASM glue these
-      # patch scripts target (markers, worker init protocol) landed after #245
-      # and is not in any release yet (v1.10.0 predates it). Bump to a tagged
-      # release once one ships with it.
+      # Pinned to the published let-go release: v1.11.0 ships the client-shell
+      # WASM glue (-w-shell none, #245) and the js/url-param host seam (#339) the
+      # bundle needs, so the ?seed=/?replay= bridge is native — no glue patch.
       - name: Check out let-go (pinned)
         uses: actions/checkout@v4
         with:
           repository: nooga/let-go
-          ref: 8087f9979f511a9dc89266c9d84a41af00d98287
+          ref: v1.11.0
           path: let-go-src
 
       - name: Set up Go
@@ -40,11 +39,11 @@ jobs:
           go-version: '1.26'
 
       - name: Install let-go
-        run: go install github.com/nooga/let-go@8087f9979f511a9dc89266c9d84a41af00d98287
+        run: go install github.com/nooga/let-go@v1.11.0
 
-      # LETGO_SRC pins the WASM *runtime* to the same commit as the binary above;
-      # without it `lg -w` compiles the runtime from let-go@latest (the old
-      # v1.10.0 glue), which mismatches the binary's worker protocol.
+      # LETGO_SRC pins the WASM *runtime* to the same release as the binary above;
+      # without it `lg -w` compiles the runtime from let-go@latest, which can drift
+      # from the binary's worker protocol.
       - name: Build WASM
         env:
           LETGO_SRC: ${{ github.workspace }}/let-go-src
@@ -52,9 +51,6 @@ jobs:
 
       - name: Patch COI startup guard
         run: let-go tools/patch_wasm_coi.lg
-
-      - name: Bridge ?seed= for reproducible runs
-        run: let-go tools/patch_wasm_seed.lg
 
       - name: Set up Node (smoke gate)
         uses: actions/setup-node@v4
