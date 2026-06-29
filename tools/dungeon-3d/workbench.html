@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>xsofy — dungeon exploded view (prototype)</title>
+<title>xsofy · workbench</title>
 <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzE2MTYxYyIvPjx0ZXh0IHg9IjE2IiB5PSIyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9InVpLW1vbm9zcGFjZSxtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMjIiIGZpbGw9IiNmZmQyN2YiPiYjOTU1OzwvdGV4dD48L3N2Zz4=">  <!-- λ favicon (let-go mark, workbench accent); adapted from let-go #359 -->
 <style>
   :root { --bg:#0c0c10; --panel:#16161c; --ink:#cfcabb; --accent:#ffd27f;
@@ -166,7 +166,7 @@
 
 <div id="panel">
   <div id="panelTop"><span id="modeBadge" title="what is this mode?"></span></div>
-  <div id="panelHd"><span class="caret">▾</span><h1>Terrain · workbench</h1></div>
+  <div id="panelHd"><span class="caret">▾</span><h1>xsofy · workbench</h1></div>
   <div id="panelBody">
   <p class="sub" id="meta">connecting…</p>
   <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
@@ -234,7 +234,7 @@
   <div id="evalBody">
     <textarea id="evalIn" spellcheck="false"
       placeholder=";; redefine a generator fn in xsofy.terrain, then it re-renders. e.g.&#10;;; (defn place-grass-patch! [world grid w h] world)   ; kills grass"></textarea>
-    <div class="row" style="margin:7px 0 0; justify-content:flex-start; gap:9px">
+    <div class="row" style="margin:7px 0 0; justify-content:flex-start; gap:9px; flex-wrap:wrap">
       <button class="mini" id="evalBtn">eval &amp; regenerate</button>
       <span class="eglabel">try:</span>
       <button class="mini eg"
