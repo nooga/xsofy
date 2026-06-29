@@ -54,6 +54,14 @@
   #evalIn:focus { outline:none; border-color:var(--accent); }
   #panel h1 { font-size:12px; letter-spacing:.04em; text-transform:uppercase;
     color:var(--accent); margin:0 0 3px; }
+  /* the whole panel collapses to its title bar (like stats + the eval console) */
+  #panelHd { display:flex; align-items:center; gap:7px; cursor:pointer;
+    user-select:none; margin:0 0 4px; }
+  #panelHd h1 { margin:0; }
+  #panelHd .caret { font-size:9px; color:#9b9585; transition:transform .12s; }
+  #panelHd:hover .caret { color:var(--accent); }
+  #panel.collapsed #panelHd .caret { transform:rotate(-90deg); }
+  #panel.collapsed #panelBody { display:none; }
   #modeBadge { font-size:9px; letter-spacing:.06em; color:#0c0c10;
     background:var(--accent); border-radius:3px; padding:1px 5px;
     vertical-align:1px; font-weight:600; }
@@ -158,7 +166,8 @@
 
 <div id="panel">
   <div id="panelTop"><span id="modeBadge" title="what is this mode?"></span></div>
-  <h1>Terrain · workbench</h1>
+  <div id="panelHd"><span class="caret">▾</span><h1>Terrain · workbench</h1></div>
+  <div id="panelBody">
   <p class="sub" id="meta">connecting…</p>
   <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
     <label>seed</label><input id="seedIn" type="number" value="42" style="width:62px">
@@ -178,26 +187,26 @@
   <div id="viewDrawer" class="collapsed">
     <div id="viewHd"><span class="caret">▾</span><span>view &amp; tuning</span></div>
     <div id="viewBody">
-      <div class="row"><label>Explode</label>
+      <div class="row"><label>explode</label>
         <input id="gap" type="range" min="0" max="320" value="120"><span class="val" id="gapv"></span></div>
-      <div class="row"><label>Tilt&nbsp;X</label>
+      <div class="row"><label>tilt-x</label>
         <input id="rx" type="range" min="0" max="85" value="58"><span class="val" id="rxv"></span></div>
-      <div class="row"><label>Spin&nbsp;Z</label>
+      <div class="row"><label>spin-z</label>
         <input id="rz" type="range" min="-90" max="90" value="-38"><span class="val" id="rzv"></span></div>
-      <div class="row"><label>Zoom</label>
+      <div class="row"><label>zoom</label>
         <input id="zoom" type="range" min="40" max="160" value="90"><span class="val" id="zoomv"></span></div>
-      <div class="row"><label>Aspect</label>
+      <div class="row"><label>aspect</label>
         <input id="aspect" type="range" min="3" max="12" value="6"><span class="val" id="aspectv"></span></div>
-      <div class="row"><label>Thickness</label>
+      <div class="row"><label>thickness</label>
         <input id="thick" type="range" min="0" max="14" value="5"><span class="val" id="thickv"></span></div>
-      <div class="row"><label>Dim&nbsp;Level</label>
+      <div class="row"><label>dim-level</label>
         <input id="under" type="range" min="5" max="100" value="20"><span class="val" id="underv"></span></div>
     </div>
   </div>
 
   <hr>
   <div class="row" style="margin-top:0">
-    <strong>Floors</strong>
+    <strong>floors</strong>
     <span style="white-space:nowrap"><button class="mini" id="allOn">all</button>
           <button class="mini" id="topOnly">top</button>
           <button class="mini" id="dimUpper">dim&nbsp;↑</button></span>
@@ -211,6 +220,7 @@
     depths. Per floor:
     <b>show</b> toggles visibility, <b>dim</b> fades it so you see floors beneath;
     "dim ↑" dims everything above the deepest shown floor.</p>
+  </div>
 </div>
 
 <!-- bottom-docked, collapsible live-coding console (centered in the usable strip) -->
@@ -520,6 +530,7 @@ function updateStats(){
 }
 $('statsHd').onclick=()=>$('stats').classList.toggle('collapsed');
 $('viewHd').onclick=()=>$('viewDrawer').classList.toggle('collapsed');
+$('panelHd').onclick=()=>$('panel').classList.toggle('collapsed');
 
 $('allOn').onclick=()=>{ layers.forEach(L=>{L.visible=true;L.dim=false;syncRow(L);}); layout(); updateStats(); };
 $('topOnly').onclick=()=>{ layers.forEach(L=>{L.visible=(L.depth===1);L.dim=false;syncRow(L);}); layout(); updateStats(); };
