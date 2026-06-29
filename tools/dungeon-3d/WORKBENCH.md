@@ -82,7 +82,7 @@ Backend adapter differs: `ServerBackend` (fetch to `terrain-server.lg`) vs `Wasm
   a stringified value. Validated end-to-end in a browser: floors render in-page and the
   console redefines into the live `xsofy.terrain` image, no server.
   - **let-go requirement:** wasm mode needs a let-go built with **`-w-host-eval`**
-    (lands in the v1.11.0 release). Server mode needs only let-go `main`.
+    (shipped in the v1.11.0 release). Server mode needs only let-go `main`.
   - **COI:** a generator-only wasm never calls `read-key`, so it can run on the main
     thread without cross-origin isolation (the static-hosting path). `LetGoHost.eval` is
     dual-mode (main-thread direct or worker relay under COI), so both work; validated so
