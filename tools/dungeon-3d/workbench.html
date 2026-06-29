@@ -59,6 +59,12 @@
     vertical-align:1px; font-weight:600; }
   #modeBadge[data-mode=static] { background:#7c98c4; }   /* render-only */
   #modeBadge[data-mode=wasm]   { background:#b58fd6; }   /* in-page engine */
+  /* notice when an explicit ?mode= isn't available here and we fell back */
+  #modeNotice { position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    z-index:6; background:rgba(40,34,20,.96); border:1px solid var(--accent);
+    color:var(--accent); border-radius:6px; padding:6px 12px; font-size:11px;
+    display:none; max-width:60vw; }
+  #modeNotice b { cursor:pointer; margin-left:8px; color:#9b9585; }
   #panel .sub { color:#7c7768; margin:0 0 13px; font-size:11px; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:8px;
     margin:10px 0; }
@@ -112,6 +118,7 @@
 </head>
 <body>
 <div id="stage"><div id="stack"></div></div>
+<div id="modeNotice"></div>
 
 <div id="stats">
   <div id="statsHd"><span class="caret">▾</span><span id="statsLabel">stats</span></div>
@@ -329,12 +336,20 @@ function resolveMode(){
   if(window.__TERRAIN_BACKEND__ === 'server') return 'server';
   return 'static';
 }
+const REQUESTED = new URLSearchParams(location.search).get('mode');  // explicit ?mode=, or null
 let MODE = resolveMode();
+let modeNote = '';   // surfaced (applyCaps) when an explicit mode isn't available here
 // ?mode=wasm asked for explicitly but this isn't a host-eval bundle (no
 // LetGoHost) — fall back to static rather than hang waiting for an image.
 if(MODE === 'wasm' && !window.LetGoHost){
   console.warn('mode=wasm but window.LetGoHost is absent — not a -w-host-eval bundle; falling back to static.');
+  modeNote = 'wasm mode needs the host-eval bundle (not this page) — showing static.';
   MODE = 'static';
+}
+// ?mode=server on a host with no terrain-server.lg can't generate — the /floors
+// fetch will fail with its own hint, but flag the mismatch up front too.
+if(REQUESTED === 'server' && !window.__TERRAIN_BACKEND__){
+  modeNote = 'server mode needs terrain-server.lg — generation will fail unless one is serving this page.';
 }
 const Backend = { static:StaticBackend, server:ServerBackend, wasm:WasmBackend }[MODE];
 const caps = Backend.caps;
@@ -697,6 +712,12 @@ function applyCaps(){
   $('loadRow').style.display = caps.upload ? '' : 'none';
   $('eval').style.display    = caps.eval   ? '' : 'none';
   const b=$('modeBadge'); b.textContent=MODE; b.dataset.mode=MODE;
+  if(modeNote){
+    const n=$('modeNotice');
+    n.innerHTML = modeNote + ' <b title="dismiss">✕</b>';
+    n.style.display='block';
+    n.querySelector('b').onclick=()=>{ n.style.display='none'; };
+  }
 }
 
 // Static boot: render a default export if one is served alongside this page;
