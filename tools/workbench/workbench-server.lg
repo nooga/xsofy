@@ -82,11 +82,28 @@
     (eval-body req)
     {:status 403 :headers json-headers :body (write-json {:ok false :error "cross-origin /eval rejected"})}))
 
+;; GET /<name>.json|.js — serve a bundled export so switching to ?mode=static on a
+;; server-hosted page actually renders the default (static's bootStatic fetches
+;; DEFAULT_EXPORT). Without this the catch-all returned HTML, which static tried to
+;; parse as JSON, failed, and dropped to the upload prompt. Basename-only mapping
+;; into tools/workbench/ (reject '/' and '..') keeps this off the path-traversal
+;; surface; an unknown/missing name returns nil and falls through to the page.
+(defn- export-file [path]
+  (let [name (subs path 1)]                                    ; drop leading '/'
+    (when (and (or (str/ends-with? name ".json") (str/ends-with? name ".js"))
+               (not (str/includes? name "/"))
+               (not (str/includes? name "..")))
+      (let [ctype (if (str/ends-with? name ".js") "application/javascript" "application/json")]
+        (try {:status 200 :headers {"Content-Type" ctype} :body (io/slurp (str "tools/workbench/" name))}
+             (catch e nil))))))
+
 (defn handler [req]
-  (cond
-    (= (:path req) "/floors") (floors-handler req)
-    (= (:path req) "/eval")   (eval-handler req)
-    :else {:status 200 :headers {"Content-Type" "text/html"} :body (serve-page)}))
+  (let [path (:path req)]
+    (cond
+      (= path "/floors") (floors-handler req)
+      (= path "/eval")   (eval-handler req)
+      :else (or (export-file path)
+                {:status 200 :headers {"Content-Type" "text/html"} :body (serve-page)}))))
 
 (def ADDR (str "127.0.0.1:" PORT))                        ; localhost-only — /eval runs code
 (println (str "xsofy workbench: http://localhost:" PORT
