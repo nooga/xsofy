@@ -23,14 +23,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to the published let-go release: v1.11.0 ships the client-shell
-      # WASM glue (-w-shell none, #245) and the js/url-param host seam (#339) the
-      # bundle needs, so the ?seed=/?replay= bridge is native — no glue patch.
+      # Single-source the let-go version from .let-go-version (the repo's
+      # declared pin), so the deploy and the test floor can't drift apart.
+      # v1.11.0 ships the client-shell WASM glue (-w-shell none, #245) and the
+      # js/url-param host seam (#339) the bundle needs, so the ?seed=/?replay=
+      # bridge is native — no glue patch.
+      - name: Resolve let-go version
+        id: letgo
+        run: echo "version=$(grep -v '^#' .let-go-version | grep . | head -1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
       - name: Check out let-go (pinned)
         uses: actions/checkout@v4
         with:
           repository: nooga/let-go
-          ref: v1.11.0
+          ref: ${{ steps.letgo.outputs.version }}
           path: let-go-src
 
       - name: Set up Go
@@ -39,7 +45,7 @@ jobs:
           go-version: '1.26'
 
       - name: Install let-go
-        run: go install github.com/nooga/let-go@v1.11.0
+        run: go install github.com/nooga/let-go@${{ steps.letgo.outputs.version }}
 
       # LETGO_SRC pins the WASM *runtime* to the same release as the binary above;
       # without it `lg -w` compiles the runtime from let-go@latest, which can drift
