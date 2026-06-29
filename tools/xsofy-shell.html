@@ -34,8 +34,13 @@
 <script>
 (function () {
   const termEl = document.getElementById('terminal');
+  // ?font=system bypasses the bundled rune face and renders in the platform
+  // mono — a debug/preference escape hatch. Runes (U+16A0–16FF) then fall back
+  // to the viewer's system fonts, which may tofu where none cover them.
+  const MONO = '"DejaVu Sans Mono", "Menlo", monospace';
+  const sysFont = new URLSearchParams(location.search).get('font') === 'system';
   const term = new Terminal({
-    fontFamily: '"Fairfax HD", "DejaVu Sans Mono", "Menlo", monospace',
+    fontFamily: sysFont ? MONO : '"Fairfax HD", ' + MONO,
     fontSize: 16,
     theme: { background: '#0a0e14', foreground: '#d4c5a0', cursor: '#ff6b35' },
     allowProposedApi: true,
@@ -57,7 +62,8 @@
     // Fairfax HD loads locks in a fallback's (full-width) cell; the half-width
     // glyphs then sit off-grid and jitter on every repaint. Load the face
     // first so the cell is measured against the real metrics.
-    try { await document.fonts.load('16px "Fairfax HD"'); } catch (e) {}
+    // Only the bundled face needs the pre-open load; ?font=system has none.
+    if (!sysFont) { try { await document.fonts.load('16px "Fairfax HD"'); } catch (e) {} }
     term.open(termEl); fit.fit(); term.focus();
     opened = true;
     if (pending) { term.write(pending); pending = ''; }
