@@ -13,7 +13,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - letgo: v1.9.0
+          # Floor = the published release xsofy requires: v1.11.0 ships
+          # js/url-param (#339), which xsofy.seed now needs, and the
+          # -w-shell none glue (#245). Matches .let-go-version and the
+          # Pages deploy pin.
+          - letgo: v1.11.0
             label: "pinned (deploy floor)"
             required: true
           - letgo: latest
