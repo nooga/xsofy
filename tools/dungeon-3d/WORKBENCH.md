@@ -1,8 +1,10 @@
 # Terrain-gen workbench
 
 A `change generator code → regenerate → see + measure` loop for dungeon-algorithm
-work, built on the dungeon-3d viewer. Tightens the inner loop the substrate/connector
-proposals need to evaluate "did this actually improve connectivity / feel / cost."
+work. Tightens the inner loop the substrate/connector proposals need to evaluate
+"did this actually improve connectivity / feel / cost." The dungeon-3d viewer's
+renderer is now this tool's **static mode** — one page (`workbench.html`), one
+renderer, three modes (see "Modes" below).
 
 ## What's built (this branch)
 
@@ -67,12 +69,29 @@ Surfaced alongside each generated floor (tile counts already render in the viewe
   compute over a room/junction graph (or count extra-connectors) for the real
   "designed loop" signal the connector proposal wants. Treat it as a placeholder.
 
-## Modes: server + hosted-wasm
+## Modes: static + server + wasm
 
-Both modes share the UI and the `dungeon-build.lg` floors+metrics builder; only a thin
-Backend adapter differs: `ServerBackend` (fetch to `terrain-server.lg`) vs `WasmBackend`
-(in-page `LetGoHost.eval`).
+All three share one renderer + UI and the `dungeon-build.lg` floors+metrics builder;
+only a thin Backend adapter differs, behind a `Backend` interface (`generate`,
+`evalCode`) with declared `caps {live, eval, upload}`. The UI shows/hides controls
+off `caps` — no per-mode branches: `live` → seed/depth + regenerate; `eval` → the
+live-coding console; `upload` → load-export/drop.
 
+| Mode | Backend | caps (live · eval · upload) | reset |
+|---|---|---|---|
+| static | `StaticBackend` (render a prebuilt export) | — · — · ✓ | n/a (no engine) |
+| server | `ServerBackend` (fetch `terrain-server.lg`) | ✓ · ✓ · ✓ | restart server |
+| wasm   | `WasmBackend` (in-page `LetGoHost.eval`)   | ✓ · ✓ · ✓ | reload page |
+
+**Mode detection (no network probe):** explicit `?mode=static|server|wasm` wins;
+otherwise `window.LetGoHost` present (a `-w-host-eval` bundle injects it) → **wasm**;
+a `window.__TERRAIN_BACKEND__='server'` marker (`terrain-server.lg` injects it into
+the served page) → **server**; neither → **static**, the zero-dependency default.
+
+- **Static:** renders a prebuilt export — no engine, no server, no COI. Source order:
+  an embedded `window.FLOORS` (offline / `file://`), else a default `.json` fetched
+  alongside (`floors-seed7-d8.json`), else the upload prompt. Lowest overhead;
+  statically hostable; the share-a-snapshot path.
 - **Server (built):** persistent image, fastest local iteration, reset = restart.
 - **Hosted wasm (built, validated):** the let-go image runs *in the page*, so reload =
   fresh VM (reset for free) and the workbench can host statically (no local server) for

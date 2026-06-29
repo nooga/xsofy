@@ -1,17 +1,19 @@
 (ns export-floors
   "Dump N successive dungeon floors (depths 1..N, one seed) for the
-   tools/dungeon-3d exploded-stack viewer. Derives each floor's seed the same way
+   tools/dungeon-3d workbench's static mode. Derives each floor's seed the same way
    the game does (xsofy.world/generate-floor), so what you see is what the game
    generates at that origin seed. Run from the xsofy root:
 
      lg tools/dungeon-3d/export-floors.lg > tools/dungeon-3d/floors.js
 
    Emits `window.FLOORS = {w,h,seed,floors:[{depth,grid:[tile-codes...],
-   down:[x y]|null,up:...}]};` as a plain <script>-loadable file, so the viewer
-   opens from file:// with no server or CORS dance. The tile->glyph/color
-   palette is NOT exported — the viewer inlines it from terrain.lg
-   (tile-chars / tile-styles). Tracks let-go main: needs native xxh3 (xsofy.det)
-   and core/*command-line-args* (main-only since #205 — in no tagged release yet)."
+   down:[x y]|null,up:...}]};` as a plain <script>-loadable file, so a self-contained
+   static page opens from file:// with no server or CORS dance (static boot honors
+   window.FLOORS). `json` arg emits a bare .json instead — the portable form the
+   upload reads and the served static-mode default (floors-seed7-d8.json). The
+   tile->glyph/color palette is NOT exported — workbench.html inlines it from
+   terrain.lg (tile-chars / tile-styles). Tracks let-go main: needs native xxh3
+   (xsofy.det) and core/*command-line-args* (main-only since #205)."
   (:require [xsofy.terrain :as terrain]
             [xsofy.det :as det]))
 
