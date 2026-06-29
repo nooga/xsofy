@@ -66,8 +66,15 @@
     display:none; max-width:60vw; }
   #modeNotice b { cursor:pointer; margin-left:8px; color:#9b9585; }
   #modeBadge { cursor:pointer; }   /* click for the mode info popover */
-  /* mode info popover — click the badge to explain the mode + switch */
-  #modeInfo { display:none; position:absolute; top:32px; left:14px; width:234px;
+  /* badge pinned top-right of the panel, sticky so it survives panel scroll.
+     height:0 overlay row so it doesn't push the title down; only the badge
+     itself takes pointer events. */
+  #panelTop { position:sticky; top:0; height:0; display:flex; justify-content:flex-end;
+    z-index:8; pointer-events:none; }
+  #panelTop #modeBadge { pointer-events:auto; }
+  /* mode info popover — click the badge; appears to the RIGHT of the panel (it's
+     a body-level sibling, so the panel's overflow:auto can't clip it). */
+  #modeInfo { display:none; position:absolute; top:12px; left:282px; width:240px;
     z-index:7; background:rgba(14,14,20,.98); border:1px solid var(--accent);
     border-radius:7px; padding:10px 12px; box-shadow:0 8px 22px rgba(0,0,0,.5); }
   #modeInfo.open { display:block; }
@@ -138,6 +145,7 @@
 <body>
 <div id="stage"><div id="stack"></div></div>
 <div id="modeNotice"></div>
+<div id="modeInfo"></div>
 
 <div id="stats">
   <div id="statsHd"><span class="caret">▾</span><span id="statsLabel">stats</span></div>
@@ -145,8 +153,8 @@
 </div>
 
 <div id="panel">
-  <h1>Terrain · workbench <span id="modeBadge" title="what is this mode?"></span></h1>
-  <div id="modeInfo"></div>
+  <div id="panelTop"><span id="modeBadge" title="what is this mode?"></span></div>
+  <h1>Terrain · workbench</h1>
   <p class="sub" id="meta">connecting…</p>
   <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
     <label>seed</label><input id="seedIn" type="number" value="42" style="width:62px">
