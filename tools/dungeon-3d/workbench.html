@@ -54,6 +54,11 @@
   #evalIn:focus { outline:none; border-color:var(--accent); }
   #panel h1 { font-size:12px; letter-spacing:.04em; text-transform:uppercase;
     color:var(--accent); margin:0 0 3px; }
+  #modeBadge { font-size:9px; letter-spacing:.06em; color:#0c0c10;
+    background:var(--accent); border-radius:3px; padding:1px 5px;
+    vertical-align:1px; font-weight:600; }
+  #modeBadge[data-mode=static] { background:#7c98c4; }   /* render-only */
+  #modeBadge[data-mode=wasm]   { background:#b58fd6; }   /* in-page engine */
   #panel .sub { color:#7c7768; margin:0 0 13px; font-size:11px; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:8px;
     margin:10px 0; }
@@ -114,15 +119,15 @@
 </div>
 
 <div id="panel">
-  <h1>Terrain · workbench</h1>
+  <h1>Terrain · workbench <span id="modeBadge"></span></h1>
   <p class="sub" id="meta">connecting…</p>
-  <div class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
+  <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
     <label>seed</label><input id="seedIn" type="number" value="42" style="width:62px">
     <label>depths</label><input id="depthIn" type="number" min="1" max="20" value="5" style="width:46px">
     <button class="mini" id="genBtn">generate</button>
     <span id="genStatus" style="color:#6c6758;font-size:10px"></span>
   </div>
-  <div class="row" style="margin:0 0 12px; justify-content:flex-start; gap:11px">
+  <div id="loadRow" class="row" style="margin:0 0 12px; justify-content:flex-start; gap:11px">
     <button class="mini" id="loadBtn">load export…</button>
     <span style="color:#6c6758;font-size:10px;line-height:1.4">or drop a .json/.js file</span>
   </div>
@@ -237,11 +242,25 @@ let w=0, h=0, floors=[], N=0, seed=0;
 let FW=0, FH=0;
 let legendTypes=[];   // fixed legend rows: types present anywhere, fixed order
 
-// ---- Backend: the two data-access points the UI needs (generate floors, eval
-// code), behind one interface so a hosted-wasm backend (in-page LetGoHost.eval
-// into the let-go image) can replace the server without touching rendering/
-// controls. ServerBackend talks to terrain-server.lg; `Backend` is the active one.
+// ---- Backends: the data-access points the UI needs (generate floors, eval
+// code), behind one interface so all three modes share one renderer + controls.
+// Each declares caps {live, eval, upload}; the UI shows/hides controls off caps
+// (applyCaps), not per-mode branches.
+//   Static — render a prebuilt export (boot-fetched default, or upload/drop). No
+//            engine: lowest overhead, statically hostable, no COI. Share/snapshot.
+//   Server — terrain-server.lg: native /floors gen + /eval live-redefine. Fast.
+//   Wasm   — in-page -w-host-eval image, driven via LetGoHost.eval. Reset-on-reload.
+const StaticBackend = {
+  caps: { live:false, eval:false, upload:true },
+  failHint: 'load a floors export, or open ?mode=server / ?mode=wasm for a live engine',
+  // No engine — "generate" returns the currently-loaded export (set by a boot
+  // default-fetch or an upload/drop); seed/depths are ignored. Null until
+  // something is loaded, so boot() leaves the upload prompt showing.
+  async generate(){ return this._data || null; },
+};
+
 const ServerBackend = {
+  caps: { live:true, eval:true, upload:true },
   failHint: 'is terrain-server.lg running?',   // shown in the meta line on generate failure
   async generate(seed, depths){
     const r = await fetch(`/floors?seed=${seed}&depths=${depths}`);
@@ -262,6 +281,7 @@ const ServerBackend = {
 // the matching emit. js/emit's default sink dispatches a CustomEvent named after
 // the keyword ('xsofy/floors', 'xsofy/eval-result') with the data as .detail.
 const WasmBackend = {
+  caps: { live:true, eval:true, upload:true },
   failHint: 'is the wasm image booted? (built with lg -w -w-host-eval)',
   generate(seed, depths){
     return this._call('xsofy/floors',
@@ -298,12 +318,27 @@ const WasmBackend = {
   },
 };
 
-// ?mode=wasm runs fully in-page against the -w-host-eval image that hosts this
-// page (no server). STEP 3 wires the lazy-boot of lg-host.js/main.wasm and a UI
-// toggle; here we bind the adapter when LetGoHost is present and gate the first
-// generate() on the image coming up.
-const WASM_MODE = new URLSearchParams(location.search).get('mode') === 'wasm';
-let Backend = ServerBackend;   // hosted-wasm mode swaps WasmBackend in (see boot())
+// Mode = which backend drives the page. Explicit ?mode= wins; otherwise
+// auto-detect with no probe: a -w-host-eval bundle injects window.LetGoHost
+// (→ wasm); a page served by terrain-server.lg carries a window.__TERRAIN_BACKEND__
+// marker (→ server); a plain static host has neither (→ static, the zero-dep default).
+function resolveMode(){
+  const q = new URLSearchParams(location.search).get('mode');
+  if(q==='static'||q==='server'||q==='wasm') return q;
+  if(window.LetGoHost) return 'wasm';
+  if(window.__TERRAIN_BACKEND__ === 'server') return 'server';
+  return 'static';
+}
+let MODE = resolveMode();
+// ?mode=wasm asked for explicitly but this isn't a host-eval bundle (no
+// LetGoHost) — fall back to static rather than hang waiting for an image.
+if(MODE === 'wasm' && !window.LetGoHost){
+  console.warn('mode=wasm but window.LetGoHost is absent — not a -w-host-eval bundle; falling back to static.');
+  MODE = 'static';
+}
+const Backend = { static:StaticBackend, server:ServerBackend, wasm:WasmBackend }[MODE];
+const caps = Backend.caps;
+const DEFAULT_EXPORT = 'floors-seed7-d8.json';   // static-mode boot render (if served alongside)
 
 // Paint a floor's tiles into its (re-sized) canvas. Re-run on aspect change.
 function paintFace(L) {
@@ -578,8 +613,11 @@ function parseFloors(text){
 }
 function loadFile(file){
   const r=new FileReader();
-  r.onload=()=>{ try{ loadData(parseFloors(r.result)); }
-    catch(err){ $('meta').textContent='load failed: '+err.message; } };
+  r.onload=()=>{ try{
+    const d=parseFloors(r.result);
+    StaticBackend._data=d;          // an upload becomes the static "current export"
+    loadData(d); renderMetrics(d);  // render metrics on upload too, like a live gen
+  } catch(err){ $('meta').textContent='load failed: '+err.message; } };
   r.readAsText(file);
 }
 $('loadBtn').onclick=()=>$('fileIn').click();
@@ -651,17 +689,41 @@ $('evalIn').addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='
 // quick examples: drop the snippet into the box and eval it in one click
 document.querySelectorAll('#eval .eg').forEach(b=>b.onclick=()=>{ $('evalIn').value=b.dataset.code; evalCode(); });
 
-// Boot: server mode fetches immediately; wasm mode swaps the backend and waits
-// for the in-page image before the first generate (LetGoHost.eval would queue
-// anyway, but onReady keeps the UI honest about when it's live).
+// Show/hide controls per the active backend's caps — no per-mode branches in the
+// UI, just declared capabilities. live → seed/depth/generate; eval → console;
+// upload → load-export row (drop is always armed but only matters when upload).
+function applyCaps(){
+  $('liveRow').style.display = caps.live   ? '' : 'none';
+  $('loadRow').style.display = caps.upload ? '' : 'none';
+  $('eval').style.display    = caps.eval   ? '' : 'none';
+  const b=$('modeBadge'); b.textContent=MODE; b.dataset.mode=MODE;
+}
+
+// Static boot: render a default export if one is served alongside this page;
+// otherwise leave the upload prompt up. A live engine isn't present, so a missing
+// default is expected (e.g. served from a host without the .json) — not an error.
+async function bootStatic(){
+  // 1) an embedded export (window.FLOORS — export-floors.lg's script form) works
+  //    offline / file:// with no fetch; 2) else a default .json served alongside;
+  //    3) else leave the upload prompt up (drop/upload reads via FileReader, also
+  //    offline-safe). Honoring window.FLOORS keeps the old viewer's self-contained
+  //    page working through the same data contract.
+  if(window.FLOORS){ StaticBackend._data=window.FLOORS; generate(); return; }
+  $('meta').textContent='render-only — load a floors export (.json/.js) or drop one here';
+  try{
+    const r=await fetch(DEFAULT_EXPORT);
+    if(r.ok){ StaticBackend._data=await r.json(); generate(); }
+  }catch(_){ /* no default on this host — upload prompt stands */ }
+}
+
+// Boot: static renders an export; server fetches immediately; wasm waits for the
+// in-page image before the first generate (LetGoHost.eval would queue anyway, but
+// onReady keeps the UI honest about when it's live).
 function boot(){
-  if(WASM_MODE && window.LetGoHost){
-    Backend = WasmBackend;
-    window.LetGoHost.onReady(() => generate());
-  } else {
-    if(WASM_MODE) console.warn('mode=wasm but window.LetGoHost is absent — not served from a -w-host-eval bundle; using server backend.');
-    generate();   // initial fetch
-  }
+  applyCaps();
+  if(MODE==='wasm'){ window.LetGoHost.onReady(() => generate()); }
+  else if(MODE==='server'){ generate(); }
+  else { bootStatic(); }
 }
 boot();
 })();
