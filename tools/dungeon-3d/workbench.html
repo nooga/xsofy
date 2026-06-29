@@ -65,6 +65,25 @@
     color:var(--accent); border-radius:6px; padding:6px 12px; font-size:11px;
     display:none; max-width:60vw; }
   #modeNotice b { cursor:pointer; margin-left:8px; color:#9b9585; }
+  #modeBadge { cursor:pointer; }   /* click for the mode info popover */
+  /* mode info popover — click the badge to explain the mode + switch */
+  #modeInfo { display:none; position:absolute; top:32px; left:14px; width:234px;
+    z-index:7; background:rgba(14,14,20,.98); border:1px solid var(--accent);
+    border-radius:7px; padding:10px 12px; box-shadow:0 8px 22px rgba(0,0,0,.5); }
+  #modeInfo.open { display:block; }
+  #modeInfo h2 { margin:0 0 5px; font-size:10.5px; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--accent); }
+  #modeInfo p { margin:0 0 8px; font-size:11px; line-height:1.5; color:#b8b2a3; }
+  #modeInfo code { color:#cdc6b2; }
+  #modeInfo .sw { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+    border-top:1px solid #2a2a33; padding-top:8px; }
+  #modeInfo .sw .lbl { color:#6c6758; font-size:10px; text-transform:uppercase;
+    letter-spacing:.04em; }
+  #modeInfo .sw a { color:var(--ink); border:1px solid #34343f; border-radius:999px;
+    padding:2px 9px; font-size:11px; cursor:pointer; text-decoration:none; }
+  #modeInfo .sw a:hover { border-color:var(--accent); color:var(--accent); }
+  #modeInfo .sw a.cur { background:var(--accent); color:#0c0c10;
+    border-color:var(--accent); cursor:default; }
   #panel .sub { color:#7c7768; margin:0 0 13px; font-size:11px; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:8px;
     margin:10px 0; }
@@ -126,7 +145,8 @@
 </div>
 
 <div id="panel">
-  <h1>Terrain · workbench <span id="modeBadge"></span></h1>
+  <h1>Terrain · workbench <span id="modeBadge" title="what is this mode?"></span></h1>
+  <div id="modeInfo"></div>
   <p class="sub" id="meta">connecting…</p>
   <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
     <label>seed</label><input id="seedIn" type="number" value="42" style="width:62px">
@@ -719,6 +739,39 @@ function applyCaps(){
     n.querySelector('b').onclick=()=>{ n.style.display='none'; };
   }
 }
+
+// ---- mode info popover: click the badge to learn what mode you're in and, when
+// more than one is backable from this page, switch. The switch targets reuse the
+// auto-detect signals (window.LetGoHost → wasm, the server marker → server, static
+// always) so we never offer a mode that would fail.
+function modeInfoHTML(){
+  const DESC = {
+    static: `<h2>static mode</h2><p>A front-end render of prebuilt floor data — no engine running. Load or drop an export (<code>.json/.js</code>) to change what's shown.</p>`,
+    server: `<h2>server mode</h2><p>A live let-go engine over HTTP at <code>${location.origin}</code>. The console redefines generator fns in the running <code>xsofy.terrain</code> image. Redefs persist across reloads — restart the server to reset.</p>`,
+    wasm:   `<h2>wasm mode</h2><p>A live let-go engine running in this page, no server. The console redefines into the in-page image. Reload = fresh image: your redefs reset.</p>`,
+  };
+  const avail = ['static'];                                   // always backable
+  if(window.__TERRAIN_BACKEND__==='server') avail.push('server');
+  if(window.LetGoHost) avail.push('wasm');
+  const order = ['static','server','wasm'].filter(m=>avail.includes(m));
+  const links = order.map(m => m===MODE
+    ? `<a class="cur">${m}</a>`
+    : `<a href="?mode=${m}">${m}</a>`).join('');
+  const sw = order.length>1
+    ? `<div class="sw"><span class="lbl">switch</span>${links}</div>`
+    : `<div class="sw"><span class="lbl">only ${MODE} is available here</span></div>`;
+  return DESC[MODE] + sw;
+}
+$('modeBadge').addEventListener('click', e=>{
+  e.stopPropagation();
+  const box=$('modeInfo');
+  if(box.classList.contains('open')){ box.classList.remove('open'); return; }
+  box.innerHTML = modeInfoHTML();
+  box.classList.add('open');
+});
+// dismiss on outside click or Esc
+addEventListener('click', e=>{ if(!e.target.closest('#modeInfo,#modeBadge')) $('modeInfo').classList.remove('open'); });
+addEventListener('keydown', e=>{ if(e.key==='Escape') $('modeInfo').classList.remove('open'); });
 
 // Static boot: render a default export if one is served alongside this page;
 // otherwise leave the upload prompt up. A live engine isn't present, so a missing
