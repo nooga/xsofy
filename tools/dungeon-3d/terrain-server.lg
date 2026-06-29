@@ -50,7 +50,7 @@
 (defn floors-handler [req]
   (let [q (parse-query (:query-string req))]
     {:status 200 :headers json-headers
-     :body (write-json (dungeon/build (qint q "seed" 42) (qint q "depths" 5)))}))
+     :body (write-json (dungeon/build (qint q "seed" 42) (qint q "depths" 3)))}))
 
 ;; POST /eval — live-coding. Eval the body in the xsofy.terrain namespace so a
 ;; redefined generator fn lands where generate-level looks for it; the next

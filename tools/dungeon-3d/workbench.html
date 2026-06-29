@@ -140,6 +140,10 @@
   #viewHd .caret { font-size:9px; transition:transform .12s; }
   #viewDrawer.collapsed .caret { transform:rotate(-90deg); }
   #viewDrawer.collapsed #viewBody { display:none; }
+  /* label case convention: view & tuning controls uppercase; primary controls
+     (seed/depths) stay lowercase. */
+  #viewBody label { text-transform:uppercase; letter-spacing:.03em; }
+  .eglabel { margin-left:8px; color:#6c6758; font-size:10.5px; }   /* "try:" lead-in */
 </style>
 </head>
 <body>
@@ -158,7 +162,7 @@
   <p class="sub" id="meta">connecting…</p>
   <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
     <label>seed</label><input id="seedIn" type="number" value="42" style="width:62px">
-    <label>depths</label><input id="depthIn" type="number" min="1" max="20" value="5" style="width:46px">
+    <label>depths</label><input id="depthIn" type="number" min="1" max="20" value="3" style="width:46px">
     <button class="mini" id="genBtn">generate</button>
     <span id="genStatus" style="color:#6c6758;font-size:10px"></span>
   </div>
@@ -168,15 +172,14 @@
   </div>
   <input id="fileIn" type="file" accept=".json,.js,application/json" hidden>
 
-  <div class="row"><label>Explode</label>
-    <input id="gap" type="range" min="0" max="320" value="120"><span class="val" id="gapv"></span></div>
-
-  <!-- non-essentials: orbit/zoom are redundant with drag/scroll on desktop;
-       aspect/thickness/dim are set-once. Collapsed by default; the drawer is
-       also the touch fallback for the gestures. -->
+  <!-- non-essentials: explode/orbit/zoom are redundant with drag/scroll on
+       desktop; aspect/thickness/dim are set-once. Collapsed by default; the
+       drawer is also the touch fallback for the gestures. -->
   <div id="viewDrawer" class="collapsed">
     <div id="viewHd"><span class="caret">▾</span><span>view &amp; tuning</span></div>
     <div id="viewBody">
+      <div class="row"><label>Explode</label>
+        <input id="gap" type="range" min="0" max="320" value="120"><span class="val" id="gapv"></span></div>
       <div class="row"><label>Tilt&nbsp;X</label>
         <input id="rx" type="range" min="0" max="85" value="58"><span class="val" id="rxv"></span></div>
       <div class="row"><label>Spin&nbsp;Z</label>
@@ -223,7 +226,8 @@
       placeholder=";; redefine a generator fn in xsofy.terrain, then it re-renders. e.g.&#10;;; (defn place-grass-patch! [world grid w h] world)   ; kills grass"></textarea>
     <div class="row" style="margin:7px 0 0; justify-content:flex-start; gap:9px">
       <button class="mini" id="evalBtn">eval &amp; regenerate</button>
-      <button class="mini eg" style="margin-left:10px"
+      <span class="eglabel">try:</span>
+      <button class="mini eg"
         data-code="(defn place-grass-patch! [world grid w h] world)">kill grass</button>
       <button class="mini eg"
         data-code="(defn place-lake! [world grid w h deep-tile shallow-tile wreath-width size-class] [false world])">kill lakes</button>
@@ -691,7 +695,7 @@ function renderMetrics(d){
 let genToken=0, regenTimer=0;
 async function generate(){
   const myToken=++genToken;                       // supersede any in-flight fetch
-  const seed=+$('seedIn').value||0, depths=+$('depthIn').value||5;
+  const seed=+$('seedIn').value||0, depths=+$('depthIn').value||3;
   const st=$('genStatus'); st.textContent='generating…';
   try{
     const t0=performance.now();
@@ -755,7 +759,7 @@ function applyCaps(){
 function modeInfoHTML(){
   const DESC = {
     static: `<h2>static mode</h2><p>A front-end render of prebuilt floor data — no engine running. Load or drop an export (<code>.json/.js</code>) to change what's shown.</p>`,
-    server: `<h2>server mode</h2><p>A live let-go engine over HTTP at <code>${location.origin}</code>. The console redefines generator fns in the running <code>xsofy.terrain</code> image. Redefs persist across reloads — restart the server to reset.</p>`,
+    server: `<h2>server mode</h2><p>A live let-go engine served by <code>terrain-server.lg</code> at <code>${location.origin}</code> — started with <code>lg tools/dungeon-3d/terrain-server.lg</code>. The console redefines generator fns in the running <code>xsofy.terrain</code> image; redefs persist across reloads, so restarting that process is how you reset.</p>`,
     wasm:   `<h2>wasm mode</h2><p>A live let-go engine running in this page, no server. The console redefines into the in-page image. Reload = fresh image: your redefs reset.</p>`,
   };
   const avail = ['static'];                                   // always backable
