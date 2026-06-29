@@ -70,7 +70,8 @@
      height:0 overlay row so it doesn't push the title down; only the badge
      itself takes pointer events. */
   #panelTop { position:sticky; top:0; height:0; display:flex; justify-content:flex-end;
-    z-index:8; pointer-events:none; }
+    align-items:flex-start; z-index:8; pointer-events:none; }   /* flex-start: don't
+    stretch the badge to the row's 0 height (that flattened the pill) */
   #panelTop #modeBadge { pointer-events:auto; }
   /* mode info popover — click the badge; appears to the RIGHT of the panel (it's
      a body-level sibling, so the panel's overflow:auto can't clip it). */
@@ -140,9 +141,8 @@
   #viewHd .caret { font-size:9px; transition:transform .12s; }
   #viewDrawer.collapsed .caret { transform:rotate(-90deg); }
   #viewDrawer.collapsed #viewBody { display:none; }
-  /* label case convention: view & tuning controls uppercase; primary controls
-     (seed/depths) stay lowercase. */
-  #viewBody label { text-transform:uppercase; letter-spacing:.03em; }
+  /* label case: view & tuning controls are Title Case (in the markup); primary
+     controls (seed/depths) are lowercase. No transform — the text carries it. */
   .eglabel { margin-left:8px; color:#6c6758; font-size:10.5px; }   /* "try:" lead-in */
 </style>
 </head>
@@ -190,7 +190,7 @@
         <input id="aspect" type="range" min="3" max="12" value="6"><span class="val" id="aspectv"></span></div>
       <div class="row"><label>Thickness</label>
         <input id="thick" type="range" min="0" max="14" value="5"><span class="val" id="thickv"></span></div>
-      <div class="row"><label>Dim&nbsp;level</label>
+      <div class="row"><label>Dim&nbsp;Level</label>
         <input id="under" type="range" min="5" max="100" value="20"><span class="val" id="underv"></span></div>
     </div>
   </div>
