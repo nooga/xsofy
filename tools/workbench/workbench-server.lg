@@ -1,13 +1,13 @@
-(ns terrain-server
-  "Local terrain-gen workbench server. Serves the dungeon-3d workbench page and a
+(ns workbench-server
+  "Local workbench server. Serves the workbench page and a
    live generation endpoint, so editing xsofy.terrain and refetching shows the new
    algorithm immediately — no wasm, no cross-origin isolation, native-speed gen.
 
-   Floor generation + metrics live in tools.dungeon-3d.dungeon-build (shared with
+   Floor generation + metrics live in tools.workbench.dungeon-build (shared with
    the planned hosted-wasm backend); this file is just the HTTP wrapper.
 
-     lg tools/dungeon-3d/terrain-server.lg [port]      ; serve (default :7070)
-     lg -n tools/dungeon-3d/terrain-server.lg [port]   ; + nREPL on :2137 — connect
+     lg tools/workbench/workbench-server.lg [port]      ; serve (default :7070)
+     lg -n tools/workbench/workbench-server.lg [port]   ; + nREPL on :2137 — connect
         a REPL, redefine generator fns in the live image, refetch to see the change
         without restarting (the live-coding loop).
 
@@ -16,13 +16,13 @@
      GET /                         -> workbench.html
 
    Tracks let-go main (native xxh3 + *command-line-args* + http/io/json/System)."
-  (:require [tools.dungeon-3d.dungeon-build :as dungeon]
+  (:require [tools.workbench.dungeon-build :as dungeon]
             [string :as str]
             [http :as http]        ; :as, not :refer :all — http/get would shadow core get
             [json :refer :all]
             [io :as io]))
 
-(def HTML-PATH "tools/dungeon-3d/workbench.html")
+(def HTML-PATH "tools/workbench/workbench.html")
 (def PORT (if (seq *command-line-args*) (first *command-line-args*) "7070"))
 
 ;; The workbench page auto-detects its mode (static | server | wasm). Inject a
@@ -89,6 +89,6 @@
     :else {:status 200 :headers {"Content-Type" "text/html"} :body (serve-page)}))
 
 (def ADDR (str "127.0.0.1:" PORT))                        ; localhost-only — /eval runs code
-(println (str "terrain workbench: http://localhost:" PORT
+(println (str "xsofy workbench: http://localhost:" PORT
               "  (GET /floors?seed=&depths=  ·  POST /eval)"))
 (http/serve handler ADDR)

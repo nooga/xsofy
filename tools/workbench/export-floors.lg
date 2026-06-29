@@ -1,10 +1,10 @@
 (ns export-floors
   "Dump N successive dungeon floors (depths 1..N, one seed) for the
-   tools/dungeon-3d workbench's static mode. Derives each floor's seed the same way
+   the workbench's static mode. Derives each floor's seed the same way
    the game does (xsofy.world/generate-floor), so what you see is what the game
    generates at that origin seed. Run from the xsofy root:
 
-     lg tools/dungeon-3d/export-floors.lg > tools/dungeon-3d/floors.js
+     lg tools/workbench/export-floors.lg > tools/workbench/floors.js
 
    Emits `window.FLOORS = {w,h,seed,floors:[{depth,grid:[tile-codes...],
    down:[x y]|null,up:...}]};` as a plain <script>-loadable file, so a self-contained

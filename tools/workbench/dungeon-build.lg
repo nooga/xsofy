@@ -1,11 +1,11 @@
-(ns tools.dungeon-3d.dungeon-build
-  "Shared floors+metrics builder for the terrain workbench. Generates dungeon
+(ns tools.workbench.dungeon-build
+  "Shared floors+metrics builder for the xsofy workbench. Generates dungeon
    floors the same way the game does (det/combine seed -> generate-level) and
    measures connectivity metrics over each grid, returning the
    {w,h,seed,floors:[{depth,grid,down,up,metrics}]} payload the workbench UI
    renders.
 
-   Backend-agnostic on purpose: the native HTTP server (terrain-server.lg) and
+   Backend-agnostic on purpose: the native HTTP server (workbench-server.lg) and
    the planned hosted-wasm entry both call `build`, so the generator + metrics
    logic lives here once and neither backend reimplements it.
 

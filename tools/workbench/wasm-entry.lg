@@ -1,5 +1,5 @@
-(ns tools.dungeon-3d.wasm-entry
-  "Hosted-wasm entry for the terrain workbench. Loaded into the in-page let-go
+(ns tools.workbench.wasm-entry
+  "Hosted-wasm entry for the xsofy workbench. Loaded into the in-page let-go
    image built with `lg -w -w-host-eval`; JS drives it through the public
    `LetGoHost.eval(code)` bridge (the merged #340 API — not the old
    window.lgGenerate / window.lgEval prototype globals).
@@ -12,12 +12,12 @@
 
    eval-str redefs land in xsofy.terrain and are late-bound, so the next
    generate picks them up — the live-coding loop, in-page (reset = reload)."
-  (:require [tools.dungeon-3d.dungeon-build :as dungeon]))
+  (:require [tools.workbench.dungeon-build :as dungeon]))
 
 (defn generate [seed depths]
   (js/emit :xsofy/floors (dungeon/build seed depths)))
 
-;; Mirror terrain-server.lg's eval-handler: eval in xsofy.terrain so a redefined
+;; Mirror workbench-server.lg's eval-handler: eval in xsofy.terrain so a redefined
 ;; generator fn lands where generate-level looks for it; report {:ok …} so the
 ;; console can show success/failure. The {:ok …} shape matches ServerBackend's
 ;; /eval JSON so the workbench UI is backend-agnostic.

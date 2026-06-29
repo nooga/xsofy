@@ -1,8 +1,8 @@
-# Terrain-gen workbench
+# xsofy workbench — dev guide
 
 A `change generator code → regenerate → see + measure` loop for dungeon-algorithm
 work. Tightens the inner loop the substrate/connector proposals need to evaluate
-"did this actually improve connectivity / feel / cost." The dungeon-3d viewer's
+"did this actually improve connectivity / feel / cost." The exploded-view
 renderer is now this tool's **static mode** — one page (`workbench.html`), one
 renderer, three modes (see "Modes" below).
 
@@ -11,7 +11,7 @@ renderer, three modes (see "Modes" below).
 A local lg HTTP server + a browser page, with in-browser live-coding:
 
 ```
-lg [-n] tools/dungeon-3d/terrain-server.lg [port]    # binds 127.0.0.1 (/eval runs code)
+lg [-n] tools/workbench/workbench-server.lg [port]    # binds 127.0.0.1 (/eval runs code)
    ├─ GET  /floors?seed=42&depths=8  → {w,h,seed,floors:[{depth,grid,down,up,metrics}]}
    ├─ POST /eval   (body = lg code)  → evals in xsofy.terrain → {ok,value|error}
    └─ GET  /                         → workbench.html
@@ -80,12 +80,12 @@ live-coding console; `upload` → load-export/drop.
 | Mode | Backend | caps (live · eval · upload) | reset |
 |---|---|---|---|
 | static | `StaticBackend` (render a prebuilt export) | — · — · ✓ | n/a (no engine) |
-| server | `ServerBackend` (fetch `terrain-server.lg`) | ✓ · ✓ · ✓ | restart server |
+| server | `ServerBackend` (fetch `workbench-server.lg`) | ✓ · ✓ · ✓ | restart server |
 | wasm   | `WasmBackend` (in-page `LetGoHost.eval`)   | ✓ · ✓ · ✓ | reload page |
 
 **Mode detection (no network probe):** explicit `?mode=static|server|wasm` wins;
 otherwise `window.LetGoHost` present (a `-w-host-eval` bundle injects it) → **wasm**;
-a `window.__TERRAIN_BACKEND__='server'` marker (`terrain-server.lg` injects it into
+a `window.__TERRAIN_BACKEND__='server'` marker (`workbench-server.lg` injects it into
 the served page) → **server**; neither → **static**, the zero-dependency default.
 
 - **Static:** renders a prebuilt export — no engine, no server, no COI. Source order:
@@ -121,9 +121,9 @@ the served page) → **server**; neither → **static**, the zero-dependency def
 
 ```
 # from the xsofy root (or the worktree at the workbench branch)
-lg tools/dungeon-3d/terrain-server.lg            # serve on :7070, open http://localhost:7070
-lg tools/dungeon-3d/terrain-server.lg 8080       # custom port
-lg -n tools/dungeon-3d/terrain-server.lg         # + nREPL :2137 (editor live-coding)
+lg tools/workbench/workbench-server.lg            # serve on :7070, open http://localhost:7070
+lg tools/workbench/workbench-server.lg 8080       # custom port
+lg -n tools/workbench/workbench-server.lg         # + nREPL :2137 (editor live-coding)
 ```
 
 Open the page, set/step seed & depths (auto-regenerates), and expand the **LIVE-CODING**
@@ -136,7 +136,7 @@ Needs a let-go with `-w-host-eval` (v1.11.0+). Build the image, inject this page
 the host-core bundle, and serve with cross-origin-isolation headers:
 
 ```
-lg -w dist -w-shell none -w-host-eval -w-wasm external tools/dungeon-3d/wasm-entry.lg
+lg -w dist -w-shell none -w-host-eval -w-wasm external tools/workbench/wasm-entry.lg
 # inject workbench.html into dist/index.html, then serve dist/ with COOP/COEP headers
 # and open  …/index.html?mode=wasm
 ```

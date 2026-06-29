@@ -297,7 +297,7 @@ let legendTypes=[];   // fixed legend rows: types present anywhere, fixed order
 // (applyCaps), not per-mode branches.
 //   Static — render a prebuilt export (boot-fetched default, or upload/drop). No
 //            engine: lowest overhead, statically hostable, no COI. Share/snapshot.
-//   Server — terrain-server.lg: native /floors gen + /eval live-redefine. Fast.
+//   Server — workbench-server.lg: native /floors gen + /eval live-redefine. Fast.
 //   Wasm   — in-page -w-host-eval image, driven via LetGoHost.eval. Reset-on-reload.
 const StaticBackend = {
   caps: { live:false, eval:false, upload:true },
@@ -310,7 +310,7 @@ const StaticBackend = {
 
 const ServerBackend = {
   caps: { live:true, eval:true, upload:true },
-  failHint: 'is terrain-server.lg running?',   // shown in the meta line on generate failure
+  failHint: 'is workbench-server.lg running?',   // shown in the meta line on generate failure
   async generate(seed, depths){
     const r = await fetch(`/floors?seed=${seed}&depths=${depths}`);
     if(!r.ok) throw new Error('HTTP '+r.status);
@@ -334,13 +334,13 @@ const WasmBackend = {
   failHint: 'is the wasm image booted? (built with lg -w -w-host-eval)',
   generate(seed, depths){
     return this._call('xsofy/floors',
-      `(tools.dungeon-3d.wasm-entry/generate ${seed} ${depths})`);
+      `(tools.workbench.wasm-entry/generate ${seed} ${depths})`);
   },
   evalCode(code){
     // JSON.stringify yields a JS string literal; EDN/let-go read-string accepts
     // the same "…" escapes, so it round-trips the user's code as one string arg.
     return this._call('xsofy/eval-result',
-      `(tools.dungeon-3d.wasm-entry/eval-str ${JSON.stringify(code)})`);
+      `(tools.workbench.wasm-entry/eval-str ${JSON.stringify(code)})`);
   },
   // Arm a one-shot listener for the result emit, then fire the eval. The genToken
   // guard in generate() drops any stale floors that resolve after a newer step.
@@ -369,7 +369,7 @@ const WasmBackend = {
 
 // Mode = which backend drives the page. Explicit ?mode= wins; otherwise
 // auto-detect with no probe: a -w-host-eval bundle injects window.LetGoHost
-// (→ wasm); a page served by terrain-server.lg carries a window.__TERRAIN_BACKEND__
+// (→ wasm); a page served by workbench-server.lg carries a window.__TERRAIN_BACKEND__
 // marker (→ server); a plain static host has neither (→ static, the zero-dep default).
 function resolveMode(){
   const q = new URLSearchParams(location.search).get('mode');
@@ -388,10 +388,10 @@ if(MODE === 'wasm' && !window.LetGoHost){
   modeNote = 'wasm mode needs the host-eval bundle (not this page) — showing static.';
   MODE = 'static';
 }
-// ?mode=server on a host with no terrain-server.lg can't generate — the /floors
+// ?mode=server on a host with no workbench-server.lg can't generate — the /floors
 // fetch will fail with its own hint, but flag the mismatch up front too.
 if(REQUESTED === 'server' && !window.__TERRAIN_BACKEND__){
-  modeNote = 'server mode needs terrain-server.lg — generation will fail unless one is serving this page.';
+  modeNote = 'server mode needs workbench-server.lg — generation will fail unless one is serving this page.';
 }
 const Backend = { static:StaticBackend, server:ServerBackend, wasm:WasmBackend }[MODE];
 const caps = Backend.caps;
@@ -684,7 +684,7 @@ addEventListener('dragover',e=>e.preventDefault());            // allow drop
 addEventListener('drop',e=>{ e.preventDefault();
   const f=e.dataTransfer?.files?.[0]; if(f) loadFile(f); });
 
-// ---- live generation from terrain-server.lg ----
+// ---- live generation from workbench-server.lg ----
 function renderMetrics(d){
   const f1=x=>(x==null?'·':(+x).toFixed(1));
   const rows=d.floors.map(f=>{ const m=f.metrics||{}; const bad=m.components>1;
@@ -770,7 +770,7 @@ function applyCaps(){
 function modeInfoHTML(){
   const DESC = {
     static: `<h2>static mode</h2><p>A front-end render of prebuilt floor data — no engine running. Load or drop an export (<code>.json/.js</code>) to change what's shown.</p>`,
-    server: `<h2>server mode</h2><p>A live let-go engine served by <code>terrain-server.lg</code> at <code>${location.origin}</code> — started with <code>lg tools/dungeon-3d/terrain-server.lg</code>. The console redefines generator fns in the running <code>xsofy.terrain</code> image; redefs persist across reloads, so restarting that process is how you reset.</p>`,
+    server: `<h2>server mode</h2><p>A live let-go engine served by <code>workbench-server.lg</code> at <code>${location.origin}</code> — started with <code>lg tools/workbench/workbench-server.lg</code>. The console redefines generator fns in the running <code>xsofy.terrain</code> image; redefs persist across reloads, so restarting that process is how you reset.</p>`,
     wasm:   `<h2>wasm mode</h2><p>A live let-go engine running in this page, no server. The console redefines into the in-page image. Reload = fresh image: your redefs reset.</p>`,
   };
   const avail = ['static'];                                   // always backable
