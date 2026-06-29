@@ -367,14 +367,21 @@ const WasmBackend = {
   },
 };
 
+// Wasm capability is host-eval, not just any wasm bundle. A normal `lg -w`
+// shell exposes window.LetGoHost too (onReady/onOutput/sendInput), but only
+// `-w-host-eval` adds LetGoHost.eval — the one method WasmBackend drives. Gate
+// on eval's presence so a non-host-eval page falls back instead of selecting
+// wasm and then dying with "LetGoHost.eval is not a function" at generate time.
+const HOST_EVAL = typeof window.LetGoHost?.eval === 'function';
+
 // Mode = which backend drives the page. Explicit ?mode= wins; otherwise
-// auto-detect with no probe: a -w-host-eval bundle injects window.LetGoHost
+// auto-detect with no probe: a -w-host-eval bundle injects window.LetGoHost.eval
 // (→ wasm); a page served by workbench-server.lg carries a window.__TERRAIN_BACKEND__
 // marker (→ server); a plain static host has neither (→ static, the zero-dep default).
 function resolveMode(){
   const q = new URLSearchParams(location.search).get('mode');
   if(q==='static'||q==='server'||q==='wasm') return q;
-  if(window.LetGoHost) return 'wasm';
+  if(HOST_EVAL) return 'wasm';
   if(window.__TERRAIN_BACKEND__ === 'server') return 'server';
   return 'static';
 }
@@ -382,9 +389,9 @@ const REQUESTED = new URLSearchParams(location.search).get('mode');  // explicit
 let MODE = resolveMode();
 let modeNote = '';   // surfaced (applyCaps) when an explicit mode isn't available here
 // ?mode=wasm asked for explicitly but this isn't a host-eval bundle (no
-// LetGoHost) — fall back to static rather than hang waiting for an image.
-if(MODE === 'wasm' && !window.LetGoHost){
-  console.warn('mode=wasm but window.LetGoHost is absent — not a -w-host-eval bundle; falling back to static.');
+// LetGoHost.eval) — fall back to static rather than hang waiting for an image.
+if(MODE === 'wasm' && !HOST_EVAL){
+  console.warn('mode=wasm but LetGoHost.eval is absent — not a -w-host-eval bundle; falling back to static.');
   modeNote = 'wasm mode needs the host-eval bundle (not this page) — showing static.';
   MODE = 'static';
 }
@@ -775,7 +782,7 @@ function modeInfoHTML(){
   };
   const avail = ['static'];                                   // always backable
   if(window.__TERRAIN_BACKEND__==='server') avail.push('server');
-  if(window.LetGoHost) avail.push('wasm');
+  if(HOST_EVAL) avail.push('wasm');                           // host-eval, not any -w bundle
   const order = ['static','server','wasm'].filter(m=>avail.includes(m));
   const links = order.map(m => m===MODE
     ? `<a class="cur">${m}</a>`
