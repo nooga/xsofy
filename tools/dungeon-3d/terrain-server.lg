@@ -25,6 +25,13 @@
 (def HTML-PATH "tools/dungeon-3d/workbench.html")
 (def PORT (if (seq *command-line-args*) (first *command-line-args*) "7070"))
 
+;; The workbench page auto-detects its mode (static | server | wasm). Inject a
+;; marker at the top of <body> so a page served from here selects server mode
+;; without a probe — it runs before the page's own script (which is at body end).
+(def SERVER-MARKER "<script>window.__TERRAIN_BACKEND__='server'</script>")
+(defn- serve-page []
+  (str/replace (io/slurp HTML-PATH) "<body>" (str "<body>" SERVER-MARKER)))
+
 ;; --- query parsing (reduce, no for-comprehension dependency) --------------
 (defn- parse-query [qs]
   (reduce (fn [m pair]
@@ -79,7 +86,7 @@
   (cond
     (= (:path req) "/floors") (floors-handler req)
     (= (:path req) "/eval")   (eval-handler req)
-    :else {:status 200 :headers {"Content-Type" "text/html"} :body (io/slurp HTML-PATH)}))
+    :else {:status 200 :headers {"Content-Type" "text/html"} :body (serve-page)}))
 
 (def ADDR (str "127.0.0.1:" PORT))                        ; localhost-only — /eval runs code
 (println (str "terrain workbench: http://localhost:" PORT
