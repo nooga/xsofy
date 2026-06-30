@@ -44,19 +44,28 @@
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
-  window.LetGoHost.onReady((mode) => {
+  window.LetGoHost.onReady(async (mode) => {
     const s = document.getElementById('status'); if (s) s.style.display = 'none';
     termEl.style.display = 'block';
+    // Capture output before we open, so nothing emitted during the font wait
+    // below is lost; flush it once the terminal is live.
+    let opened = false, pending = '';
+    window.LetGoHost.onOutput((x) => { if (opened) term.write(x); else pending += x; });
+    // The terminal font is an inlined @font-face. Present-at-parse is not
+    // loaded: the browser defers rasterizing it until first use, but xterm
+    // measures the glyph cell synchronously in term.open(). Measuring before
+    // Fairfax HD loads locks in a fallback's (full-width) cell; the half-width
+    // glyphs then sit off-grid and jitter on every repaint. Load the face
+    // first so the cell is measured against the real metrics.
+    try { await document.fonts.load('16px "Fairfax HD"'); } catch (e) {}
     term.open(termEl); fit.fit(); term.focus();
-    window.LetGoHost.onOutput((x) => term.write(x));
+    opened = true;
+    if (pending) { term.write(pending); pending = ''; }
     if (mode === 'worker') {
       window.LetGoHost.setSize(term.cols, term.rows);
       term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
       term.onData((d) => window.LetGoHost.sendInput(d));
     }
-    // Rune font is inlined (present at parse), so this re-fit is just a cheap
-    // safety net to re-measure glyph cells with Fairfax HD once fonts settle.
-    document.fonts.ready.then(() => { try { fit.fit(); } catch (e) {} });
   });
   // Debounced so a drag/rotate burst settles on the final size, not an
   // intermediate one. visualViewport catches the mobile URL-bar show/hide,
