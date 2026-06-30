@@ -74,5 +74,10 @@ jobs:
       - name: Compile smoke test
         run: let-go -b /tmp/xsofy main.lg
 
+      # Build the real shipping bundle (shell-less + xsofy shell + COI), not a
+      # bare `lg -w`, so the smoke gate catches a broken shell graft before it
+      # reaches the deploy.
       - name: WASM build smoke
-        run: let-go -w /tmp/xsofy-dist main.lg
+        uses: ./.github/actions/build-wasm
+        with:
+          dist: /tmp/xsofy-dist

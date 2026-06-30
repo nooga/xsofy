@@ -1,0 +1,47 @@
+name: Build xsofy WASM bundle
+description: >
+  Build the xsofy WASM bundle the way it ships: shell-less (-w-shell none),
+  then inject xsofy's own client shell (rune font + ?font=system, tools/xsofy-shell.html)
+  and patch the COI service-worker shim. Single source of truth for the bundle
+  build so the Pages deploy, the test smoke gate, and PR previews can't drift
+  (the drift is what shipped the bare let-go shell to production).
+
+inputs:
+  dist:
+    description: Output directory for the bundle.
+    required: false
+    default: dist
+  letgo-src:
+    description: >
+      Path to a let-go source checkout (sets LETGO_SRC) so `lg -w` compiles the
+      WASM runtime from the pinned release instead of let-go@latest. Omit to let
+      the runtime resolve from the installed let-go (fine for a build smoke).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # 1. Shell-less bundle: -w-shell none emits glue-only HTML exposing
+    #    window.LetGoHost, so a project can inject its own client shell (#245).
+    - name: Build WASM (shell-less)
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.letgo-src }}" ]; then export LETGO_SRC="${{ inputs.letgo-src }}"; fi
+        let-go -w "${{ inputs.dist }}" -w-shell none main.lg
+
+    # 2. Inject xsofy's own shell: rune font (Fairfax HD, OFL) + ?font=system.
+    #    Without this the bundle ships let-go's generic shell (no rune face,
+    #    no ?font=system) — the pre-existing production gap this fixes.
+    - name: Inject xsofy client shell
+      shell: bash
+      env:
+        XSOFY_WASM_INDEX: ${{ inputs.dist }}/index.html
+      run: let-go tools/inject_shell.lg
+
+    # 3. COI startup guard (SharedArrayBuffer needs cross-origin isolation).
+    - name: Patch COI startup guard
+      shell: bash
+      env:
+        XSOFY_WASM_INDEX: ${{ inputs.dist }}/index.html
+      run: let-go tools/patch_wasm_coi.lg

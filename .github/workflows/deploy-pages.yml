@@ -47,16 +47,15 @@ jobs:
       - name: Install let-go
         run: go install github.com/nooga/let-go@${{ steps.letgo.outputs.version }}
 
-      # LETGO_SRC pins the WASM *runtime* to the same release as the binary above;
-      # without it `lg -w` compiles the runtime from let-go@latest, which can drift
-      # from the binary's worker protocol.
-      - name: Build WASM
-        env:
-          LETGO_SRC: ${{ github.workspace }}/let-go-src
-        run: let-go -w dist main.lg
-
-      - name: Patch COI startup guard
-        run: let-go tools/patch_wasm_coi.lg
+      # Build the bundle the way it ships: shell-less + xsofy's own client shell
+      # (rune font + ?font=system) + COI shim. LETGO_SRC pins the WASM runtime to
+      # the same release as the binary above, so `lg -w` doesn't compile the
+      # runtime from let-go@latest and drift from the binary's worker protocol.
+      - name: Build WASM bundle
+        uses: ./.github/actions/build-wasm
+        with:
+          dist: dist
+          letgo-src: ${{ github.workspace }}/let-go-src
 
       - name: Set up Node (smoke gate)
         uses: actions/setup-node@v4
