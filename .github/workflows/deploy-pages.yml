@@ -25,9 +25,9 @@ jobs:
 
       # Single-source the let-go version from .let-go-version (the repo's
       # declared pin), so the deploy and the test floor can't drift apart.
-      # v1.11.0 ships the client-shell WASM glue (-w-shell none, #245) and the
-      # js/url-param host seam (#339) the bundle needs, so the ?seed=/?replay=
-      # bridge is native — no glue patch.
+      # The pinned release ships the client-shell WASM glue (-w-shell none, #245)
+      # and the js/url-param host seam (#339) the bundle needs, so the
+      # ?seed=/?replay= bridge is native — no glue patch.
       - name: Resolve let-go version
         id: letgo
         run: echo "version=$(grep -v '^#' .let-go-version | grep . | head -1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"

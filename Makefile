@@ -25,8 +25,9 @@ rune-font: ## Regenerate the inlined terminal font in tools/xsofy-shell.html fro
 
 wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI bridge
 	# Build glue-only (no let-go xterm shell), then inject xsofy's own shell.
-	# Requires let-go >= v1.11.0: -w-shell none (#245) and the js/url-param host
-	# seam (#339) that carries ?seed=/?replay= into the worker natively.
+	# Requires the let-go release pinned in .let-go-version: -w-shell none (#245)
+	# and the js/url-param host seam (#339) that carries ?seed=/?replay= into the
+	# worker natively.
 	$(LG) -w $(DIST) -w-shell none main.lg
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/inject_shell.lg
 	# COI bounded-retry still patches the core glue: it drives the crossOriginIsolated
