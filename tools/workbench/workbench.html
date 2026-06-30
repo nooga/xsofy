@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>xsofy · workbench</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzE2MTYxYyIvPjx0ZXh0IHg9IjE2IiB5PSIyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9InVpLW1vbm9zcGFjZSxtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMjIiIGZpbGw9IiNmZmQyN2YiPiYjOTU1OzwvdGV4dD48L3N2Zz4=">  <!-- λ favicon (let-go mark, workbench accent); adapted from let-go #359 -->
+<style>
+  :root { --bg:#0c0c10; --panel:#16161c; --ink:#cfcabb; --accent:#ffd27f;
+    --reserve:258px; }   /* sidebar reserve; tuned by eye to center in usable area */
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow:hidden; }
+  /* reserve the sidebar's width so content centers in the usable area, not
+     under the panel. all centering (initial, click-focus, reset) rides this. */
+  #stage { position:absolute; inset:0; display:grid; place-items:center;
+    padding-left:var(--reserve); perspective:2200px; }
+  /* The tumbling container: all floors share one 3D transform. */
+  #stack { transform-style:preserve-3d; transition:transform .08s linear; }
+  .floor { position:absolute; transform-style:preserve-3d; left:50%; top:50%;
+    transition:transform .12s ease, opacity .12s ease; }
+  .floor canvas { display:block; image-rendering:pixelated;
+    box-shadow:0 0 0 1px rgba(255,255,255,.06);
+    transition:opacity .1s linear, box-shadow .12s ease; }
+  /* subtle per-layer hover — the frontmost floor under the cursor (3D hit-test) */
+  .floor > canvas:hover { box-shadow:0 0 0 1px rgba(255,210,127,.55),
+    0 0 16px rgba(255,210,127,.16); }
+  /* Extrusion: solid dark plates stacked behind the face along the tower axis,
+     so the floor reads as a slab with thickness. The container must establish
+     its own 3D context or the plates flatten onto the face and just darken it. */
+  .floor .slabs { position:absolute; left:0; top:0; transform-style:preserve-3d; }
+  .slab { position:absolute; left:0; top:0; }
+
+  #panel { position:absolute; top:12px; left:12px; width:260px; padding:14px 16px;
+    background:rgba(22,22,28,.92); border:1px solid #2a2a33; border-radius:8px;
+    backdrop-filter:blur(4px); max-height:calc(100vh - 24px); overflow-y:auto; }
+  /* live-coding console: docked bottom, centered in the usable strip, collapsible */
+  #eval { position:absolute; bottom:12px; left:var(--reserve); right:196px;
+    max-width:780px; margin:0 auto; z-index:5;   /* right gap clears the legend */
+    background:rgba(22,22,28,.94); border:1px solid #2a2a33; border-radius:8px;
+    backdrop-filter:blur(4px); }
+  #evalHd { display:flex; align-items:center; gap:9px; padding:8px 12px; cursor:pointer;
+    user-select:none; }
+  #evalHd strong { color:var(--accent); font-size:11px; letter-spacing:.04em;
+    text-transform:uppercase; }
+  #evalHd .dim { color:#7c7768; font-size:10px; }
+  #evalHd #evalCaret { color:#9b9585; width:9px; }
+  #evalHd #evalOut { margin-left:auto; font:11px ui-monospace,monospace;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:55%; }
+  #evalBody { display:none; padding:0 12px 12px; }
+  #eval.open #evalBody { display:block; }
+  #evalIn { width:100%; height:120px; background:#0d0c08; color:#cdc6b2;
+    border:1px solid #2a2820; border-radius:5px; font:12px/1.45 ui-monospace,monospace;
+    padding:8px; resize:vertical; box-sizing:border-box; }
+  #evalIn:focus { outline:none; border-color:var(--accent); }
+  #panel h1 { font-size:12px; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 3px; }
+  /* the whole panel collapses to its title bar (like stats + the eval console) */
+  #panelHd { display:flex; align-items:center; gap:7px; cursor:pointer;
+    user-select:none; margin:0 0 4px; }
+  #panelHd h1 { margin:0; }
+  #panelHd .caret { font-size:9px; color:#9b9585; transition:transform .12s; }
+  #panelHd:hover .caret { color:var(--accent); }
+  #panel.collapsed #panelHd .caret { transform:rotate(-90deg); }
+  #panel.collapsed #panelBody { display:none; }
+  #modeBadge { font-size:9px; letter-spacing:.06em; color:#0c0c10;
+    background:var(--accent); border-radius:3px; padding:1px 5px;
+    vertical-align:1px; font-weight:600; }
+  #modeBadge[data-mode=static] { background:#7c98c4; }   /* render-only */
+  #modeBadge[data-mode=wasm]   { background:#b58fd6; }   /* in-page engine */
+  /* notice when an explicit ?mode= isn't available here and we fell back */
+  #modeNotice { position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    z-index:6; background:rgba(40,34,20,.96); border:1px solid var(--accent);
+    color:var(--accent); border-radius:6px; padding:6px 12px; font-size:11px;
+    display:none; max-width:60vw; }
+  #modeNotice b { cursor:pointer; margin-left:8px; color:#9b9585; }
+  #modeBadge { cursor:pointer; }   /* click for the mode info popover */
+  /* badge pinned top-right of the panel, sticky so it survives panel scroll.
+     height:0 overlay row so it doesn't push the title down; only the badge
+     itself takes pointer events. */
+  #panelTop { position:sticky; top:0; height:0; display:flex; justify-content:flex-end;
+    align-items:flex-start; z-index:8; pointer-events:none; }   /* flex-start: don't
+    stretch the badge to the row's 0 height (that flattened the pill) */
+  #panelTop #modeBadge { pointer-events:auto; }
+  /* mode info popover — click the badge; appears to the RIGHT of the panel (it's
+     a body-level sibling, so the panel's overflow:auto can't clip it). */
+  #modeInfo { display:none; position:absolute; top:12px; left:282px; width:240px;
+    z-index:7; background:rgba(14,14,20,.98); border:1px solid var(--accent);
+    border-radius:7px; padding:10px 12px; box-shadow:0 8px 22px rgba(0,0,0,.5); }
+  #modeInfo.open { display:block; }
+  #modeInfo h2 { margin:0 0 5px; font-size:10.5px; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--accent); }
+  #modeInfo p { margin:0 0 8px; font-size:11px; line-height:1.5; color:#b8b2a3; }
+  #modeInfo code { color:#cdc6b2; }
+  #modeInfo .sw { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+    border-top:1px solid #2a2a33; padding-top:8px; }
+  #modeInfo .sw .lbl { color:#6c6758; font-size:10px; text-transform:uppercase;
+    letter-spacing:.04em; }
+  #modeInfo .sw a { color:var(--ink); border:1px solid #34343f; border-radius:999px;
+    padding:2px 9px; font-size:11px; cursor:pointer; text-decoration:none; }
+  #modeInfo .sw a:hover { border-color:var(--accent); color:var(--accent); }
+  #modeInfo .sw a.cur { background:var(--accent); color:#0c0c10;
+    border-color:var(--accent); cursor:default; }
+  #panel .sub { color:#7c7768; margin:0 0 13px; font-size:11px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    margin:10px 0; }
+  .row label { white-space:nowrap; }
+  /* min-width:0 lets the range shrink (its intrinsic min is ~129px and would
+     otherwise push the value box off the panel's right edge). */
+  .row input[type=range] { flex:1; min-width:0; accent-color:var(--accent); }
+  .row .val { flex:none; width:44px; text-align:right; color:#9b9585; }
+  hr { border:0; border-top:1px solid #2a2a33; margin:13px 0; }
+  #floors { display:grid; grid-template-columns:1fr 34px 34px; align-items:center;
+    column-gap:6px; row-gap:6px; margin-top:8px; }
+  #floors .fhdr { font-size:10px; letter-spacing:.04em; text-transform:uppercase;
+    color:#6c6758; text-align:center; padding-bottom:1px; }
+  #floors .flabel { white-space:nowrap; }
+  #floors .flabel.off { color:#56524833; color:#565248; }
+  #floors input { justify-self:center; margin:0; cursor:pointer; }
+  .hint { color:#6c6758; font-size:11px; margin-top:12px; line-height:1.5; }
+  button.mini { background:#23232c; color:var(--ink); border:1px solid #34343f;
+    border-radius:5px; padding:4px 9px; cursor:pointer; font:inherit;
+    white-space:nowrap; }
+  button.mini:hover { border-color:var(--accent); }
+
+  /* stats legend — bottom-right, collapsible */
+  #stats { position:absolute; right:12px; bottom:12px; width:158px;
+    background:rgba(22,22,28,.92); border:1px solid #2a2a33; border-radius:8px;
+    backdrop-filter:blur(4px); overflow:hidden; }
+  #statsHd { display:flex; align-items:center; gap:7px; padding:7px 10px;
+    cursor:pointer; user-select:none; color:var(--accent); font-size:11px;
+    letter-spacing:.04em; text-transform:uppercase; }
+  #statsHd .caret { font-size:9px; transition:transform .12s; }
+  #stats.collapsed .caret { transform:rotate(-90deg); }
+  #stats.collapsed #statsBody { display:none; }
+  #statsBody { padding:1px 10px 8px; }
+  #statsBody .srow { display:grid; grid-template-columns:17px 1fr auto;
+    align-items:center; gap:8px; padding:1px 0; }
+  #statsBody .ssw { width:17px; height:14px; border-radius:3px; text-align:center;
+    line-height:14px; font-size:11px; box-shadow:0 0 0 1px rgba(255,255,255,.06) inset; }
+  #statsBody .snm { color:#b8b2a3; }
+  #statsBody .sct { color:#8a8475; font-variant-numeric:tabular-nums; }
+  #statsBody .srow.zero { opacity:.38; }   /* type absent on this floor */
+
+  /* collapsible "view & tuning" drawer in the panel */
+  #viewHd { display:flex; align-items:center; gap:7px; padding:6px 2px; cursor:pointer;
+    user-select:none; color:#8a8475; font-size:11px; letter-spacing:.04em;
+    text-transform:uppercase; }
+  #viewHd:hover { color:var(--accent); }
+  #viewHd .caret { font-size:9px; transition:transform .12s; }
+  #viewDrawer.collapsed .caret { transform:rotate(-90deg); }
+  #viewDrawer.collapsed #viewBody { display:none; }
+  /* label case: view & tuning controls are Title Case (in the markup); primary
+     controls (seed/depths) are lowercase. No transform — the text carries it. */
+  .eglabel { margin-left:8px; color:#6c6758; font-size:10.5px; }   /* "try:" lead-in */
+</style>
+</head>
+<body>
+<div id="stage"><div id="stack"></div></div>
+<div id="modeNotice"></div>
+<div id="modeInfo"></div>
+
+<div id="stats">
+  <div id="statsHd"><span class="caret">▾</span><span id="statsLabel">stats</span></div>
+  <div id="statsBody"></div>
+</div>
+
+<div id="panel">
+  <div id="panelTop"><span id="modeBadge" title="what is this mode?"></span></div>
+  <div id="panelHd"><span class="caret">▾</span><h1>xsofy · workbench</h1></div>
+  <div id="panelBody">
+  <p class="sub" id="meta">connecting…</p>
+  <div id="liveRow" class="row" style="margin:2px 0 10px; justify-content:flex-start; gap:7px; flex-wrap:wrap">
+    <label>seed</label><input id="seedIn" type="number" value="42" style="width:62px">
+    <label>depths</label><input id="depthIn" type="number" min="1" max="20" value="3" style="width:46px">
+    <button class="mini" id="genBtn">generate</button>
+    <span id="genStatus" style="color:#6c6758;font-size:10px"></span>
+  </div>
+  <div id="loadRow" class="row" style="margin:0 0 12px; justify-content:flex-start; gap:11px">
+    <button class="mini" id="loadBtn">load export…</button>
+    <span style="color:#6c6758;font-size:10px;line-height:1.4">or drop a .json/.js file</span>
+  </div>
+  <input id="fileIn" type="file" accept=".json,.js,application/json" hidden>
+
+  <!-- non-essentials: explode/orbit/zoom are redundant with drag/scroll on
+       desktop; aspect/thickness/dim are set-once. Collapsed by default; the
+       drawer is also the touch fallback for the gestures. -->
+  <div id="viewDrawer" class="collapsed">
+    <div id="viewHd"><span class="caret">▾</span><span>view &amp; tuning</span></div>
+    <div id="viewBody">
+      <div class="row"><label>explode</label>
+        <input id="gap" type="range" min="0" max="320" value="120"><span class="val" id="gapv"></span></div>
+      <div class="row"><label>tilt-x</label>
+        <input id="rx" type="range" min="0" max="85" value="58"><span class="val" id="rxv"></span></div>
+      <div class="row"><label>spin-z</label>
+        <input id="rz" type="range" min="-90" max="90" value="-38"><span class="val" id="rzv"></span></div>
+      <div class="row"><label>zoom</label>
+        <input id="zoom" type="range" min="40" max="160" value="90"><span class="val" id="zoomv"></span></div>
+      <div class="row"><label>aspect</label>
+        <input id="aspect" type="range" min="3" max="12" value="6"><span class="val" id="aspectv"></span></div>
+      <div class="row"><label>thickness</label>
+        <input id="thick" type="range" min="0" max="14" value="5"><span class="val" id="thickv"></span></div>
+      <div class="row"><label>dim-level</label>
+        <input id="under" type="range" min="5" max="100" value="20"><span class="val" id="underv"></span></div>
+    </div>
+  </div>
+
+  <hr>
+  <div class="row" style="margin-top:0">
+    <strong>floors</strong>
+    <span style="white-space:nowrap"><button class="mini" id="allOn">all</button>
+          <button class="mini" id="topOnly">top</button>
+          <button class="mini" id="dimUpper">dim&nbsp;↑</button></span>
+  </div>
+  <div id="floors"></div>
+  <div id="metrics" style="margin-top:10px;font-size:11px"></div>
+
+  <p class="hint">Drag to orbit · scroll to zoom · shift/space-drag to pan ·
+    <b>click a floor</b> for a flat top-down view; click it again to descend
+    (loops), click off (or double-click) to return; <b>↑↓</b> or <b>j/k</b> step
+    depths. Per floor:
+    <b>show</b> toggles visibility, <b>dim</b> fades it so you see floors beneath;
+    "dim ↑" dims everything above the deepest shown floor.</p>
+  </div>
+</div>
+
+<!-- bottom-docked, collapsible live-coding console (centered in the usable strip) -->
+<div id="eval">
+  <div id="evalHd">
+    <span id="evalCaret">▸</span>
+    <strong>live-coding</strong>
+    <span class="dim">eval → xsofy.terrain · ⌘/Ctrl+Enter</span>
+    <span id="evalOut"></span>
+  </div>
+  <div id="evalBody">
+    <textarea id="evalIn" spellcheck="false"
+      placeholder=";; redefine a generator fn in xsofy.terrain, then it re-renders. e.g.&#10;;; (defn place-grass-patch! [world grid w h] world)   ; kills grass"></textarea>
+    <div class="row" style="margin:7px 0 0; justify-content:flex-start; gap:9px; flex-wrap:wrap">
+      <button class="mini" id="evalBtn">eval &amp; regenerate</button>
+      <span class="eglabel">try:</span>
+      <button class="mini eg"
+        data-code="(defn place-grass-patch! [world grid w h] world)">kill grass</button>
+      <button class="mini eg"
+        data-code="(defn place-lake! [world grid w h deep-tile shallow-tile wreath-width size-class] [false world])">kill lakes</button>
+      <button class="mini eg"
+        data-code="(defn carve-room! [grid w x1 y1 x2 y2] (doseq [y (range y1 (inc y2))] (doseq [x (range x1 (inc x2))] (tset! grid w x y 15))))">add fire</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// IIFE so the workbench's top-level names stay private. In ?mode=wasm this page
+// is injected into let-go's host-core bundle (which shares global lexical scope),
+// where a bare top-level const like WASM_MODE collides with host-core's own —
+// a redeclare SyntaxError that kills the whole script. Scoping avoids that class.
+(() => {
+// ---- palette inlined from xsofy/terrain.lg (tile-chars / tile-styles) ----
+const GLYPH = {0:" ",1:".",2:'"',3:"~",4:"~",5:".",6:" ",7:"~",8:"#",9:"#",
+  10:".",11:"+",12:"'",13:">",14:"<",15:"^",16:".",17:"=",18:".",19:":"};
+const STYLE = {
+  0:[[30,30,30],[10,10,10]], 1:[[80,70,55],[22,20,18]], 2:[[40,90,30],[18,28,14]],
+  3:[[60,120,140],[15,35,45]], 4:[[25,45,120],[8,12,38]], 5:[[120,20,20],[35,10,10]],
+  6:[[15,10,25],[4,2,8]], 7:[[255,120,20],[140,40,10]], 8:[[90,85,75],[45,42,38]],
+  9:[[200,160,60],[55,48,38]], 10:[[50,45,70],[20,18,40]], 11:[[140,110,60],[40,35,25]],
+  12:[[100,80,45],[22,20,18]], 13:[[255,255,200],[22,20,18]], 14:[[200,200,150],[22,20,18]],
+  15:[[255,160,30],[120,40,10]], 16:[[50,48,45],[18,17,16]], 17:[[120,85,40],[55,35,15]],
+  18:[[30,55,22],[20,24,16]], 19:[[200,200,210],[22,20,18]] };
+const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+// The in-game palette is tuned for a black terminal: backgrounds sit near
+// [20,20,20] and the glyph (fg) is LIGHTER than its bg, so e.g. wall '#' pops.
+// Lift bg just enough to read in an overview WITHOUT crossing above the fg —
+// over-lifting inverts figure/ground and the map flattens to muddy grey. Keep
+// rooms dark voids and walls a grey speckled mass, as on the terminal.
+const lift = c => Math.min(255, Math.round(c*1.1 + 3));
+const bgLift = a => `rgb(${lift(a[0])},${lift(a[1])},${lift(a[2])})`;
+const NAMES = {0:'void',1:'floor',2:'grass',3:'water',4:'deep water',5:'blood',
+  6:'chasm',7:'lava',8:'wall',9:'torch',10:'ledge',11:'door',12:'open door',
+  13:'stairs ↓',14:'stairs ↑',15:'fire',16:'ash',17:'bridge',18:'trampled',19:'web'};
+// tile counts for one floor's grid as a {type: count} map (skip void)
+function tileHist(grid){
+  const c={};
+  for(const t of grid){ if(t!==0) c[t]=(c[t]||0)+1; }
+  return c;
+}
+// Cell width and height are separate: a square cell stretches a 79x30 map to
+// ~2.6:1, but a terminal char cell is ~2:1 tall:wide, so the map reads ~4:3
+// (79*6 x 30*12 = 474x360). CELLH fixes row height; the Aspect slider sets CELLW.
+let CELLW = 6, CELLH = 12;
+
+// map data — (re)assigned by loadData() so an uploaded file can replace it
+let w=0, h=0, floors=[], N=0, seed=0;
+let FW=0, FH=0;
+let legendTypes=[];   // fixed legend rows: types present anywhere, fixed order
+
+// ---- Backends: the data-access points the UI needs (generate floors, eval
+// code), behind one interface so all three modes share one renderer + controls.
+// Each declares caps {live, eval, upload}; the UI shows/hides controls off caps
+// (applyCaps), not per-mode branches.
+//   Static — render a prebuilt export (boot-fetched default, or upload/drop). No
+//            engine: lowest overhead, statically hostable, no COI. Share/snapshot.
+//   Server — workbench-server.lg: native /floors gen + /eval live-redefine. Fast.
+//   Wasm   — in-page -w-host-eval image, driven via LetGoHost.eval. Reset-on-reload.
+const StaticBackend = {
+  caps: { live:false, eval:false, upload:true },
+  failHint: 'load a floors export, or open ?mode=server / ?mode=wasm for a live engine',
+  // No engine — "generate" returns the currently-loaded export (set by a boot
+  // default-fetch or an upload/drop); seed/depths are ignored. Null until
+  // something is loaded, so boot() leaves the upload prompt showing.
+  async generate(){ return this._data || null; },
+};
+
+const ServerBackend = {
+  caps: { live:true, eval:true, upload:true },
+  failHint: 'is workbench-server.lg running?',   // shown in the meta line on generate failure
+  async generate(seed, depths){
+    const r = await fetch(`/floors?seed=${seed}&depths=${depths}`);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();                            // {w,h,seed,floors:[…]}
+  },
+  async evalCode(code){
+    const r = await fetch('/eval',{method:'POST',body:code});
+    return r.json();                            // {ok, value|error}
+  },
+};
+
+// WasmBackend: same interface, served by the in-page let-go image instead of a
+// server. The image is built with `lg -w -w-host-eval` (#340), which exposes
+// LetGoHost.eval(code)->Promise<string>. Both wasm-entry fns return their real
+// payload OUT OF BAND via js/emit (the eval return is only a stringified value),
+// so each call fires LetGoHost.eval to trigger the in-image fn and resolves on
+// the matching emit. js/emit's default sink dispatches a CustomEvent named after
+// the keyword ('xsofy/floors', 'xsofy/eval-result') with the data as .detail.
+const WasmBackend = {
+  caps: { live:true, eval:true, upload:true },
+  failHint: 'is the wasm image booted? (built with lg -w -w-host-eval)',
+  generate(seed, depths){
+    return this._call('xsofy/floors',
+      `(tools.workbench.wasm-entry/generate ${seed} ${depths})`);
+  },
+  evalCode(code){
+    // JSON.stringify yields a JS string literal; EDN/let-go read-string accepts
+    // the same "…" escapes, so it round-trips the user's code as one string arg.
+    return this._call('xsofy/eval-result',
+      `(tools.workbench.wasm-entry/eval-str ${JSON.stringify(code)})`);
+  },
+  // Arm a one-shot listener for the result emit, then fire the eval. The genToken
+  // guard in generate() drops any stale floors that resolve after a newer step.
+  // Serialized: concurrent calls would each arm a listener for the same emit, and
+  // the first event would resolve all of them (a newer generate would then render
+  // the older payload — the genToken guard drops the stale render but can't tell
+  // the promises apart). Running one at a time means each call's listener is the
+  // only one live when its emit fires. The worker evals serially anyway and
+  // generate() is debounced, so the added latency is negligible.
+  _call(emitName, lgForm){
+    const run = () => new Promise((resolve, reject) => {
+      const onEmit = e => { cleanup(); resolve(e.detail); };
+      const timer = setTimeout(() => { cleanup(); reject(new Error(emitName+': no emit within 10s')); }, 10000);
+      const cleanup = () => { window.removeEventListener(emitName, onEmit); clearTimeout(timer); };
+      window.addEventListener(emitName, onEmit);
+      // LetGoHost.eval awaits its own runtime-ready gate internally, so this is
+      // safe even if called before the image finishes booting. A rejected eval
+      // (worker-timeout net / bridge error) fails the call rather than hanging.
+      window.LetGoHost.eval(lgForm).catch(err => { cleanup(); reject(err); });
+    });
+    const result = (this._chain || Promise.resolve()).then(run, run);
+    this._chain = result.catch(() => {});   // queue tail never rejects, so it keeps flowing
+    return result;
+  },
+};
+
+// Wasm capability is host-eval, not just any wasm bundle. A normal `lg -w`
+// shell exposes window.LetGoHost too (onReady/onOutput/sendInput), but only
+// `-w-host-eval` adds LetGoHost.eval — the one method WasmBackend drives. Gate
+// on eval's presence so a non-host-eval page falls back instead of selecting
+// wasm and then dying with "LetGoHost.eval is not a function" at generate time.
+const HOST_EVAL = typeof window.LetGoHost?.eval === 'function';
+
+// Mode = which backend drives the page. Explicit ?mode= wins; otherwise
+// auto-detect with no probe: a -w-host-eval bundle injects window.LetGoHost.eval
+// (→ wasm); a page served by workbench-server.lg carries a window.__TERRAIN_BACKEND__
+// marker (→ server); a plain static host has neither (→ static, the zero-dep default).
+function resolveMode(){
+  const q = new URLSearchParams(location.search).get('mode');
+  if(q==='static'||q==='server'||q==='wasm') return q;
+  if(HOST_EVAL) return 'wasm';
+  if(window.__TERRAIN_BACKEND__ === 'server') return 'server';
+  return 'static';
+}
+const REQUESTED = new URLSearchParams(location.search).get('mode');  // explicit ?mode=, or null
+let MODE = resolveMode();
+let modeNote = '';   // surfaced (applyCaps) when an explicit mode isn't available here
+// ?mode=wasm asked for explicitly but this isn't a host-eval bundle (no
+// LetGoHost.eval) — fall back to static rather than hang waiting for an image.
+if(MODE === 'wasm' && !HOST_EVAL){
+  console.warn('mode=wasm but LetGoHost.eval is absent — not a -w-host-eval bundle; falling back to static.');
+  modeNote = 'wasm mode needs the host-eval bundle (not this page) — showing static.';
+  MODE = 'static';
+}
+// ?mode=server on a host with no workbench-server.lg can't generate — the /floors
+// fetch will fail with its own hint, but flag the mismatch up front too.
+if(REQUESTED === 'server' && !window.__TERRAIN_BACKEND__){
+  modeNote = 'server mode needs workbench-server.lg — generation will fail unless one is serving this page.';
+}
+const Backend = { static:StaticBackend, server:ServerBackend, wasm:WasmBackend }[MODE];
+const caps = Backend.caps;
+const DEFAULT_EXPORT = 'floors-seed7-d8.json';   // static-mode boot render (if served alongside)
+
+// Paint a floor's tiles into its (re-sized) canvas. Re-run on aspect change.
+function paintFace(L) {
+  const cv = L.face;
+  // Render at devicePixelRatio so tiles/glyphs are crisp on hi-dpi screens.
+  // Backing store is scaled up; the CSS size stays FW×FH so the 3D layout
+  // (which positions floors by FW/FH) is unchanged. Faces only — the slab
+  // plates are solid fills and look identical at any resolution.
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = FW*dpr; cv.height = FH*dpr;
+  cv.style.width = FW+'px'; cv.style.height = FH+'px';
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.font = `${CELLH}px ui-monospace, monospace`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const grid = L.data.grid;
+  for (let i=0;i<grid.length;i++){
+    const t=grid[i], x=(i%w)*CELLW, y=((i/w)|0)*CELLH, st=STYLE[t]||STYLE[0],
+          cx=x+CELLW/2, cy=y+CELLH/2;
+    // every tile (stairs included) renders faithfully: lifted bg + raw fg glyph.
+    // stairs are cream '>'/'<' on the dark void bg, exactly as in-game.
+    ctx.fillStyle = bgLift(st[1]); ctx.fillRect(x,y,CELLW,CELLH);
+    const g=GLYPH[t];
+    if (g && g!==' '){ ctx.fillStyle = rgb(st[0]); ctx.fillText(g,cx,cy); }
+  }
+}
+
+const stack = document.getElementById('stack');
+const layers = [];   // rebuilt by loadData(): {el,face,slabWrap,depth,visible,dim,data,showCb,dimCb,lab}
+
+// (re)render every face + slab at the current cell size
+function rebuild(){
+  FW = w*CELLW; FH = h*CELLH;
+  for (const L of layers) paintFace(L);
+  applyThickness();
+}
+
+// ---- controls ----
+const $ = id => document.getElementById(id);
+const ctl = { gap:$('gap'), rx:$('rx'), rz:$('rz'), zoom:$('zoom'),
+  aspect:$('aspect'), thick:$('thick'), under:$('under') };
+let drag=null, spin={x:+ctl.rx.value, z:+ctl.rz.value}, pan={x:0,y:0}, spaceHeld=false;
+let facing=null;   // depth currently in flat top-down "facing" view, else null
+
+function applyThickness(){
+  const n=+ctl.thick.value;
+  for (const L of layers){
+    L.slabWrap.innerHTML='';
+    for (let k=1;k<=n;k++){
+      const s=document.createElement('canvas'); // solid dark slab plate
+      s.className='slab';
+      s.width=FW; s.height=FH;
+      const sx=s.getContext('2d');
+      sx.fillStyle='#14130e'; sx.fillRect(0,0,FW,FH);  // opaque rock
+      s.style.transform=`translateZ(${-k}px)`;          // behind the face
+      L.slabWrap.appendChild(s);
+    }
+  }
+}
+
+function layout(){
+  const gap=+ctl.gap.value, dimLevel=+ctl.under.value/100;
+  // each floor is independently shown/hidden and full/dimmed (the two-column
+  // grid). A dimmed floor fades to `dimLevel` so you can see floors beneath it.
+  // Opacity goes on the leaf canvases (face + every slab), NOT the floor div —
+  // opacity<1 on a preserve-3d node flattens its 3D children (a hard pop), and
+  // a dimmed face alone would still show its opaque slabs, hiding the floor below.
+  // center on the VISIBLE floors (so hiding layers recenters the stack), not the
+  // full tower — use the midpoint of the visible depth range.
+  const visIdx=layers.filter(L=>L.visible).map(L=>L.depth-1);
+  const mid=visIdx.length ? (Math.min(...visIdx)+Math.max(...visIdx))/2 : (N-1)/2;
+  for (const L of layers){
+    const idx=L.depth-1;
+    const z=(mid-idx)*gap;            // depth 1 highest (+Z toward viewer)
+    L.el.style.transform=
+      `translate(-50%,-50%) translateZ(${z}px)`;
+    L.el.style.display=L.visible?'block':'none';
+    const op = L.dim ? dimLevel : 1;
+    L.el.querySelectorAll('canvas').forEach(c=>c.style.opacity=op);
+  }
+  $('gapv').textContent=gap;
+  $('aspectv').textContent=(CELLW/CELLH).toFixed(2);
+  $('thickv').textContent=ctl.thick.value;
+  $('underv').textContent=Math.round(dimLevel*100)+'%';
+  applyView();   // whole-stack transform + its readouts
+}
+
+// applyView writes ONLY the whole-stack transform (pan/zoom/orbit) and its
+// readouts — the cheap per-frame work. Zoom/drag/pan change only this, so they
+// skip layout()'s per-layer transform/opacity loop (the part that scales with
+// floors × slabs).
+function applyView(){
+  const zoom=+ctl.zoom.value/100;
+  // pan translates in screen space (outside the rotate) so it stays flat
+  stack.style.transform=
+    `translate(${pan.x}px,${pan.y}px) scale(${zoom}) rotateX(${spin.x}deg) rotateZ(${spin.z}deg)`;
+  $('rxv').textContent=spin.x|0; $('rzv').textContent=spin.z|0;
+  $('zoomv').textContent=(zoom).toFixed(2);
+}
+
+// rAF-coalesce so rapid events cause at most one update per frame (trackpads
+// fire faster than 60fps): structural changes throttle the full layout();
+// view-only changes (zoom/drag/pan) throttle the cheap applyView().
+let layoutRaf=0, viewRaf=0;
+function scheduleLayout(){ if(!layoutRaf) layoutRaf=requestAnimationFrame(()=>{ layoutRaf=0; layout(); }); }
+function scheduleView(){ if(!viewRaf) viewRaf=requestAnimationFrame(()=>{ viewRaf=0; applyView(); }); }
+
+// per-floor show/dim grid (the rows themselves are built in loadData)
+const flist=$('floors');
+function syncRow(L){ L.showCb.checked=L.visible; L.dimCb.checked=L.dim;
+  L.lab.classList.toggle('off',!L.visible); }
+
+// stats legend reflects the frontmost (shallowest) shown floor
+function frontVisible(){ let b=null;
+  for(const L of layers) if(L.visible && (!b||L.depth<b.depth)) b=L; return b; }
+function updateStats(){
+  const L=frontVisible(), body=$('statsBody');
+  $('statsLabel').textContent = L ? `depth ${L.depth}` : '—';
+  body.innerHTML='';
+  // always render the SAME row set (legendTypes); only the counts change. Rows
+  // absent on this floor show 0, dimmed — fixed size, nothing jumps.
+  for(const t of legendTypes){
+    const n = L ? (L.stats[t]||0) : 0;
+    const row=document.createElement('div'); row.className='srow'+(n===0?' zero':'');
+    const sw=document.createElement('span'); sw.className='ssw';
+    sw.style.background=bgLift(STYLE[t][1]); sw.style.color=rgb(STYLE[t][0]);
+    sw.textContent = GLYPH[t]===' ' ? '·' : GLYPH[t];
+    const nm=document.createElement('span'); nm.className='snm'; nm.textContent=NAMES[t]||('#'+t);
+    const ct=document.createElement('span'); ct.className='sct'; ct.textContent=n;
+    row.append(sw,nm,ct); body.append(row);
+  }
+}
+$('statsHd').onclick=()=>$('stats').classList.toggle('collapsed');
+$('viewHd').onclick=()=>$('viewDrawer').classList.toggle('collapsed');
+$('panelHd').onclick=()=>$('panel').classList.toggle('collapsed');
+
+$('allOn').onclick=()=>{ layers.forEach(L=>{L.visible=true;L.dim=false;syncRow(L);}); layout(); updateStats(); };
+$('topOnly').onclick=()=>{ layers.forEach(L=>{L.visible=(L.depth===1);L.dim=false;syncRow(L);}); layout(); updateStats(); };
+// dim every shown floor above the deepest shown one — look down through the stack
+$('dimUpper').onclick=()=>{
+  const shown=layers.filter(L=>L.visible).map(L=>L.depth);
+  const deepest=shown.length?Math.max(...shown):1;
+  layers.forEach(L=>{ L.dim = L.visible && L.depth<deepest; syncRow(L); }); layout(); };
+
+for (const k in ctl) ctl[k].addEventListener('input',()=>{
+  if (k==='rx') spin.x=+ctl.rx.value;
+  if (k==='rz') spin.z=+ctl.rz.value;
+  if (k==='thick') applyThickness();
+  if (k==='aspect'){ CELLW=+ctl.aspect.value; rebuild(); }
+  scheduleLayout();
+});
+
+// Space held → pan instead of orbit (Shift works too, via e.shiftKey)
+addEventListener('keydown',e=>{ if(e.code==='Space'){ spaceHeld=true;
+  if(!e.target.closest('input,button')) e.preventDefault(); } });
+addEventListener('keyup',e=>{ if(e.code==='Space') spaceHeld=false; });
+
+// drag: Shift/Space → pan, otherwise orbit. A press with no drag is a click.
+addEventListener('pointerdown',e=>{ if(e.target.closest('#panel,#stats,#eval'))return;
+  drag={x:e.clientX,y:e.clientY,sx:spin.x,sz:spin.z,px:pan.x,py:pan.y,
+        pan:(e.shiftKey||spaceHeld), tgt:e.target, moved:false}; });
+addEventListener('pointermove',e=>{ if(!drag)return;
+  if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3) drag.moved=true;
+  if(drag.pan){ pan.x=drag.px+(e.clientX-drag.x); pan.y=drag.py+(e.clientY-drag.y); }
+  else { facing=null;   // orbiting tilts back into 3D — no longer facing a floor
+    spin.z=drag.sz+(e.clientX-drag.x)*0.4;
+    spin.x=Math.max(0,Math.min(85,drag.sx+(e.clientY-drag.y)*0.4));
+    ctl.rx.value=spin.x; ctl.rz.value=spin.z; }
+  scheduleView(); });
+addEventListener('pointerup',e=>{
+  // click (no drag): on a floor → face it, or descend (cycle) if already facing;
+  // off a floor while facing → back to the exploded stack.
+  if(drag && !drag.moved && !drag.pan){
+    const onFloor=drag.tgt?.dataset?.depth;
+    if(facing!==null){ if(onFloor) cycleFacing(1); else exitToStack(); }
+    else if(onFloor) focusDepth(+onFloor);
+  }
+  drag=null; });
+// while facing, step to the next/prev depth, wrapping (click descends + loops)
+function cycleFacing(dir){
+  const depths=layers.map(L=>L.depth).sort((a,b)=>a-b);
+  const i=(depths.indexOf(facing)+dir+depths.length)%depths.length;
+  focusDepth(depths[i]);
+}
+
+// flat top-down view of floor d, hiding every floor above it (like in-game)
+function focusDepth(d){
+  facing=d;
+  spin.x=0; spin.z=0; ctl.rx.value=0; ctl.rz.value=0; pan.x=0; pan.y=0;
+  layers.forEach(L=>{ L.visible=L.depth>=d; L.dim=false; syncRow(L); });
+  updateStats(); layout();
+}
+// back to the default exploded 3D view
+function exitToStack(){
+  facing=null;
+  spin.x=58; spin.z=-38; ctl.rx.value=58; ctl.rz.value=-38; pan.x=0; pan.y=0;
+  layers.forEach(L=>{ L.visible=true; L.dim=false; syncRow(L); });
+  updateStats(); layout();
+}
+addEventListener('dblclick',e=>{ if(e.target.closest('#panel,#stats,#eval'))return; exitToStack(); });
+
+// in facing view: ↑/k = shallower (toward depth 1), ↓/j = deeper
+addEventListener('keydown',e=>{
+  if(facing===null) return;
+  if(document.activeElement?.tagName==='INPUT') return;   // let sliders keep arrows
+  const deeper  = e.key==='ArrowDown'||e.key==='j';
+  const shallow = e.key==='ArrowUp'  ||e.key==='k';
+  if(!deeper && !shallow) return;
+  e.preventDefault();
+  const depths=layers.map(L=>L.depth).sort((a,b)=>a-b);
+  let i=depths.indexOf(facing);
+  i = deeper ? Math.min(depths.length-1,i+1) : Math.max(0,i-1);
+  if(depths[i]!==facing) focusDepth(depths[i]);
+});
+
+// scroll to zoom (passive:false so we can stop the page from scrolling)
+addEventListener('wheel',e=>{ if(e.target.closest('#panel,#stats,#eval'))return;
+  e.preventDefault();
+  const z=ctl.zoom, step=Math.sign(e.deltaY)*-6;
+  z.value=Math.max(+z.min, Math.min(+z.max, +z.value+step));
+  scheduleView();
+},{passive:false});
+
+// (re)build everything from a floors export — the initial bundle or an upload
+function loadData(d){
+  if(!d || !Array.isArray(d.floors) || !d.floors.length || !Array.isArray(d.floors[0].grid))
+    throw new Error('not a floors export (need {w,h,floors:[{grid:[…]}]})');
+  w=d.w; h=d.h; floors=d.floors; N=floors.length; seed=d.seed??'?';
+  FW=w*CELLW; FH=h*CELLH;
+  // fit the default explode to floor count so the tower keeps a roughly constant
+  // on-screen height regardless of N (5 floors → 120, the original feel)
+  ctl.gap.value = Math.max(0, Math.min(+ctl.gap.max, Math.round(480/Math.max(1,N-1))));
+  // rebuild floor DOM — deepest first so translucency composites correctly
+  stack.innerHTML=''; layers.length=0;
+  for(const f of floors.slice().sort((a,b)=>b.depth-a.depth)){
+    const el=document.createElement('div'); el.className='floor';
+    const face=document.createElement('canvas'); face.dataset.depth=f.depth;
+    const slabWrap=document.createElement('div'); slabWrap.className='slabs';
+    el.append(slabWrap,face); stack.appendChild(el);
+    layers.push({el,face,slabWrap,depth:f.depth,visible:true,dim:false,data:f,
+      stats:tileHist(f.grid)});   // cache the histogram once per floor
+  }
+  layers.sort((a,b)=>a.depth-b.depth); // index 0 == depth 1 (top)
+  // fixed legend rows: every type present in ANY floor, ordered by total count
+  // (so the legend keeps the same rows + order while you navigate — no jumping)
+  const totals={};
+  for(const L of layers) for(const t in L.stats) totals[t]=(totals[t]||0)+L.stats[t];
+  legendTypes=Object.keys(totals).map(Number).sort((a,b)=>totals[b]-totals[a]);
+  // rebuild floor list rows
+  flist.innerHTML='';
+  flist.insertAdjacentHTML('beforeend',
+    '<span></span><span class="fhdr">show</span><span class="fhdr">dim</span>');
+  for(const L of layers){
+    const lab=document.createElement('span'); lab.className='flabel';
+    lab.textContent=`depth ${L.depth}${L.data.grid.includes(7)?' · lava':''}`;
+    const show=document.createElement('input'); show.type='checkbox'; show.checked=L.visible;
+    const dim=document.createElement('input'); dim.type='checkbox';
+    show.addEventListener('change',()=>{ L.visible=show.checked;
+      lab.classList.toggle('off',!show.checked); layout(); updateStats(); });
+    dim.addEventListener('change',()=>{ L.dim=dim.checked; layout(); });
+    L.showCb=show; L.dimCb=dim; L.lab=lab;
+    flist.append(lab,show,dim);
+  }
+  $('meta').textContent=`${N} floors · ${w}×${h} · seed ${seed}`;
+  rebuild(); layout(); updateStats();
+}
+
+// accept an exported .json OR the .js wrapper: slice the {…} and JSON.parse it
+function parseFloors(text){
+  const s=text.indexOf('{'), e=text.lastIndexOf('}');
+  if(s<0||e<=s) throw new Error('no JSON object found in file');
+  return JSON.parse(text.slice(s,e+1));
+}
+function loadFile(file){
+  const r=new FileReader();
+  r.onload=()=>{ try{
+    const d=parseFloors(r.result);
+    StaticBackend._data=d;          // an upload becomes the static "current export"
+    loadData(d); renderMetrics(d);  // render metrics on upload too, like a live gen
+  } catch(err){ $('meta').textContent='load failed: '+err.message; } };
+  r.readAsText(file);
+}
+$('loadBtn').onclick=()=>$('fileIn').click();
+$('fileIn').addEventListener('change',e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+addEventListener('dragover',e=>e.preventDefault());            // allow drop
+addEventListener('drop',e=>{ e.preventDefault();
+  const f=e.dataTransfer?.files?.[0]; if(f) loadFile(f); });
+
+// ---- live generation from workbench-server.lg ----
+function renderMetrics(d){
+  const f1=x=>(x==null?'·':(+x).toFixed(1));
+  const rows=d.floors.map(f=>{ const m=f.metrics||{}; const bad=m.components>1;
+    return `<tr${bad?' style="color:#e08a6a"':''}><td>${f.depth}</td>`
+      +`<td>${m.components??'·'}</td><td>${m['dead-ends']??'·'}</td>`
+      +`<td>${m.rooms??'·'}</td><td>${m.loops??'·'}</td>`
+      +`<td style="text-align:right">${f1(m['gen-ms'])}</td></tr>`; }).join('');
+  const totMs=d.floors.reduce((s,f)=>s+(f.metrics?.['gen-ms']||0),0);
+  const bad=d.floors.filter(f=>f.metrics?.components>1).length;
+  $('metrics').innerHTML=
+    `<table style="width:100%;border-collapse:collapse">`
+    +`<thead><tr style="color:#6c6758;text-align:left">`
+    +`<th>d</th><th>comp</th><th>dead</th><th>rooms</th><th>loops</th>`
+    +`<th style="text-align:right">ms</th></tr></thead><tbody>${rows}</tbody></table>`
+    +`<div style="margin-top:4px;color:#8a8472">Σ ${totMs.toFixed(0)}ms · `
+    +`${bad?('<span style="color:#e08a6a">⚠ '+bad+' disconnected</span>'):'all connected'}</div>`;
+}
+
+let genToken=0, regenTimer=0;
+async function generate(){
+  const myToken=++genToken;                       // supersede any in-flight fetch
+  const seed=+$('seedIn').value||0, depths=+$('depthIn').value||3;
+  const st=$('genStatus'); st.textContent='generating…';
+  try{
+    const t0=performance.now();
+    const d=await Backend.generate(seed, depths);
+    if(myToken!==genToken) return;                // a newer step won — drop this stale result
+    loadData(d); renderMetrics(d);
+    st.textContent=`${(performance.now()-t0)|0}ms`;
+  }catch(err){
+    if(myToken!==genToken) return;
+    st.textContent='';
+    $('meta').textContent='generate failed: '+err.message
+      +(Backend.failHint?' — '+Backend.failHint:'');
+  }
+}
+// Stepping seed/depth (spinner, ↑/↓, or typing) auto-regenerates, debounced so a
+// held arrow or fast typing fires one fetch once it settles; Enter / button = now.
+function scheduleGenerate(){ clearTimeout(regenTimer); regenTimer=setTimeout(generate, 220); }
+$('genBtn').onclick=()=>{ clearTimeout(regenTimer); generate(); };
+['seedIn','depthIn'].forEach(id=>{ const el=$(id);
+  el.addEventListener('input', scheduleGenerate);
+  el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ clearTimeout(regenTimer); generate(); } }); });
+// ---- in-browser live-coding: POST /eval into the running let-go image ----
+async function evalCode(){
+  const code=$('evalIn').value.trim(), out=$('evalOut');
+  if(!code){ out.textContent=''; return; }
+  out.style.color='#6c6758'; out.textContent='eval…';
+  try{
+    const d=await Backend.evalCode(code);
+    if(d.ok){ out.style.color='#7bb274'; out.textContent='✓ '+d.value; generate(); }  // re-render with the new code
+    else    { out.style.color='#e08a6a'; out.textContent='✗ '+d.error; }
+  }catch(err){ out.style.color='#e08a6a'; out.textContent='✗ '+err.message; }
+}
+$('evalBtn').onclick=evalCode;
+$('evalHd').onclick=()=>{ const el=$('eval'); el.classList.toggle('open');
+  $('evalCaret').textContent=el.classList.contains('open')?'▾':'▸';
+  if(el.classList.contains('open')) $('evalIn').focus(); };
+$('evalIn').addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter') evalCode(); });  // ⌘/Ctrl+Enter
+// quick examples: drop the snippet into the box and eval it in one click
+document.querySelectorAll('#eval .eg').forEach(b=>b.onclick=()=>{ $('evalIn').value=b.dataset.code; evalCode(); });
+
+// Show/hide controls per the active backend's caps — no per-mode branches in the
+// UI, just declared capabilities. live → seed/depth/generate; eval → console;
+// upload → load-export row (drop is always armed but only matters when upload).
+function applyCaps(){
+  $('liveRow').style.display = caps.live   ? '' : 'none';
+  $('loadRow').style.display = caps.upload ? '' : 'none';
+  $('eval').style.display    = caps.eval   ? '' : 'none';
+  const b=$('modeBadge'); b.textContent=MODE; b.dataset.mode=MODE;
+  if(modeNote){
+    const n=$('modeNotice');
+    n.innerHTML = modeNote + ' <b title="dismiss">✕</b>';
+    n.style.display='block';
+    n.querySelector('b').onclick=()=>{ n.style.display='none'; };
+  }
+}
+
+// ---- mode info popover: click the badge to learn what mode you're in and, when
+// more than one is backable from this page, switch. The switch targets reuse the
+// auto-detect signals (window.LetGoHost → wasm, the server marker → server, static
+// always) so we never offer a mode that would fail.
+function modeInfoHTML(){
+  const DESC = {
+    static: `<h2>static mode</h2><p>A front-end render of prebuilt floor data — no engine running. Load or drop an export (<code>.json/.js</code>) to change what's shown.</p>`,
+    server: `<h2>server mode</h2><p>A live let-go engine served by <code>workbench-server.lg</code> at <code>${location.origin}</code> — started with <code>lg tools/workbench/workbench-server.lg</code>. The console redefines generator fns in the running <code>xsofy.terrain</code> image; redefs persist across reloads, so restarting that process is how you reset.</p>`,
+    wasm:   `<h2>wasm mode</h2><p>A live let-go engine running in this page, no server. The console redefines into the in-page image. Reload = fresh image: your redefs reset.</p>`,
+  };
+  const avail = ['static'];                                   // always backable
+  if(window.__TERRAIN_BACKEND__==='server') avail.push('server');
+  if(HOST_EVAL) avail.push('wasm');                           // host-eval, not any -w bundle
+  const order = ['static','server','wasm'].filter(m=>avail.includes(m));
+  const links = order.map(m => m===MODE
+    ? `<a class="cur">${m}</a>`
+    : `<a href="?mode=${m}">${m}</a>`).join('');
+  const sw = order.length>1
+    ? `<div class="sw"><span class="lbl">switch</span>${links}</div>`
+    : `<div class="sw"><span class="lbl">only ${MODE} is available here</span></div>`;
+  return DESC[MODE] + sw;
+}
+$('modeBadge').addEventListener('click', e=>{
+  e.stopPropagation();
+  const box=$('modeInfo');
+  if(box.classList.contains('open')){ box.classList.remove('open'); return; }
+  box.innerHTML = modeInfoHTML();
+  box.classList.add('open');
+});
+// dismiss on outside click or Esc
+addEventListener('click', e=>{ if(!e.target.closest('#modeInfo,#modeBadge')) $('modeInfo').classList.remove('open'); });
+addEventListener('keydown', e=>{ if(e.key==='Escape') $('modeInfo').classList.remove('open'); });
+
+// Static boot: render a default export if one is served alongside this page;
+// otherwise leave the upload prompt up. A live engine isn't present, so a missing
+// default is expected (e.g. served from a host without the .json) — not an error.
+async function bootStatic(){
+  // 1) an embedded export (window.FLOORS — export-floors.lg's script form) works
+  //    offline / file:// with no fetch; 2) else a default .json served alongside;
+  //    3) else leave the upload prompt up (drop/upload reads via FileReader, also
+  //    offline-safe). Honoring window.FLOORS keeps the old viewer's self-contained
+  //    page working through the same data contract.
+  if(window.FLOORS){ StaticBackend._data=window.FLOORS; generate(); return; }
+  $('meta').textContent='render-only — load a floors export (.json/.js) or drop one here';
+  try{
+    const r=await fetch(DEFAULT_EXPORT);
+    if(r.ok){ StaticBackend._data=await r.json(); generate(); }
+  }catch(_){ /* no default on this host — upload prompt stands */ }
+}
+
+// Boot: static renders an export; server fetches immediately; wasm waits for the
+// in-page image before the first generate (LetGoHost.eval would queue anyway, but
+// onReady keeps the UI honest about when it's live).
+function boot(){
+  applyCaps();
+  if(MODE==='wasm'){ window.LetGoHost.onReady(() => generate()); }
+  else if(MODE==='server'){ generate(); }
+  else { bootStatic(); }
+}
+boot();
+})();
+</script>
+</body>
+</html>

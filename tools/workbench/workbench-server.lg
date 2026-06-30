@@ -1,0 +1,111 @@
+(ns workbench-server
+  "Local workbench server. Serves the workbench page and a
+   live generation endpoint, so editing xsofy.terrain and refetching shows the new
+   algorithm immediately — no wasm, no cross-origin isolation, native-speed gen.
+
+   Floor generation + metrics live in tools.workbench.dungeon-build (shared with
+   the planned hosted-wasm backend); this file is just the HTTP wrapper.
+
+     lg tools/workbench/workbench-server.lg [port]      ; serve (default :7070)
+     lg -n tools/workbench/workbench-server.lg [port]   ; + nREPL on :2137 — connect
+        a REPL, redefine generator fns in the live image, refetch to see the change
+        without restarting (the live-coding loop).
+
+   Endpoints:
+     GET /floors?seed=42&depths=8  -> {w,h,seed,floors:[{depth,grid,down,up,metrics}]}
+     GET /                         -> workbench.html
+
+   Tracks let-go main (native xxh3 + *command-line-args* + http/io/json/System)."
+  (:require [tools.workbench.dungeon-build :as dungeon]
+            [string :as str]
+            [http :as http]        ; :as, not :refer :all — http/get would shadow core get
+            [json :refer :all]
+            [io :as io]))
+
+(def HTML-PATH "tools/workbench/workbench.html")
+(def PORT (if (seq *command-line-args*) (first *command-line-args*) "7070"))
+
+;; The workbench page auto-detects its mode (static | server | wasm). Inject a
+;; marker at the top of <body> so a page served from here selects server mode
+;; without a probe — it runs before the page's own script (which is at body end).
+(def SERVER-MARKER "<script>window.__TERRAIN_BACKEND__='server'</script>")
+(defn- serve-page []
+  (str/replace (io/slurp HTML-PATH) "<body>" (str "<body>" SERVER-MARKER)))
+
+;; --- query parsing (reduce, no for-comprehension dependency) --------------
+(defn- parse-query [qs]
+  (reduce (fn [m pair]
+            (if (seq pair)
+              (let [kv (str/split pair "=")] (assoc m (first kv) (second kv)))
+              m))
+          {} (str/split (or qs "") "&")))
+
+(defn- qint [q k default]
+  (let [v (get q k)]
+    (if (and v (seq v)) (read-string v) default)))
+
+;; --- handlers -------------------------------------------------------------
+(def json-headers {"Content-Type" "application/json"})   ; same-origin only — no ACAO (see eval-handler)
+
+(defn floors-handler [req]
+  (let [q (parse-query (:query-string req))]
+    {:status 200 :headers json-headers
+     :body (write-json (dungeon/build (qint q "seed" 42) (qint q "depths" 3)))}))
+
+;; POST /eval — live-coding. Eval the body in the xsofy.terrain namespace so a
+;; redefined generator fn lands where generate-level looks for it; the next
+;; /floors call picks it up (vars are late-bound).
+;;
+;; /eval executes arbitrary code, so it must not be reachable cross-origin: a page
+;; on another origin could POST here and run code on the machine — binding to
+;; 127.0.0.1 doesn't help, since the request comes from the dev's own browser.
+;; Browsers attach an Origin to such cross-origin POSTs, so reject any Origin that
+;; isn't this server's own. A request with no Origin (curl / local tooling) already
+;; needs local access, so it passes. (Header keys arrive lowercased.)
+(defn- same-origin? [origin]
+  (or (nil? origin)
+      (contains? #{(str "http://localhost:" PORT) (str "http://127.0.0.1:" PORT)} origin)))
+
+;; in-ns kept as a direct body form (not nested under the origin guard): nesting
+;; it inside (if … (do (in-ns …) …)) makes the compiler switch namespace mid-body
+;; and the later json-headers refs fail to resolve.
+(defn- eval-body [req]
+  (in-ns 'xsofy.terrain)
+  (try
+    (let [v (eval (read-string (str "(do " (or (:body req) "") "\n)")))]
+      {:status 200 :headers json-headers :body (write-json {:ok true :value (pr-str v)})})
+    (catch e
+      {:status 200 :headers json-headers :body (write-json {:ok false :error (str e)})})))
+
+(defn eval-handler [req]
+  (if (same-origin? (get (:headers req) "origin"))
+    (eval-body req)
+    {:status 403 :headers json-headers :body (write-json {:ok false :error "cross-origin /eval rejected"})}))
+
+;; GET /<name>.json|.js — serve a bundled export so switching to ?mode=static on a
+;; server-hosted page actually renders the default (static's bootStatic fetches
+;; DEFAULT_EXPORT). Without this the catch-all returned HTML, which static tried to
+;; parse as JSON, failed, and dropped to the upload prompt. Basename-only mapping
+;; into tools/workbench/ (reject '/' and '..') keeps this off the path-traversal
+;; surface; an unknown/missing name returns nil and falls through to the page.
+(defn- export-file [path]
+  (let [name (subs path 1)]                                    ; drop leading '/'
+    (when (and (or (str/ends-with? name ".json") (str/ends-with? name ".js"))
+               (not (str/includes? name "/"))
+               (not (str/includes? name "..")))
+      (let [ctype (if (str/ends-with? name ".js") "application/javascript" "application/json")]
+        (try {:status 200 :headers {"Content-Type" ctype} :body (io/slurp (str "tools/workbench/" name))}
+             (catch e nil))))))
+
+(defn handler [req]
+  (let [path (:path req)]
+    (cond
+      (= path "/floors") (floors-handler req)
+      (= path "/eval")   (eval-handler req)
+      :else (or (export-file path)
+                {:status 200 :headers {"Content-Type" "text/html"} :body (serve-page)}))))
+
+(def ADDR (str "127.0.0.1:" PORT))                        ; localhost-only — /eval runs code
+(println (str "xsofy workbench: http://localhost:" PORT
+              "  (GET /floors?seed=&depths=  ·  POST /eval)"))
+(http/serve handler ADDR)
