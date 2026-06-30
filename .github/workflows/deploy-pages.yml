@@ -5,29 +5,25 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Branch publishing only needs write to contents (push to gh-pages). The old
+# pages:/id-token: perms + github-pages environment belonged to the
+# Actions-deployment model we moved off of — which also sidesteps the
+# environment protection rule that blocked tag deploys.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
+# Serialize every gh-pages write (root deploys + PR previews share the branch).
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: gh-pages-publish
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
-      # Single-source the let-go version from .let-go-version (the repo's
-      # declared pin), so the deploy and the test floor can't drift apart.
-      # The pinned release ships the client-shell WASM glue (-w-shell none, #245)
-      # and the js/url-param host seam (#339) the bundle needs, so the
-      # ?seed=/?replay= bridge is native — no glue patch.
+      # Single-source the let-go version from .let-go-version (the repo's pin).
       - name: Resolve let-go version
         id: letgo
         run: echo "version=$(grep -v '^#' .let-go-version | grep . | head -1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
@@ -47,10 +43,8 @@ jobs:
       - name: Install let-go
         run: go install github.com/nooga/let-go@${{ steps.letgo.outputs.version }}
 
-      # Build the bundle the way it ships: shell-less + xsofy's own client shell
-      # (rune font + ?font=system) + COI shim. LETGO_SRC pins the WASM runtime to
-      # the same release as the binary above, so `lg -w` doesn't compile the
-      # runtime from let-go@latest and drift from the binary's worker protocol.
+      # The shared build: shell-less + xsofy's own client shell (rune font +
+      # ?font=system) + COI shim. dist/ stays in this job (no artifact round-trip).
       - name: Build WASM bundle
         uses: ./.github/actions/build-wasm
         with:
@@ -72,10 +66,6 @@ jobs:
         working-directory: tests/browser
         run: node smoke.mjs --dir ../../dist
 
-      # Seeded determinism regression: boots /?seed=12345 and asserts the
-      # seed-derived title — proving the ?seed= bridge AND wasm==native xxh3.
-      # (The title-animation gate is the separate `smoke.mjs` step above /
-      # the fixme test, pending nooga/xsofy#61.)
       - name: E2E seeded regression (@playwright/test)
         working-directory: tests/e2e
         run: |
@@ -91,11 +81,11 @@ jobs:
           path: tests/browser/smoke-failure.png
           if-no-files-found: ignore
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Publish to gh-pages root
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: dist
+          # keep_files so a root deploy doesn't wipe live /pr-N/ previews
+          # (or pinned /vX.Y.Z/ version dirs).
+          keep_files: true
