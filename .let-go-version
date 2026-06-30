@@ -1,0 +1,9 @@
+# Minimum let-go version for building xsofy.
+#
+# The WASM web build needs let-go >= v1.11.0:
+#   - `lg -w -w-shell none` client-owned shell (nooga/let-go#245)
+#   - the js/url-param host seam (nooga/let-go#339) that carries ?seed=/?replay=
+#     into the worker, so the URL bridge is native (no glue patch)
+#
+# The Pages deploy workflow pins this same tag — bump both together.
+v1.11.1

@@ -23,16 +23,16 @@ rune-font: ## Regenerate the inlined terminal font in tools/xsofy-shell.html fro
 	# re-run after the game starts drawing a glyph it didn't before.
 	uv run --with fonttools --with brotli python3 tools/gen-terminal-font.py
 
-wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI/?seed= bridges
+wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI bridge
 	# Build glue-only (no let-go xterm shell), then inject xsofy's own shell.
-	# Requires a let-go with -w-shell none (nooga/let-go, merged in #245).
+	# Requires let-go >= v1.11.0: -w-shell none (#245) and the js/url-param host
+	# seam (#339) that carries ?seed=/?replay= into the worker natively.
 	$(LG) -w $(DIST) -w-shell none main.lg
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/inject_shell.lg
-	# COI bounded-retry and the ?seed=/?replay= env bridge still patch the core
-	# glue: they touch the COI lifecycle and the worker VM env, which the shell
-	# contract (window.LetGoHost) does not cover. Tracked as follow-up seams.
+	# COI bounded-retry still patches the core glue: it drives the crossOriginIsolated
+	# lifecycle, which the shell contract (window.LetGoHost) and a static host (e.g.
+	# GitHub Pages, which can't send COOP/COEP) don't cover. Tracked as a follow-up seam.
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/patch_wasm_coi.lg
-	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/patch_wasm_seed.lg
 
 e2e: wasm ## Build+patch the bundle, then run the headless-WASM @playwright/test suite (boot + seeded regression)
 	cd tests/e2e && npm install --no-audit --no-fund && npx playwright install chromium

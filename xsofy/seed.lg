@@ -1,17 +1,28 @@
 (ns xsofy.seed
   "Run seed. Precedence: explicit override (tests / *boot-seed*), then the
-   XSOFY_SEED env var (native + browser-via-?seed= bridge), then random.
-   A fixed seed reproduces an entire run — title, quest, scheme, and world."
-  (:require [os]))
+   boot environment — the ?seed= URL param in the browser (js/url-param) or the
+   XSOFY_SEED env var natively — then random. A fixed seed reproduces an entire
+   run — title, quest, scheme, and world."
+  (:require [os]
+            [js]))
 
 (def ^:dynamic *boot-seed* nil)
 
+;; The web ?seed=/?replay= override rides let-go's js/url-param host seam
+;; (nooga/let-go#339): the runtime forwards the page's location.search into the
+;; worker, so .lg reads the launch URL with no glue patch. Off-browser it
+;; returns nil, so the env var still covers native runs. The two are mutually
+;; exclusive per platform — URL first keeps it the single source of truth on web.
+(defn- boot-param [url-key env-key]
+  (or (js/url-param url-key)
+      (os/getenv env-key)))
+
 (defn boot-seed []
   (or *boot-seed*
-      ;; Validate at the boundary: a malformed XSOFY_SEED (e.g. ?seed=foo / 12.5 /
+      ;; Validate at the boundary: a malformed seed (e.g. ?seed=foo / 12.5 /
       ;; empty) reads as a symbol/float/nil; only accept an integer, else fall
       ;; through to random rather than surfacing the failure later in the chain.
-      (let [s (os/getenv "XSOFY_SEED")]
+      (let [s (boot-param "seed" "XSOFY_SEED")]
         (when (and s (> (count s) 0))
           (let [n (read-string s)]
             (when (integer? n) n))))
@@ -20,9 +31,9 @@
 (def ^:dynamic *boot-replay* nil)
 
 (defn boot-replay
-  "A replay code to play back at boot, or nil. From *boot-replay* (tests) or the
-   XSOFY_REPLAY env var (native + browser-via-?replay= bridge)."
+  "A replay code to play back at boot, or nil. From *boot-replay* (tests), the
+   ?replay= URL param in the browser, or the XSOFY_REPLAY env var natively."
   []
   (or *boot-replay*
-      (let [s (os/getenv "XSOFY_REPLAY")]
+      (let [s (boot-param "replay" "XSOFY_REPLAY")]
         (when (and s (> (count s) 0)) s))))
