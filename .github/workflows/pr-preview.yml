@@ -1,0 +1,97 @@
+name: PR Preview
+
+# Publishes a self-contained WASM build of a PR to gh-pages/pr-<N>/, served at
+#   https://<owner>.github.io/xsofy/pr-preview/pr-<N>/
+# and removes it when the PR closes. Same composite build as the tag deploy, so
+# a preview is byte-for-byte what a release would ship.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, closed]
+
+# One run per PR; a newer event (label after open, or a new push) cancels the
+# in-flight one, so opened+labeled don't double-fire.
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# pull_request_target runs in the BASE-repo context with a write token, which is
+# what lets it publish previews for fork PRs. To keep that token away from
+# untrusted PR code, the build/publish only runs once a maintainer applies the
+# 'deploy-preview' label (the if: gate). Removal on close runs regardless.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    if: >
+      github.event.action != 'closed' &&
+      contains(github.event.pull_request.labels.*.name, 'deploy-preview')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages-publish      # serialize gh-pages writes with the tag deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Resolve let-go version
+        id: letgo
+        run: echo "version=$(grep -v '^#' .let-go-version | grep . | head -1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out let-go (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: nooga/let-go
+          ref: ${{ steps.letgo.outputs.version }}
+          path: let-go-src
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install let-go
+        run: go install github.com/nooga/let-go@${{ steps.letgo.outputs.version }}
+
+      - name: Build WASM bundle
+        uses: ./.github/actions/build-wasm
+        with:
+          dist: dist
+          letgo-src: ${{ github.workspace }}/let-go-src
+
+      - name: Set up Node (smoke gate)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install smoke dependencies
+        working-directory: tests/browser
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Browser smoke (must boot to title screen)
+        working-directory: tests/browser
+        run: node smoke.mjs --dir ../../dist
+
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: dist
+          action: deploy
+
+  remove:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gh-pages-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          action: remove
