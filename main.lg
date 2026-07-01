@@ -4,6 +4,7 @@
 (ns xsofy.main
   (:require [term]
             [os]
+            [js]
             [io :refer [write! flush! *err*]]
             [string]
             [xsofy.world :as world]
@@ -429,17 +430,22 @@
          (let [[tw th] (term/size)
                runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
                _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
-               ;; Dev repro capture: XSOFY_DUMP_REPLAY=1 dumps this organic run's
-               ;; replay code to stderr (redirect 2>file to capture past the TUI).
-               ;; Gated on the env var so players never see it; the WASM worker
-               ;; doesn't bridge the var, so it's effectively native-only.
-               _ (when (seq (or (os/getenv "XSOFY_DUMP_REPLAY") ""))
-                   (let [code (replay/encode-run-safe world)]
-                     (write! *err*
-                             (str "replay-code: "
-                                  (or code "(unavailable: run has parameterized actions)")
-                                  "\n"))
-                     (flush! *err*)))
+               ;; Dev repro capture of this organic run's replay code. Trigger is
+               ;; per-platform: ?dump-replay= URL param on web (js/url-param),
+               ;; XSOFY_DUMP_REPLAY env var natively. Gated so players never see it.
+               ;; Sink differs because *err* aliases *out* in WASM (one host writer
+               ;; for both — let-go rendermain), so writing *err* there paints the
+               ;; game screen. On web route the dump off-terminal via a js/emit host
+               ;; event; natively keep stderr (redirect 2>file to capture past the TUI).
+               _ (when-let [trig (or (js/url-param "dump-replay")
+                                     (os/getenv "XSOFY_DUMP_REPLAY"))]
+                   (when (> (count trig) 0)
+                     (let [code (replay/encode-run-safe world)
+                           payload (or code "(unavailable: run has parameterized actions)")]
+                       (if (= (os/os-name) "js")
+                         (js/emit "xsofy/replay-dump" {:code payload})
+                         (do (write! *err* (str "replay-code: " payload "\n"))
+                             (flush! *err*))))))
                ;; Animate the death screen via the poll-based event loop: a
                ;; cosmetic clock pulses the runes each tick while we wait for a
                ;; key, instead of freezing on a blocking read (see xsofy.ui /
