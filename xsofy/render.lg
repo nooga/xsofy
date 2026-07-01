@@ -1005,7 +1005,7 @@
       (term/move-cursor 2 log-top)
       (term/set-fg 90 80 65)
       (term/set-bg 10 10 10)
-      (term/write (str "─── Messages " (if (> max-offset 0) (str "(" (- log-count offset) "/" log-count ") ") "") "───"))
+      (term/write (u/right-pad (str "─── Messages " (if (> max-offset 0) (str "(" (- log-count offset) "/" log-count ") ") "") "───") (- tw 4)))
       ;; messages
       (dotimes [i (count visible)]
         (let [msg (format-log-entry (nth visible i))
@@ -1014,9 +1014,11 @@
           (term/move-cursor 3 (+ log-top 1 i))
           (term/set-fg bright (max 40 (- bright 25)) (max 30 (- bright 50)))
           (term/set-bg 10 10 10)
-          (term/write (if (> (count msg) (- tw 4))
-                        (subs msg 0 (- tw 4))
-                        msg)))))
+          ;; pad to the panel width so a shorter line erases the residue of a
+          ;; longer one when scrolling — the death screen never clear-rects per
+          ;; frame, so each line must clear its own trailing cells.
+          (let [w (- tw 4)]
+            (term/write (u/right-pad (if (> (count msg) w) (subs msg 0 w) msg) w))))))
     ;; prompt
     (let [prompt (if *in-wasm*
                    "[n/enter] new game    [esc] confirm restart    [j/k] scroll"

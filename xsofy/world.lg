@@ -19,6 +19,7 @@
             [xsofy.title :as title]
             [xsofy.opcontext :as opctx]
             [xsofy.util :as u]
+            [string :as str]
             [math]))
 
 ;; --- World invariants ---
@@ -1886,7 +1887,14 @@
       (if (or (nil? (get-in w [:entities :player]))
               (nil? (get-in w [:entities :player :body :hp]))
               (<= (get-in w [:entities :player :body :hp] 0) 0))
-        (-> w
-            (log-msg "You die...")
-            (assoc :screen :death))
+        ;; Skip the generic "You die..." when a specific kill line ("The X
+        ;; kills you!") was just logged — it's redundant. Non-combat deaths
+        ;; (poison/burning) keep it as their death marker (balance.lg relies
+        ;; on it too).
+        (let [last-msg (let [e (peek (or (:log w) []))]
+                         (if (map? e) (:msg e) e))
+              kill-line? (and (string? last-msg) (str/includes? last-msg "kills you"))]
+          (-> w
+              (cond-> (not kill-line?) (log-msg "You die..."))
+              (assoc :screen :death)))
         w))))
