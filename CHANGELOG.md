@@ -18,13 +18,15 @@ applies to both builds.
 - Balance pass: tamed slimes, throttled ranged fire rate, softened spider webs
   (#71).
 - `Ctrl-C` as a confirm-quit alias for `Esc` (#76).
+- Death screen: dropped a redundant death line and cleaned up the scroll residue
+  in the message log (#109).
 
 ### Internal (not player-facing)
 
 - Pages deploys from `v*` tags, gated by a browser smoke + seeded-determinism e2e
   (#59, #60).
 - Branch-based Pages publishing + per-PR previews (#106).
-- Client-owned WASM shell; built against published let-go v1.11.x (#78, #94).
+- Client-owned WASM shell; built against published let-go v1.11.1 (#78, #94).
 - Dungeon map viewer and terrain workbench dev tools (#88, #93).
 
 [v0.0.2]: https://github.com/nooga/xsofy/releases/tag/v0.0.2
