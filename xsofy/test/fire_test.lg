@@ -1,0 +1,37 @@
+(ns xsofy.test.fire-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.terrain :as terrain]
+            [xsofy.fire :as fire]))
+
+(defn- room-world []
+  (let [w 12 h 8
+        t (terrain/make-terrain w h)]
+    (terrain/carve-room! t w 1 1 (- w 2) (- h 2))
+    {:terrain t :width w :height h :fire-ttl {}}))
+
+;; Regression for the :lights cache gate (perf: only invalidate on real
+;; terrain mutation). step-fire's terrain-changed gate only sees fires it
+;; spreads or burns out — ignitions from burning-entities-ignite / dragon /
+;; rune fire run in separate phases, so the ignite helpers must invalidate
+;; :lights themselves or a new fire emits no light until it spreads.
+(deftest ignite-flammable-invalidates-lights
+  (let [w (assoc (room-world) :lights [])            ;; stale cached lights
+        _ (terrain/tset! (:terrain w) (:width w) 3 3 2)]  ;; grass (flammable)
+    (let [w' (fire/ignite w 3 3)]
+      (is (= fire/fire-tile (terrain/tget (:terrain w') (:width w') 3 3)))
+      (is (nil? (:lights w'))))))
+
+(deftest ignite-forced-invalidates-lights
+  (let [w (assoc (room-world) :lights [])            ;; 3,3 is carved floor
+        w' (fire/ignite-forced w 3 3 5)]
+    (is (= fire/fire-tile (terrain/tget (:terrain w') (:width w') 3 3)))
+    (is (nil? (:lights w')))))
+
+;; Guard the optimization the other way: an ignite that places no fire
+;; (non-flammable tile) must NOT invalidate, else the cache gate buys
+;; nothing.
+(deftest ignite-noop-preserves-lights
+  (let [w (assoc (room-world) :lights [])
+        _ (terrain/tset! (:terrain w) (:width w) 3 3 8)]  ;; wall — not flammable
+    (let [w' (fire/ignite w 3 3)]
+      (is (= [] (:lights w'))))))
