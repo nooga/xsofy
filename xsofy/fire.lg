@@ -19,25 +19,34 @@
 (def fire-default-ttl 5)
 (def protected-tiles #{13 14})  ;; stairs must survive dragon fire and rune fire
 
+;; Fire is light-emitting, so any ignition must invalidate the :lights
+;; cache — step-fire's own terrain-changed gate only sees fires it spreads
+;; or burns out, not ignitions from burning-entities-ignite / dragon /
+;; rune fire, which run in separate phases. Invalidating here (not just in
+;; step-fire) keeps the cache correct for every call site.
 (defn ignite [world x y]
   "Set a tile on fire. Only works on flammable tiles or if forced."
   (let [{:keys [terrain width]} world
         tile (terrain/tget terrain width x y)]
     (if (or (contains? terrain/flammable-tiles tile) (= tile 1))
       (do (terrain/tset! terrain width x y fire-tile)
-          (assoc-in world [:fire-ttl [x y]] fire-default-ttl))
+          (-> world
+              (assoc-in [:fire-ttl [x y]] fire-default-ttl)
+              (assoc :lights nil)))
       world)))
 
 (defn ignite-forced [world x y ttl]
   "Force fire at a position regardless of terrain."
   (let [{:keys [terrain width]} world
-        tile (terrain/tget terrain width x y)]
-    (when (and (not= tile 0) (not= tile 8) (not= tile 7)
-               (not (contains? protected-tiles tile)))  ;; not void, wall, lava, stairs
+        tile (terrain/tget terrain width x y)
+        placed? (and (not= tile 0) (not= tile 8) (not= tile 7)
+                     (not (contains? protected-tiles tile)))]  ;; not void, wall, lava, stairs
+    (when placed?
       (terrain/tset! terrain width x y fire-tile))
     (if (contains? protected-tiles tile)
       world
-      (assoc-in world [:fire-ttl [x y]] ttl))))
+      (let [w (assoc-in world [:fire-ttl [x y]] ttl)]
+        (if placed? (assoc w :lights nil) w)))))
 
 (defn step-fire [world]
   "One tick of fire simulation. Spread, damage, burn out.
