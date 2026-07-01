@@ -1,0 +1,18 @@
+# Config for GitHub's auto-generated release notes (gh release create --generate-notes).
+# Categorizes merged PRs by label; unlabeled PRs fall into "Other changes".
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - deploy-preview
+  categories:
+    - title: Features
+      labels: [feature, feat, enhancement]
+    - title: Fixes
+      labels: [bug, fix]
+    - title: CI / build
+      labels: [ci, build, infrastructure]
+    - title: Docs
+      labels: [documentation, docs]
+    - title: Other changes
+      labels: ['*']
