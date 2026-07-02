@@ -18,7 +18,8 @@
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
             [xsofy.seed :as seed]
-            [xsofy.replay :as replay]))
+            [xsofy.replay :as replay]
+            [xsofy.ui-bridge :as bridge]))
 
 
 (defn init-terminal []
@@ -338,6 +339,7 @@
         {:keys [title scheme rng]} (title/show-title-screen rng)
         [quest rng] (title/generate-quest rng)
         _ (title/show-descending-screen 1 scheme)]
+    (bridge/emit-startup title {:name (:item quest)})
     (assemble-world sd title scheme quest)))
 
 (defn build-game
@@ -369,6 +371,7 @@
 (defn game-loop
   ([world]
    (render/render-full world)
+   (bridge/emit-stats world)
    (game-loop world world (term/size)))
   ([world prev-world prev-size]
    (if-not (:running world)
@@ -524,6 +527,7 @@
 
          ;; default: game screen — the poll-based turn loop (input +
          ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         ;; (Per-turn bridge/emit-stats lives inside play/play-advance.)
          (let [result (play/run-play-loop world prev-size)]
            (if (:running result)
              (recur result result (term/size))
