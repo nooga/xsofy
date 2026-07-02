@@ -255,16 +255,26 @@
   (let [{:keys [terrain width height fov memory]} world
         lights (or (:lights world) [])
         stains (or (:stains world) {})
-        gases (or (:gases world) {})]
-    (dotimes [y (min height (:h r))]
-      (dotimes [x (min width (:w r))]
-        (let [visible (contains? fov [x y])
-              remembered (get memory [x y])
-              tile (when visible (terrain/tget terrain width x y))
-              lv (when visible (light/light-at x y lights))
-              stain (when visible (get stains [x y]))
-              gas (when visible (get gases [x y]))]
-          (render-map-tile r x y tile visible remembered lv stain gas))))))
+        gases (or (:gases world) {})
+        cx (or (:cx r) 0)
+        cy (or (:cy r) 0)]
+    ;; Walk screen cells and translate back to world coords, so we cover the
+    ;; visible world window [cx, cx+w) × [cy, cy+h) (clamped to the map). The
+    ;; old world-origin range [0, w) × [0, h) missed every on-screen cell once
+    ;; the camera scrolled (cx/cy > 0), leaving narrow viewports with entities
+    ;; drawn but no terrain.
+    (dotimes [sy (:h r)]
+      (dotimes [sx (:w r)]
+        (let [x (+ cx sx)
+              y (+ cy sy)]
+          (when (and (>= x 0) (< x width) (>= y 0) (< y height))
+            (let [visible (contains? fov [x y])
+                  remembered (get memory [x y])
+                  tile (when visible (terrain/tget terrain width x y))
+                  lv (when visible (light/light-at x y lights))
+                  stain (when visible (get stains [x y]))
+                  gas (when visible (get gases [x y]))]
+              (render-map-tile r x y tile visible remembered lv stain gas))))))))
 
 (defn entity-z-priority
   "Z-order weight for entities sharing a cell — higher wins.
