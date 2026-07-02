@@ -454,8 +454,7 @@
 
          :death
          (let [[tw th] (term/size)
-               runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
-               _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
+               _ (sfx/clear-screen tw th)  ;; initial clear; the loop re-clears + re-scatters on resize
                ;; Dev repro capture of this organic run's replay code. Trigger is
                ;; per-platform: ?dump-replay= URL param on web (js/url-param),
                ;; XSOFY_DUMP_REPLAY env var natively. Gated so players never see it.
@@ -479,7 +478,14 @@
                step (fn [st ev]
                       (let [[tag payload] ev]
                         (case tag
-                          :tick (assoc st :frame payload)
+                          :tick (let [cur (or (term/size) (:size st))]
+                                  (if (= cur (:size st))
+                                    (assoc st :frame payload)
+                                    ;; resized: re-scatter + clear for the new size
+                                    (let [[nw nh] cur]
+                                      (sfx/clear-screen nw nh)
+                                      (assoc st :frame payload :size cur
+                                             :runes (render/death-runes nw nh)))))
                           :action
                           (let [k payload]
                             (cond
@@ -492,9 +498,9 @@
                           st)))
                result (ui/run-loop
                         {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
-                         :state    {:frame 0 :scroll 0}
+                         :state    {:frame 0 :scroll 0 :size [tw th] :runes (render/death-runes tw th)}
                          :step     step
-                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st)))
+                         :render   (fn [st] (render/render-death-screen world (:runes st) (:scroll st) (:frame st)))
                          :frame-ms 120})]
            (cond
              (= result :new-game)
