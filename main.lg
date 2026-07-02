@@ -355,6 +355,23 @@
         [quest rng]  (title/generate-quest rng)]
     (assemble-world seed title scheme quest)))
 
+;; The shell nudges a blocked read-key with a lone BEL (0x07) on a browser
+;; resize so the game re-renders at the new size (see xsofy-shell.html
+;; refit()). Any screen that dismisses on a bare (term/read-key) with no key
+;; filtering treats that nudge as a real keypress and closes itself — the
+;; same bug xsofy.title guarded against (a lone BEL, matched exactly: space
+;; also parses to :unknown and must still count as a real dismiss key).
+;; Screens that read a key only to discard it and dismiss unconditionally
+;; (:rune-codex, :help) should block on this instead of a raw
+;; (term/read-key) so a resize during either screen can't silently close it.
+(defn read-dismiss-key!
+  "Block for a real keypress, transparently discarding the shell's lone-BEL
+   resize nudge instead of treating it as the dismiss key."
+  []
+  (loop []
+    (let [k (term/read-key)]
+      (if (= k (str (char 7))) (recur) k))))
+
 (defn play-replay
   "Decode a replay code, reconstruct the run, and step through its actions with
    a short delay so the run plays out on screen. Returns the final world so the
@@ -396,14 +413,14 @@
 
          :rune-codex
          (do (render/render-rune-codex world)
-             (term/read-key)
+             (read-dismiss-key!)
              (let [w (dissoc world :screen)]
                (render/render-full w)
                (recur w w (term/size))))
 
          :help
          (do (render/render-help-screen world)
-             (term/read-key)
+             (read-dismiss-key!)
              (let [w (dissoc world :screen)]
                (render/render-full w)
                (recur w w (term/size))))
