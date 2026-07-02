@@ -473,6 +473,58 @@
             (let [next-row (render-creature-entry r @row c)]
               (reset! row (or next-row (+ @row 2)))))))))))
 
+;; --- Top Bar (narrow-width HP/status; replaces the folded sidebar) ---
+;; One row, left-aligned (it does NOT fill the width): a fixed-width HP bar
+;; using the same width + colors as the sidebar's, then status-effect badges,
+;; then depth. Renders in the terminal grid, so native TUI and WASM get it
+;; identically — the browser chrome HUD is no longer HP's only home.
+
+;; Status badge: a 3-char tag ("poi", "bur"), painted on the effect's own bg
+;; color so the color carries the signal. A one-cell-per-effect variant for
+;; ultra-narrow rows can come later as an automatic overflow fallback.
+(defn- topbar-badge-text [st]
+  (let [nm (:name st)]
+    (subs nm 0 (min 3 (count nm)))))
+
+(defn render-topbar [world r]
+  (when r
+    (ui/clear-rect r)
+    (when-let [player (get-in world [:entities :player])]
+      (let [hp     (or (get-in player [:body :hp]) 0)
+            max-hp (or (get-in player [:body :max-hp]) 1)
+            ;; HP bar: same width + palette the sidebar uses, left-aligned.
+            hp-w    (min ui/sidebar-width (:w r))
+            hp-rect (assoc r :w hp-w)]
+        (ui/bar hp-rect 0 (str " HP " hp "/" max-hp)
+                hp max-hp [140 30 30] [40 12 12] [220 180 160])
+        ;; Badges, then depth, flowed left→right after the HP bar. Each badge
+        ;; is clipped out (not truncated) if it won't fit whole.
+        (let [statuses (status/entity-active-statuses player)
+              gap 1
+              y (:y r)
+              right (+ (:x r) (:w r))]
+          (loop [col (+ (:x r) hp-w gap) ss statuses]
+            (if (seq ss)
+              (let [st  (first ss)
+                    txt (topbar-badge-text st)
+                    w   (count txt)]
+                (when (<= (+ col w) right)
+                  (let [[fr fg fb] (:color st)
+                        [br bg bb] (or (get-in status/status-defs [(:stype st) :bg]) [30 30 30])]
+                    (term/move-cursor col y)
+                    (term/set-fg fr fg fb)
+                    (term/set-bg br bg bb)
+                    (term/write txt)))
+                (recur (+ col w gap) (rest ss)))
+              ;; depth tag after the badges
+              (let [dtxt (str "D" (:depth world))]
+                (when (<= (+ col (count dtxt)) right)
+                  (let [[br bg bb] ui/bg]
+                    (term/move-cursor col y)
+                    (term/set-fg 120 120 120)
+                    (term/set-bg br bg bb)
+                    (term/write dtxt)))))))))))
+
 ;; --- Log Panel ---
 
 (defn format-log-entry [entry]
@@ -1305,6 +1357,7 @@
     ;; render panels
     (render-map world mr)
     (render-map-entities world mr)
+    (render-topbar world (:topbar panels))
     (render-sidebar world (:sidebar panels))
     (render-log world (:log panels))
     (render-status world (:status panels))
@@ -1331,6 +1384,7 @@
       ;; Camera shifted — viewport contents moved; redraw map fully.
       (do (render-map world mr)
           (render-map-entities world mr)
+          (render-topbar world (:topbar panels))
           (render-sidebar world (:sidebar panels))
           (render-log world (:log panels))
           (render-status world (:status panels))
@@ -1361,6 +1415,7 @@
                                (when vis (get stains [opx opy]))
                                (when vis (get gases [opx opy]))))))
         (render-map-entities world mr)
+        (render-topbar world (:topbar panels))
         (render-sidebar world (:sidebar panels))
         (render-log world (:log panels))
         (render-status world (:status panels))
