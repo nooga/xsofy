@@ -566,7 +566,34 @@
       }
     });
 
-    window.addEventListener("resize", refit);
+    // Ambient viewport changes — drag-resize, rotation, and the mobile URL bar
+    // showing/hiding — arrive as a burst of events over the gesture. Debounce
+    // to the trailing edge and coalesce the fit into one rAF so it runs once
+    // per settle, never mid-gesture or on an intermediate size. Discrete user
+    // actions (font cycle, touch-control toggle) call refit() directly below —
+    // they're single events and don't need settling.
+    let refitTimer = null, refitRaf = null;
+    function scheduleRefit() {
+      if (refitTimer) clearTimeout(refitTimer);
+      refitTimer = setTimeout(() => {
+        refitTimer = null;
+        if (refitRaf) cancelAnimationFrame(refitRaf);
+        refitRaf = requestAnimationFrame(() => { refitRaf = null; refit(); });
+      }, 120);
+    }
+
+    window.addEventListener("resize", scheduleRefit);
+    // Rotation settles over several resize events; the trailing-edge debounce
+    // waits them out, so no extra orientation-specific delay is needed.
+    window.addEventListener("orientationchange", scheduleRefit);
+    // The URL bar collapsing/expanding reclaims height without always firing a
+    // window resize; it does fire visualViewport resize (and scroll on some
+    // engines). refit() is grid-change-gated, so scroll spam costs nothing when
+    // the row count is unchanged.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", scheduleRefit);
+      window.visualViewport.addEventListener("scroll", scheduleRefit);
+    }
 
     // Shell-owned font sizing — replaces the fork's host-side _lgSetFontSize.
     // Safe before term.open (sets the option; the fit() is caught); the
