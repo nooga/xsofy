@@ -45,3 +45,22 @@ runs:
       env:
         XSOFY_WASM_INDEX: ${{ inputs.dist }}/index.html
       run: let-go tools/patch_wasm_coi.lg
+
+    # 4. Build provenance for the shell's debug-bar chip. The shell fetches
+    #    build-info.json; generating it here (the single bundle build) keeps the
+    #    deploy, the smoke gate, and PR previews consistent and stops the fetch
+    #    from 404-ing — the smoke gate counts any console error as a failure.
+    - name: Write build-info.json
+      shell: bash
+      run: |
+        letgo="unknown"
+        if [ -f .let-go-version ]; then
+          letgo="$(awk '!/^[[:space:]]*(#|$)/ {print $1; exit}' .let-go-version)"
+        fi
+        cat > "${{ inputs.dist }}/build-info.json" <<JSON
+        {
+          "xsofy": "$(git rev-parse HEAD)",
+          "let-go": "$letgo",
+          "date": "$(date -u +%Y-%m-%d)"
+        }
+        JSON
