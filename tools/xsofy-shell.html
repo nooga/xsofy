@@ -154,12 +154,28 @@
   /* Chip visibility is tier-gated (see the tier-visibility block below):
      font + repeat are always shown, force-touch is .dev-only. The OPTIONS
      tile carries no tier class, so it persists across every tier. */
-  /* Shell-cycle reuses .font-cycle's compact sizing so it sits flush in
-     the row; dashed border mirrors the action grid's .nav tile so the
-     swap affordance reads as chrome, not content. */
-  #xsofy-shell .shell-cycle { border-style: dashed; }
-  #xsofy-shell .shell-cycle .glyph { letter-spacing: 0.15em; color: var(--bar-fg); }
+  /* OPTIONS tile — fixed width so OPTIONS →/PLAY → don't reflow the info row,
+     with the same dashed border + dark offset as the action grid's .nav tile
+     so the swap affordance reads as chrome, not content. */
+  #xsofy-shell .shell-cycle {
+    background: rgba(245, 176, 65, 0.02);
+    border-style: dashed;
+    width: 6rem;
+    text-align: center;
+  }
   #xsofy-shell .shell-cycle .label { color: var(--bar-accent); }
+
+  /* Hold-to-repeat is a touch affordance — desktop keyboards have OS-level key
+     repeat, so hide the toggle on a mouse/desktop pointer (still shown under
+     force-touch testing). */
+  @media (hover: hover) and (pointer: fine) {
+    #xsofy-shell:not(.force-touch) .touch-only { display: none; }
+  }
+
+  /* Self-revealing perf cells: hidden until their datum is emitted, so the bar
+     shows only live numbers, not dead middots. emit-perf isn't wired yet, so
+     these stay hidden until a bench / instrumentation follow-up feeds them. */
+  #xsofy-shell .stat-hidden { display: none; }
   #xsofy-shell .info .quest {
     grid-area: 2 / 1;
     color: var(--bar-dim);
@@ -186,9 +202,11 @@
     grid-area: 2 / 1;
     color: var(--bar-dim);
     font-size: 10px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Version gets its own space: xsofy sha on line 1, the (often long) let-go
+       version on line 2. Wrap instead of truncating with an ellipsis. */
+    white-space: normal;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
     min-width: 0;
     font-variant-numeric: tabular-nums;
     /* Override the shell-wide user-select:none so you can drag-select
@@ -383,19 +401,20 @@
            just not displayed here. -->
       <span class="debug-only"><span class="k">t</span><span id="xs-turn">·</span></span>
       <span class="debug-only" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
-      <span class="debug-only"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
-      <span class="debug-only"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
-      <span class="debug-only"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
-      <span class="debug-only"><span class="k">c</span><span id="xs-cells">·</span></span>
+      <span class="debug-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
+      <span class="debug-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
+      <span class="debug-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
+      <span class="debug-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
       <span class="debug-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
     </span>
     <div class="chips">
-      <!-- Player-facing options: always visible (no tier class). Font size is
-           accessibility; hold-to-repeat is control feel. -->
-      <button class="font-cycle" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
+      <!-- Player options live inside the OPTIONS panel (mode-debug), not always
+           on. Font size = accessibility. Hold-to-repeat is a touch affordance
+           (.touch-only) — hidden on desktop, where the OS handles key repeat. -->
+      <button class="font-cycle debug-only touch-only" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
         <span class="glyph">↻</span><span id="xs-repeat-state">on</span>
       </button>
-      <button class="font-cycle" id="xs-font-cycle" title="Cycle char size">
+      <button class="font-cycle debug-only" id="xs-font-cycle" title="Cycle char size">
         <span class="glyph">Aa</span><span id="xs-font-px">22</span>
       </button>
       <!-- Dev tooling: only under ?mode=dev. Force-touch reveals the phone
@@ -403,11 +422,11 @@
       <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
         <span class="glyph">▦</span><span id="xs-touch-state">off</span>
       </button>
-      <!-- OPTIONS tile. Toggles the debug tier (mode-debug: build + perf) at
-           runtime; the dev tier is URL-only (?mode=dev). No tier class, so it
-           persists across every tier — the only way back out of debug. -->
+      <!-- OPTIONS tile. Toggles the panel (mode-debug: font, repeat, build,
+           perf) at runtime; the dev tier is URL-only (?mode=dev). No tier
+           class, so it persists across every tier. -->
       <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Cycle options (play / debug)">
-        <span class="glyph" id="xs-shell-cycle-dots">● ○</span><span class="label" id="xs-shell-cycle-label">OPTIONS →</span>
+        <span class="label" id="xs-shell-cycle-label">OPTIONS →</span>
       </button>
     </div>
   </div>
@@ -552,9 +571,10 @@
         .then((d) => {
           if (!d) return;
           const xs = (d.xsofy || "").slice(0, 7);
-          const lg = (d["let-go"] || "").slice(0, 7);
+          const lg = (d["let-go"] || "");              // full — no truncation
           const dt = d.date || "";
-          buildEl.textContent = `${xs}·lg ${lg}·${dt}`;
+          // Two rows: xsofy sha (+ date) on top, the often-long let-go version below.
+          buildEl.innerHTML = `${xs}${dt ? " ·" + dt : ""}<br>lg ${lg}`;
         })
         .catch(() => {});
     }
@@ -579,9 +599,11 @@
     const perfTurnWrap = $("xs-perf-turn-wrap");
     function paintPerfTurnDrift() {
       if (!perfTurnWrap) return;
+      // Hidden until perf data exists (self-revealing); once it does, hide it
+      // while @t lags t by the expected 1 turn and reveal it only on real drift.
       const inSync = lastTurn != null && lastPerfTurn != null
         && Number(lastTurn) - Number(lastPerfTurn) === 1;
-      perfTurnWrap.style.display = inSync ? "none" : "";
+      perfTurnWrap.style.display = (lastPerfTurn == null || inSync) ? "none" : "";
     }
 
     window.addEventListener("xsofy/stats", (e) => {
@@ -625,14 +647,15 @@
     let pendingPerf = null;
     window.addEventListener("xsofy/perf", (e) => {
       if (pendingPerf) {
-        if (pendingPerf.update != null) updateEl.textContent = pendingPerf.update;
-        if (pendingPerf.render != null) renderEl.textContent = pendingPerf.render;
+        // Reveal each cell as its datum arrives (self-revealing — see .stat-hidden).
+        if (pendingPerf.update != null) { updateEl.textContent = pendingPerf.update; updateEl.parentElement.classList.remove("stat-hidden"); }
+        if (pendingPerf.render != null) { renderEl.textContent = pendingPerf.render; renderEl.parentElement.classList.remove("stat-hidden"); }
         // input-lag is :input-lag let-go-side; hyphen survives the JSON
         // marshal as a "input-lag" string key.
-        if (pendingPerf["input-lag"] != null) inputLagEl.textContent = pendingPerf["input-lag"];
+        if (pendingPerf["input-lag"] != null) { inputLagEl.textContent = pendingPerf["input-lag"]; inputLagEl.parentElement.classList.remove("stat-hidden"); }
         // Cells touched by render this turn — distinguishes FOV-expansion
         // spikes (high c) from per-cell-expensive turns (low c + high r).
-        if (pendingPerf.cells != null) cellsEl.textContent = pendingPerf.cells;
+        if (pendingPerf.cells != null) { cellsEl.textContent = pendingPerf.cells; cellsEl.parentElement.classList.remove("stat-hidden"); }
         // Game turn the perf values are from. Compare against the gauge's
         // tN prefix and the t stat to read the alignment at a glance:
         // - if @t and gauge t match → bar and gauge are in sync
@@ -812,14 +835,11 @@
       // panes, and it must not start a hold-to-repeat cycle.
       const nav = document.createElement("button");
       nav.className = "nav";
-      const dots = PANES.map((_, i) => i === currentPane ? "●" : "○").join(" ");
       // Label names the destination, not the current pane — reads as an
       // action ("tap to go to ITEMS") rather than a status ("you are on
-      // ITEMS"). Dots stay as a position indicator; label is the verb.
-      // Trailing arrow reinforces "tap to advance to <X>" — useful once
-      // there are 3+ dots and the label isn't visually obvious from them.
+      // ITEMS"). Trailing arrow reinforces "tap to advance to <X>".
       const label = PANES[(currentPane + 1) % PANES.length].label + " →";
-      nav.innerHTML = `<span class="glyph">${dots}</span><span class="label">${label}</span>`;
+      nav.innerHTML = `<span class="label">${label}</span>`;
       nav.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         // Kill any in-flight repeat from a tile we just replaced, so we
@@ -986,7 +1006,6 @@
     const STATE_LABEL = { play: "PLAY", debug: "OPTIONS" };
     const shellRoot = document.getElementById("xsofy-shell");
     const cycleEl_ = $("xs-shell-cycle");
-    const cycleDotsEl = $("xs-shell-cycle-dots");
     const cycleLabelEl = $("xs-shell-cycle-label");
 
     const urlMode = new URLSearchParams(location.search).get("mode");
@@ -1004,11 +1023,8 @@
       // (its force-touch chrome can't appear without the debug diagnostics under it).
       shellRoot.classList.toggle("mode-debug", currentShellState === "debug" || devMode);
       shellRoot.classList.toggle("mode-dev", devMode);
-      if (cycleDotsEl) {
-        cycleDotsEl.textContent = SHELL_STATES.map((s) => s === currentShellState ? "●" : "○").join(" ");
-      }
       // Label names the destination — what tapping switches TO — matching the
-      // action-grid nav tile's convention. Dots show position.
+      // action-grid nav tile's convention.
       if (cycleLabelEl) {
         const next = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
         cycleLabelEl.textContent = STATE_LABEL[next] + " →";
