@@ -376,8 +376,11 @@
     <span class="quest play-only" id="xs-quest"></span>
     <span class="build debug-only" id="xs-build" title="Build provenance — written by local-scripts/deploy.sh"></span>
     <span class="stats">
-      <span class="play-only"><span class="k">d</span> <span id="xs-depth">·</span></span>
-      <span class="play-only"><span class="k">hp</span> <span id="xs-hp">·</span>/<span id="xs-max">·</span></span>
+      <!-- HP and depth used to live here (play-only), but the in-grid top bar
+           (sidebar when wide, top bar when narrow) now carries both, so the
+           browser chrome no longer duplicates them. title + quest stay — the
+           grid has no home for those. The bridge still emits hp/depth; they're
+           just not displayed here. -->
       <span class="debug-only"><span class="k">t</span><span id="xs-turn">·</span></span>
       <span class="debug-only" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
       <span class="debug-only"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
@@ -528,9 +531,6 @@
     const $ = (id) => document.getElementById(id);
     const titleEl = $("xs-title");
     const questEl = $("xs-quest");
-    const depthEl = $("xs-depth");
-    const hpEl = $("xs-hp");
-    const maxEl = $("xs-max");
     const turnEl = $("xs-turn");
 
     // Capitalize a quest-item name for the bar. Keep it terse.
@@ -563,10 +563,7 @@
       const d = e.detail || {};
       titleEl.textContent = d.title || "—";
       questEl.textContent = nameOf(d.quest);
-      // Reset stats on new run — they'll fill in after the first tick.
-      hpEl.textContent = "·";
-      maxEl.textContent = "·";
-      depthEl.textContent = "1";
+      // Reset the turn counter on a new run — it fills in after the first tick.
       turnEl.textContent = "0";
     });
 
@@ -589,9 +586,8 @@
 
     window.addEventListener("xsofy/stats", (e) => {
       const d = e.detail || {};
-      if (d.hp != null) hpEl.textContent = d.hp;
-      if (d["max-hp"] != null) maxEl.textContent = d["max-hp"];
-      if (d.depth != null) depthEl.textContent = d.depth;
+      // hp / max-hp / depth are still emitted but no longer shown in the chrome
+      // (the in-grid HUD carries them); only the debug turn counter reads here.
       if (d.turn != null) {
         turnEl.textContent = d.turn;
         lastTurn = d.turn;
