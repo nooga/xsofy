@@ -45,9 +45,140 @@
 ;; dancing tiles: water and lava get randomized color each frame
 (def dancing-tiles #{3 4 7})
 
+;; --- Camera ---
+;; The map rect on a narrow terminal is smaller than the world (e.g. 27x17
+;; visible vs 79x30 in xsofy). Without an offset, world-coord renders
+;; that land outside the rect are silently dropped — including the player.
+;; The fix: attach a camera offset (:cx :cy) to the map rect, centered on
+;; the player and clamped to world bounds. render-map-tile and friends
+;; consume the offset via map-cell, so callers keep passing world coords.
+
+;; Dead-zone camera state. Camera moves with the player only when the
+;; player is within MARGIN cells of the visible window's edge; otherwise
+;; the camera holds its last committed position. This turns most player
+;; moves into FOV-delta renders (cheap) instead of full-window repaints
+;; (~1300 cells, ~0.14ms/cell on WASM = the dominant render-side spike).
+;;
+;; The atom stores {:cx :cy :depth} so a floor change forces a recenter:
+;; the new floor's coordinate system has no relation to the old one.
+;;
+;; Render-only state; safe as an atom because the render path is
+;; single-threaded (the WASM Go runtime is, and the native path runs in
+;; the main game thread).
+(def last-camera (atom nil))
+
+;; Dead-zone as a fraction of the EFFECTIVE viewport, per axis. The camera
+;; holds while the player roams this central box; crossing it scrolls the
+;; camera 1 cell/step to keep the player on the boundary (clamped at the
+;; world edge). Fractional (not fixed cells) so the feel stays constant as
+;; the terminal resizes. Smaller frac = tighter box = more centered = more
+;; forward look-ahead + more scrolling. 0 ⇒ always-centered (option 3).
+;; Cells are ~2.3x taller than wide, so horizontal runs looser than vertical.
+(def deadzone-pct-x 60)
+(def deadzone-pct-y 35)
+
+(defn- deadzone-margin
+  "Half-margin in cells for a dead-zone covering `pct`% of `eff` cells.
+   Capped at eff/2 so the zone can't invert on tiny viewports (collapses
+   to pure-centering instead)."
+  [pct eff]
+  (min (quot eff 2)
+       (quot (* eff (- 100 pct)) 200)))
+
+(defn- center-camera
+  "Centered-on-player offset, clamped to world bounds. Used on first
+   render of a floor and as a fallback when no last-camera is stored."
+  [ww wh rw rh px py]
+  [(if (<= ww rw) 0 (max 0 (min (- ww rw) (- px (quot rw 2)))))
+   (if (<= wh rh) 0 (max 0 (min (- wh rh) (- py (quot rh 2)))))])
+
+(defn camera-for
+  "Dead-zone camera for map rect r. If the player is at least the dead-zone
+   margin (deadzone-margin) from each edge of the previously-committed camera
+   window, returns the previous camera unchanged — the FOV-delta render
+   path then writes only the cells that actually changed. Otherwise the
+   camera shifts just enough to put the player that margin from whichever
+   edge they were crossing.
+
+   On first render of a floor (no last-camera, or different :depth), the
+   camera centers on the player."
+  [world r]
+  (let [ww (or (:width world) 0)
+        wh (or (:height world) 0)
+        rw (:w r)
+        rh (:h r)
+        [px py] (or (get-in world [:entities :player :pos]) [0 0])
+        cur-depth (:depth world)
+        stored @last-camera
+        ;; Floor change OR viewport resize triggers a recenter. Storing
+        ;; rect dimensions in last-camera lets the next render detect a
+        ;; font-size cycle (xterm refits → new cols/rows → new rw/rh)
+        ;; and re-center the camera on the player instead of holding the
+        ;; previous offset inside a now-different-sized window.
+        valid? (and stored
+                    (= cur-depth (:depth stored))
+                    (= rw        (:rw stored))
+                    (= rh        (:rh stored)))
+        [prev-cx prev-cy] (if valid?
+                            [(:cx stored) (:cy stored)]
+                            (center-camera ww wh rw rh px py))
+        rel-x (- px prev-cx)
+        rel-y (- py prev-cy)
+        ;; Proportional dead-zone half-margin. deadzone-margin caps at rw/2
+        ;; (resp. rh/2), so the two cond branches below never overlap and
+        ;; the camera can't oscillate / leave a ghost row on small viewports.
+        mx (deadzone-margin deadzone-pct-x rw)
+        my (deadzone-margin deadzone-pct-y rh)
+        new-cx (cond
+                 (<= ww rw)             0
+                 (< rel-x mx)           (max 0 (- px mx))
+                 (>= rel-x (- rw mx))   (min (- ww rw) (- (+ px mx) rw))
+                 :else                  prev-cx)
+        new-cy (cond
+                 (<= wh rh)             0
+                 (< rel-y my)           (max 0 (- py my))
+                 (>= rel-y (- rh my))   (min (- wh rh) (- (+ py my) rh))
+                 :else                  prev-cy)]
+    [new-cx new-cy]))
+
+(defn with-camera
+  "Attach a camera-for offset to the map rect. Callers pass the result
+   anywhere a map rect is consumed. Pure read — does NOT advance the
+   stored camera; render-full / render-dirty call commit-camera! once
+   after using the rect, so callers like animate-vfx! don't accidentally
+   change the camera between turns."
+  [world r]
+  (let [[cx cy] (camera-for world r)]
+    (assoc r :cx cx :cy cy)))
+
+(defn commit-camera!
+  "Persist the camera offset on rect mr as the new baseline for future
+   camera-for calls. Stores depth and rect dimensions alongside — depth
+   change triggers recenter on floor change; rect-dim change triggers
+   recenter on viewport resize (font cycle, window resize)."
+  [world mr]
+  (reset! last-camera {:cx    (:cx mr)
+                       :cy    (:cy mr)
+                       :depth (:depth world)
+                       :rw    (:w mr)
+                       :rh    (:h mr)}))
+
+(defn map-cell
+  "Translate world (x y) → terminal [col row] for map rect r, honoring
+   the rect's camera offset (:cx :cy, default 0). Returns nil if the
+   cell falls outside the visible window."
+  [r x y]
+  (let [cx (or (:cx r) 0)
+        cy (or (:cy r) 0)
+        tx (- x cx)
+        ty (- y cy)]
+    (when (and (>= tx 0) (< tx (:w r))
+               (>= ty 0) (< ty (:h r)))
+      [(+ (:x r) tx) (+ (:y r) ty)])))
+
 (defn render-map-tile [r x y tile visible remembered light-val stain gas]
-  (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
-    (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+  (when-let [[col row] (map-cell r x y)]
+    (term/move-cursor col row)
     (cond
       visible
       (let [style (style-tile tile)
@@ -154,8 +285,7 @@
           lights (or (:lights world) [])
           [x y] pos]
       (when (and (contains? fov [x y])
-                 (>= x 0) (< x (:w r))
-                 (>= y 0) (< y (:h r)))
+                 (map-cell r x y))
         (let [tile (terrain/tget (:terrain world) (:width world) x y)
               tile-bg (:bg (style-tile tile))
               stains (or (:stains world) {})
@@ -190,8 +320,9 @@
                       [(quot (+ br sr) 2) (quot (+ bg sg) 2) (quot (+ bb sb) 2)])
                     bg-lit)
               fg-lit (if lv (light/apply-light fg0 lv) fg0)
-              glyph (get-in entity [:visual :glyph] "?")]
-          (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+              glyph (get-in entity [:visual :glyph] "?")
+              [col row] (map-cell r x y)]
+          (term/move-cursor col row)
           (let [[fr fg fb] fg-lit] (term/set-fg fr fg fb))
           (let [[br bgg bb] bg1] (term/set-bg br bgg bb))
           (term/write glyph))))))
@@ -258,8 +389,9 @@
         (render-status-bars r (inc row) c)))))
 
 (defn render-sidebar [world r]
-  (ui/clear-rect r)
-  (when-let [player (get-in world [:entities :player])]
+  (when r
+    (ui/clear-rect r)
+    (when-let [player (get-in world [:entities :player])]
     (let [hp (or (get-in player [:body :hp]) 0)
           max-hp (or (get-in player [:body :max-hp]) 1)
           str_ (or (get-in player [:body :strength]) 0)
@@ -321,7 +453,7 @@
         (doseq [c creatures]
           (when (< @row (:h r))
             (let [next-row (render-creature-entry r @row c)]
-              (reset! row (or next-row (+ @row 2))))))))))
+              (reset! row (or next-row (+ @row 2)))))))))))
 
 ;; --- Log Panel ---
 
@@ -352,21 +484,22 @@
   (:max-scroll (message-log-window (:log world) visible-lines (:message-scroll world))))
 
 (defn render-log [world r]
-  (ui/clear-rect r)
-  (let [log (vec (or (:log world) []))
-        n (:h r)
-        recent (if (> (count log) n) (subvec log (- (count log) n)) log)
-        cnt (count recent)]
-    (dotimes [i cnt]
-      (let [entry (nth recent i)
-            msg (format-log-entry entry)
-            age (- cnt i 1)
-            brightness (max 60 (- 220 (* age 50)))]
-        (ui/write-line r (+ (- n cnt) i) (str " " msg)
-                       [brightness
-                        (max 60 (- brightness 20))
-                        (max 40 (- brightness 80))]
-                       ui/bg)))))
+  (when r
+    (ui/clear-rect r)
+    (let [log (vec (or (:log world) []))
+          n (:h r)
+          recent (if (> (count log) n) (subvec log (- (count log) n)) log)
+          cnt (count recent)]
+      (dotimes [i cnt]
+        (let [entry (nth recent i)
+              msg (format-log-entry entry)
+              age (- cnt i 1)
+              brightness (max 60 (- 220 (* age 50)))]
+          (ui/write-line r (+ (- n cnt) i) (str " " msg)
+                         [brightness
+                          (max 60 (- brightness 20))
+                          (max 40 (- brightness 80))]
+                         ui/bg))))))
 
 ;; --- VFX Rendering ---
 ;; line-cells lives in xsofy.util now (use u/line-cells).
@@ -419,17 +552,20 @@
         gases (or (:gases world) {})
         pos-ent (dirty-cell-entities (:entities world) dirty)]
     (doseq [[x y] dirty]
-      (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
-        (let [visible (contains? fov [x y])
-              remembered (get memory [x y])
-              tile (when visible (terrain/tget terrain width x y))
-              lv (when visible (light/light-at x y lights))
-              stain (when visible (get stains [x y]))
-              gas (when visible (get gases [x y]))]
-          (render-map-tile r x y tile visible remembered lv stain gas)
-          ;; re-render entity on this cell if any
-          (when-let [e (get pos-ent [x y])]
-            (render-entity world r e)))))))
+      ;; render-map-tile + render-entity both use map-cell internally,
+      ;; which clips correctly in camera coords. Don't add an outer
+      ;; (< x (:w r)) guard — that'd skip cells outside [0,rw) but
+      ;; inside [cx, cx+rw), which on a scrolled map is most of them.
+      (let [visible (contains? fov [x y])
+            remembered (get memory [x y])
+            tile (when visible (terrain/tget terrain width x y))
+            lv (when visible (light/light-at x y lights))
+            stain (when visible (get stains [x y]))
+            gas (when visible (get gases [x y]))]
+        (render-map-tile r x y tile visible remembered lv stain gas)
+        ;; re-render entity on this cell if any
+        (when-let [e (get pos-ent [x y])]
+          (render-entity world r e))))))
 
 (defn render-vfx-frame [world r]
   "Render vfx as color overlays on existing tiles. Does not overwrite glyphs."
@@ -450,7 +586,7 @@
                   white [255 255 255]
                   i2 (* intensity intensity)]
               (doseq [[x y] cells]
-                (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+                (when-let [[col row] (map-cell r x y)]
                   (let [tile (terrain/tget (:terrain world) (:width world) x y)
                         style (style-tile tile)
                         fg (boost-color (boost-color (:fg style) tint intensity)
@@ -458,7 +594,7 @@
                         bg (boost-color (boost-color (:bg style) tint (* intensity 0.7))
                                         white (* i2 0.5))
                         ch (get terrain/tile-chars tile ".")]
-                    (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+                    (term/move-cursor col row)
                     (let [[fr fg_ fb] fg] (term/set-fg fr fg_ fb))
                     (let [[br bg_ bb] bg] (term/set-bg br bg_ bb))
                     (term/write ch)))))
@@ -470,12 +606,12 @@
                   color (or (:color event) [200 180 120])]
               (when (< step (count path))
                 (let [[x y] (nth path step)]
-                  (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+                  (when-let [[col row] (map-cell r x y)]
                     (let [tile (terrain/tget (:terrain world) (:width world) x y)
                           style (style-tile tile)
                           bg-lit (let [lv (light/light-at x y (or (:lights world) []))]
                                    (if lv (light/apply-light (:bg style) lv) (:bg style)))]
-                      (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+                      (term/move-cursor col row)
                       (let [[fr fg_ fb] color] (term/set-fg fr fg_ fb))
                       (let [[br bg_ bb] bg-lit] (term/set-bg br bg_ bb))
                       (term/write glyph))))))
@@ -486,7 +622,7 @@
                   tint (or (:color event) [255 255 255])
                   ent-at-pos (core/some (fn [[_ e]] (when (= (:pos e) [x y]) e))
                                         (:entities world))]
-              (when (and (>= x 0) (< x (:w r)) (>= y 0) (< y (:h r)))
+              (when-let [[col row] (map-cell r x y)]
                 (let [tile (terrain/tget (:terrain world) (:width world) x y)
                       style (style-tile tile)
                       bg-lit (let [lv (light/light-at x y lights)]
@@ -498,7 +634,7 @@
                       ch (if ent-at-pos
                            (get-in ent-at-pos [:visual :glyph] "?")
                            (get terrain/tile-chars tile "."))]
-                  (term/move-cursor (+ (:x r) x) (+ (:y r) y))
+                  (term/move-cursor col row)
                   (let [[fr fg_ fb] fg] (term/set-fg fr fg_ fb))
                   (let [[br bg_ bb] bg-lit] (term/set-bg br bg_ bb))
                   (term/write ch))))
@@ -528,26 +664,29 @@
   (if (every? #(= :projectile (:type %)) vfx) 25 50))
 
 (defn animate-vfx! [world r]
-  "Run vfx animation loop — only redraws affected cells between frames."
-  (loop [vfx (or (:vfx world) []) prev-dirty #{}]
-    (when (seq vfx)
-      ;; collect cells this frame will touch
-      (let [cur-dirty (vfx-dirty-cells vfx)
-            ;; restore cells from previous frame that aren't in current frame
-            to-restore (core/into prev-dirty cur-dirty)]
-        ;; restore all previously dirty cells first
-        (when (seq prev-dirty)
-          (restore-dirty-cells! world r prev-dirty)
-          (term/flush))
-        ;; render current vfx overlay
-        (render-vfx-frame (assoc world :vfx vfx) r)
-        (sfx/pause! (vfx-frame-delay vfx))
-        (let [next-vfx (tick-vfx vfx)]
-          (if (seq next-vfx)
-            (recur next-vfx cur-dirty)
-            ;; final frame — restore all dirty cells
-            (do (restore-dirty-cells! world r cur-dirty)
-                (term/flush))))))))
+  "Run vfx animation loop — only redraws affected cells between frames.
+   Attaches the camera offset to the rect so vfx painted at world coords
+   land in the right terminal cells even when the map is scrolled."
+  (let [r (with-camera world r)]
+    (loop [vfx (or (:vfx world) []) prev-dirty #{}]
+      (when (seq vfx)
+        ;; collect cells this frame will touch
+        (let [cur-dirty (vfx-dirty-cells vfx)
+              ;; restore cells from previous frame that aren't in current frame
+              to-restore (core/into prev-dirty cur-dirty)]
+          ;; restore all previously dirty cells first
+          (when (seq prev-dirty)
+            (restore-dirty-cells! world r prev-dirty)
+            (term/flush))
+          ;; render current vfx overlay
+          (render-vfx-frame (assoc world :vfx vfx) r)
+          (sfx/pause! (vfx-frame-delay vfx))
+          (let [next-vfx (tick-vfx vfx)]
+            (if (seq next-vfx)
+              (recur next-vfx cur-dirty)
+              ;; final frame — restore all dirty cells
+              (do (restore-dirty-cells! world r cur-dirty)
+                  (term/flush)))))))))
 
 ;; --- Item Display Helpers ---
 
@@ -1137,7 +1276,8 @@
 
 (defn render-full [world]
   (let [[tw th] (term-dims)
-        panels (ui/layout tw th)]
+        panels (ui/layout tw th)
+        mr (with-camera world (:map panels))]
     ;; blank entire terminal with bg color
     (ui/apply-bg ui/bg)
     (ui/apply-fg ui/bg)
@@ -1145,45 +1285,66 @@
       (term/move-cursor 1 (inc y))
       (term/write (apply str (repeat tw " "))))
     ;; render panels
-    (render-map world (:map panels))
-    (render-map-entities world (:map panels))
+    (render-map world mr)
+    (render-map-entities world mr)
     (render-sidebar world (:sidebar panels))
     (render-log world (:log panels))
     (render-status world (:status panels))
-    (term/flush)))
+    (term/flush)
+    (commit-camera! world mr)))
 
 (defn render-dirty [world prev-world]
   (let [[tw th] (term-dims)
         panels (ui/layout tw th)
-        mr (:map panels)
-        old-fov (:fov prev-world)
-        new-fov (:fov world)]
-    (let [lights (or (:lights world) [])
-          stains (or (:stains world) {})
-          gases (or (:gases world) {})]
-      (doseq [[x y] old-fov]
-        (when (and (not (contains? new-fov [x y]))
-                   (< x (:w mr)) (< y (:h mr)))
-          (render-map-tile mr x y nil false (get (:memory world) [x y]) nil nil nil)))
-      (doseq [[x y] new-fov]
-        (when (and (< x (:w mr)) (< y (:h mr)))
+        ;; Camera-change detection must compare against the camera that
+        ;; was actually drawn last frame (@last-camera), not a recomputed
+        ;; one from prev-world: with-camera prev-world and with-camera
+        ;; world both call camera-for against the same atom and yield
+        ;; identical results when the dead-zone returns the same answer
+        ;; for both player positions — so the original comparison never
+        ;; fired across real camera shifts, leaving a 1-row ghost behind
+        ;; the incremental render.
+        mr       (with-camera world (:map panels))
+        old-fov  (:fov prev-world)
+        new-fov  (:fov world)
+        prev-cam (or @last-camera mr)]
+    (if (or (not= (:cx prev-cam) (:cx mr))
+            (not= (:cy prev-cam) (:cy mr)))
+      ;; Camera shifted — viewport contents moved; redraw map fully.
+      (do (render-map world mr)
+          (render-map-entities world mr)
+          (render-sidebar world (:sidebar panels))
+          (render-log world (:log panels))
+          (render-status world (:status panels))
+          (term/flush)
+          (commit-camera! world mr))
+      ;; Camera held — FOV-delta path. map-cell handles visibility check;
+      ;; no outer bounds guard needed because x,y are world coords.
+      (let [lights (or (:lights world) [])
+            stains (or (:stains world) {})
+            gases (or (:gases world) {})]
+        (doseq [[x y] old-fov]
+          (when-not (contains? new-fov [x y])
+            (render-map-tile mr x y nil false (get (:memory world) [x y]) nil nil nil)))
+        (doseq [[x y] new-fov]
           (render-map-tile mr x y
                            (terrain/tget (:terrain world) (:width world) x y)
                            true nil
                            (light/light-at x y lights)
                            (get stains [x y])
-                           (get gases [x y]))))
-      (let [[opx opy] (get-in prev-world [:entities :player :pos])]
-        (when (and opx opy (< opx (:w mr)) (< opy (:h mr)))
-          (let [tile (terrain/tget (:terrain world) (:width world) opx opy)
-                vis (contains? new-fov [opx opy])]
-            (render-map-tile mr opx opy tile vis
-                             (get (:memory world) [opx opy])
-                             (when vis (light/light-at opx opy lights))
-                             (when vis (get stains [opx opy]))
-                             (when vis (get gases [opx opy])))))))
-    (render-map-entities world mr)
-    (render-sidebar world (:sidebar panels))
-    (render-log world (:log panels))
-    (render-status world (:status panels))
-    (term/flush)))
+                           (get gases [x y])))
+        (let [[opx opy] (get-in prev-world [:entities :player :pos])]
+          (when (and opx opy)
+            (let [tile (terrain/tget (:terrain world) (:width world) opx opy)
+                  vis (contains? new-fov [opx opy])]
+              (render-map-tile mr opx opy tile vis
+                               (get (:memory world) [opx opy])
+                               (when vis (light/light-at opx opy lights))
+                               (when vis (get stains [opx opy]))
+                               (when vis (get gases [opx opy]))))))
+        (render-map-entities world mr)
+        (render-sidebar world (:sidebar panels))
+        (render-log world (:log panels))
+        (render-status world (:status panels))
+        (term/flush)
+        (commit-camera! world mr)))))
