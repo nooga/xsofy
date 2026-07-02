@@ -327,6 +327,10 @@
    gameplay seed chain — so this world replays identically to one made by
    new-game from the same seed."
   [seed title scheme quest]
+  ;; Emit HUD startup from the common construction path, so replay (build-game)
+  ;; populates the browser HUD's title/quest too — not only new-game. No-op on
+  ;; native. Purely a side effect; the returned world is unchanged.
+  (bridge/emit-startup title {:name (:item quest)})
   (-> (world/make-world 79 30 seed)
       (assoc :title title
              :scheme scheme
@@ -339,7 +343,6 @@
         {:keys [title scheme rng]} (title/show-title-screen rng)
         [quest rng] (title/generate-quest rng)
         _ (title/show-descending-screen 1 scheme)]
-    (bridge/emit-startup title {:name (:item quest)})
     (assemble-world sd title scheme quest)))
 
 (defn build-game
@@ -360,10 +363,13 @@
   (let [{:keys [seed actions]} (replay/decode code)
         w0 (build-game seed)]
     (render/render-full w0)
+    (bridge/emit-stats w0)
     (sfx/pause! 400)
     (reduce (fn [w action]
               (let [w' (dispatch/dispatch w action)]
                 (render/render-full w')
+                ;; Keep the HUD stats tracking the replay as it plays out.
+                (bridge/emit-stats w')
                 (sfx/pause! 90)
                 w'))
             w0 actions)))
