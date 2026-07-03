@@ -508,15 +508,19 @@
               (let [st  (first ss)
                     txt (topbar-badge-text st)
                     w   (count txt)]
-                (when (<= (+ col w) right)
+                (if (<= (+ col w) right)
                   (let [[fr fg fb] (:color st)
                         [br bg bb] (or (get-in status/status-defs [(:stype st) :bg]) [30 30 30])]
                     (term/move-cursor col y)
                     (term/set-fg fr fg fb)
                     (term/set-bg br bg bb)
-                    (term/write txt)))
-                (recur (+ col w gap) (rest ss)))
-              ;; depth tag after the badges
+                    (term/write txt)
+                    (recur (+ col w gap) (rest ss)))
+                  ;; This badge is clipped whole; later badges won't fit either.
+                  ;; Stop advancing so the depth tag can still use the space the
+                  ;; badge couldn't — a shorter "D1" may fit where "poi" didn't.
+                  (recur col nil)))
+              ;; depth tag after the badges (or after the first clipped badge)
               (let [dtxt (str "D" (:depth world))]
                 (when (<= (+ col (count dtxt)) right)
                   (let [[br bg bb] ui/bg]
