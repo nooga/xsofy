@@ -125,19 +125,17 @@
     grid-template-rows: auto auto;
     column-gap: 0.6rem;
     row-gap: 0.35rem;
-    align-items: center;
+    /* Top-anchor the rows so the tile (and title) sit at a fixed top position in
+       the always-tall bar; the empty space pools at the bottom in play. */
+    align-items: start;
+    padding-top: 0.5rem;
     border-bottom: 1px solid var(--bar-rule);
-    /* Pin the bar height so the OPTIONS↔BACK swap can't resize it. The two tiers
-       carry different content (play: title+quest; debug: perf row + 2-line build
-       + the taller font/repeat chips), so a content-driven height twitches on
-       every toggle. Floor it above the taller tier's natural height and let
-       `align-items: center` center whichever tier is showing. Landscape hides the
-       perf stats (see the media rule below) so it's shorter; portrait keeps them
-       and needs more room — reserved in the portrait override. */
-    min-height: 60px;
-  }
-  @media (orientation: portrait) {
-    #xsofy-shell .info { min-height: 74px; }
+    /* Keep the bar at a fixed tall height always, so opening/closing options
+       never resizes it — the tile stays anchored top-right and the options
+       (font, version) simply fill the space below it, which is empty in play.
+       Sized to the options-open height; the URL-only diagnostics (?mode=debug/
+       dev) can push it taller still, but those are loaded, not toggled. */
+    min-height: 88px;
   }
   #xsofy-shell .info .title {
     grid-area: 1 / 1;
