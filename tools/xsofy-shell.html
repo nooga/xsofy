@@ -127,7 +127,17 @@
     row-gap: 0.35rem;
     align-items: center;
     border-bottom: 1px solid var(--bar-rule);
-    min-height: 46px;
+    /* Pin the bar height so the OPTIONS↔PLAY swap can't resize it. The two tiers
+       carry different content (play: title+quest; debug: perf row + 2-line build
+       + the taller font/repeat chips), so a content-driven height twitches on
+       every toggle. Floor it above the taller tier's natural height and let
+       `align-items: center` center whichever tier is showing. Landscape hides the
+       perf stats (see the media rule below) so it's shorter; portrait keeps them
+       and needs more room — reserved in the portrait override. */
+    min-height: 60px;
+  }
+  @media (orientation: portrait) {
+    #xsofy-shell .info { min-height: 74px; }
   }
   #xsofy-shell .info .title {
     grid-area: 1 / 1;
