@@ -2,16 +2,20 @@
   "Glyph-grid to vertex-batch adapter. Converts xsofy's rendered glyph grid
    (cells with char, fg/bg colors) into vertex batches for textured quad rendering.
 
-   Coordinate system: grid cell (col, row) with row 0 at top. World-space placement:
+   Coordinate system: Y-UP world, ground on the xz plane (matches fall.lg's
+   camera, which puts eye height in y). Grid cell (col, row), row 0 at top:
    - cell (c, r) occupies x in [c*cell-w, (c+1)*cell-w)
-                           y in [-r*cell-h, -(r+1)*cell-h) [top-down: y decreases downward]
-                           z = 0 for flat plane [wall extrusion extends +z]
+                           z in [r*cell-h, (r+1)*cell-h) [row increases with +z]
+                           y = 0 for flat floor quads
+   Wall extrusion rises +y from the floor: y in [0, wall-h].
+   Top-down view = camera above looking down -y (z maps to screen-down).
 
    Vertex format (interleaved, 9 floats per vertex):
    x y z u v r g b a (position, UV, color in [0,1] range).
 
-   Quads are emitted as 2 CCW triangles: v0 v1 v3, v1 v2 v3.
-   Walls extrude upward (+z): 4 side faces wind CCW viewed from outside.")
+   Quads are emitted as 2 triangles: v0 v1 v3, v1 v2 v3. Backface culling
+   must stay OFF (floor quads are seen from above in top-down and from
+   below-ish angles mid-fall; winding is not view-consistent).")
 
 ;; ==========================================================
 ;; Helpers
@@ -42,30 +46,28 @@
 ;; ==========================================================
 
 (defn- quad-vertices
-  "Build 6 vertices (2 CCW triangles) for a quad at world position.
-   Vertices are [v0 v1 v2 v3] as bottom-left, bottom-right, top-right, top-left
-   (in standard 2D coords). Emitted as CCW triangles: v0 v1 v3, v1 v2 v3.
+  "Build 6 vertices (2 triangles) for a floor quad on the xz plane.
+   Corners: v0 near-left (x0,z0), v1 near-right (x1,z0),
+            v2 far-right (x1,z1), v3 far-left (x0,z1).
+   z0 is the cell's top edge in the top-down view (smaller row edge), so the
+   glyph's top texel row (v0 in UV space) maps to z0.
 
    Input:
-     x0, y0  — bottom-left corner in world space
-     w, h    — width and height
+     x0, z0  — near-left corner in world space
+     w, d    — extent along x and z
      u0, v0, u1, v1 — UV bounds in [0,1]
      r, g, b, a — vertex color in [0,1]
-     z — z coordinate
+     y — constant height of the quad plane
 
    Returns vector of 6 * 9 = 54 floats."
-  [x0 y0 w h u0 v0 u1 v1 r g b a z]
+  [x0 z0 w d u0 v0 u1 v1 r g b a y]
   (let [x1 (+ x0 w)
-        y1 (+ y0 h)
-        ;; v0: bottom-left
-        v0-vrt [x0 y0 z u0 v1 r g b a]
-        ;; v1: bottom-right
-        v1-vrt [x1 y0 z u1 v1 r g b a]
-        ;; v2: top-right
-        v2-vrt [x1 y1 z u1 v0 r g b a]
-        ;; v3: top-left
-        v3-vrt [x0 y1 z u0 v0 r g b a]]
-    ;; Emit 2 triangles CCW: v0 v1 v3, v1 v2 v3
+        z1 (+ z0 d)
+        v0-vrt [x0 y z0 u0 v0 r g b a]
+        v1-vrt [x1 y z0 u1 v0 r g b a]
+        v2-vrt [x1 y z1 u1 v1 r g b a]
+        v3-vrt [x0 y z1 u0 v1 r g b a]]
+    ;; Emit 2 triangles: v0 v1 v3, v1 v2 v3
     (vec-concat [v0-vrt v1-vrt v3-vrt v1-vrt v2-vrt v3-vrt])))
 
 (defn cell-quad
@@ -93,8 +95,8 @@
       (let [[u0 v0 u1 v1] uv-bounds
             [r g b a] (rgba->normalized fg)
             x (float (* col cell-w))
-            y (float (* (- row) cell-h))]
-        (quad-vertices x y cell-w cell-h u0 v0 u1 v1 r g b a 0.0)))))
+            z (float (* row cell-h))]
+        (quad-vertices x z cell-w cell-h u0 v0 u1 v1 r g b a 0.0)))))
 
 (defn cell-bg-quad
   "Convert a cell background to an untextured vertex quad.
@@ -116,9 +118,9 @@
       (if (< a 1e-3)  ;; Effectively transparent
         []
         (let [x (float (* col cell-w))
-              y (float (* (- row) cell-h))]
+              z (float (* row cell-h))]
           ;; Untextured: UVs are [0 0]
-          (quad-vertices x y cell-w cell-h 0.0 0.0 0.0 0.0 r g b a 0.0))))))
+          (quad-vertices x z cell-w cell-h 0.0 0.0 0.0 0.0 r g b a 0.0))))))
 
 ;; ==========================================================
 ;; Batch Builder
@@ -164,9 +166,9 @@
    or [] if glyph not in atlas.
 
    Walls are glyph-textured and wind CCW viewed from outside.
-   Face normal points outward (±x or ±y); z is [0, wall-h].
-   Coordinate convention: each cell occupies the unit square at (col, row),
-   with width=cell-w and height (depth)=cell-h on the xz plane (y is height)."
+   Face normal points outward (±x or ±z); y is [0, wall-h].
+   Coordinate convention matches the floor quads: cell (col, row) occupies
+   x in [col*cell-w, ..+cell-w], z in [row*cell-h, ..+cell-h]; y is up."
   [{:keys [col row glyph]} wall-h atlas
    {:keys [cell-w cell-h fallback] :or {cell-w 0.5 cell-h 1.0 fallback "?"}}]
   (let [glyph-use (or glyph "?")

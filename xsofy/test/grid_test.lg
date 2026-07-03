@@ -69,9 +69,10 @@
           g0 (nth quad 6)
           b0 (nth quad 7)
           a0 (nth quad 8)]
-      ;; UV for "x" is [0.0 0.0 0.5 1.0], v0 uses top of UV (1.0 in y)
+      ;; UV for "x" is [0.0 0.0 0.5 1.0]; v0 (near-left, cell top edge)
+      ;; carries the glyph's top texel row: uv (u0, v0) = (0.0, 0.0)
       (is (approx= u0 0.0))
-      (is (approx= v0 1.0))
+      (is (approx= v0 0.0))
       ;; Color [255 128 64] → [1.0 0.502 0.251]
       (is (approx= r0 1.0))
       (is (approx= g0 (/ 128.0 255.0)))
@@ -87,10 +88,11 @@
           x3 (nth quad 27)
           y3 (nth quad 28)
           z3 (nth quad 29)]
-      ;; v1 is bottom-right: x=1.0, y=-2.0 (row*cell-h), z=0.0
+      ;; v1 is near-right on the floor plane: x=(col+1)*cell-w=1.0,
+      ;; y=0.0 (floor), z=row*cell-h=2.0
       (is (approx= x3 1.0))
-      (is (approx= y3 -2.0))
-      (is (approx= z3 0.0)))))
+      (is (approx= y3 0.0))
+      (is (approx= z3 2.0)))))
 
 (deftest cell-quad-fallback-glyph
   (testing "cell-quad falls back to default glyph if missing"
@@ -188,18 +190,19 @@
           verts (grid/wall-extrude-verts cell 1.0 test-atlas opts)]
       (is (= (count verts) 0)))))
 
-(deftest wall-extrude-z-bounds
-  (testing "wall-extrude-verts z-coordinates are in [0, wall-h]"
+(deftest wall-extrude-height-bounds
+  (testing "wall-extrude-verts y-coordinates (height) are in [0, wall-h] and reach both"
     (let [cell {:col 0 :row 0 :glyph "x"}
           wall-h 2.5
           verts (grid/wall-extrude-verts cell wall-h test-atlas default-opts)
-          ;; Extract all z-coords (every 9th float starting at index 2)
-          z-coords (loop [i 2 zs []]
+          ;; Extract all y-coords (every 9th float starting at index 1)
+          y-coords (loop [i 1 ys []]
                      (if (>= i (count verts))
-                       zs
-                       (recur (+ i 9) (conj zs (nth verts i)))))]
-      ;; All z should be in [0, 2.5]
-      (is (every? #(and (>= % 0.0) (<= % wall-h)) z-coords)))))
+                       ys
+                       (recur (+ i 9) (conj ys (nth verts i)))))]
+      (is (every? #(and (>= % 0.0) (<= % wall-h)) y-coords))
+      (is (some #(approx= % 0.0) y-coords))
+      (is (some #(approx= % wall-h) y-coords)))))
 
 (deftest wall-extrude-color-opaque
   (testing "wall-extrude-verts has opaque white color (1.0 1.0 1.0 1.0)"
