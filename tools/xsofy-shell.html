@@ -127,7 +127,7 @@
     row-gap: 0.35rem;
     align-items: center;
     border-bottom: 1px solid var(--bar-rule);
-    /* Pin the bar height so the OPTIONS↔PLAY swap can't resize it. The two tiers
+    /* Pin the bar height so the OPTIONS↔BACK swap can't resize it. The two tiers
        carry different content (play: title+quest; debug: perf row + 2-line build
        + the taller font/repeat chips), so a content-driven height twitches on
        every toggle. Floor it above the taller tier's natural height and let
@@ -149,7 +149,7 @@
     min-width: 0;
   }
   #xsofy-shell .info .chips {
-    grid-area: 2 / 2;
+    grid-area: 1 / 2;
     /* justify-self: end snaps the chips container to the right edge of
        column 2. Without it, column 2 sizes to the widest of (chips, stats)
        — in debug the perf stats are wider, so the chips sit left-aligned
@@ -164,7 +164,7 @@
   /* Chip visibility is tier-gated (see the tier-visibility block below):
      font + repeat are always shown, force-touch is .dev-only. The OPTIONS
      tile carries no tier class, so it persists across every tier. */
-  /* OPTIONS tile — fixed width so OPTIONS →/PLAY → don't reflow the info row,
+  /* OPTIONS tile — fixed width so OPTIONS →/BACK → don't reflow the info row,
      with the same dashed border + dark offset as the action grid's .nav tile
      so the swap affordance reads as chrome, not content. */
   #xsofy-shell .shell-cycle {
@@ -179,7 +179,9 @@
      repeat, so hide the toggle on a mouse/desktop pointer (still shown under
      force-touch testing). */
   @media (hover: hover) and (pointer: fine) {
-    #xsofy-shell:not(.force-touch) .touch-only { display: none; }
+    /* force-touch lives on <body>, not #xsofy-shell — use the descendant form so
+       the escape hatch (show the toggle when force-touch is on for testing) works. */
+    body:not(.force-touch) #xsofy-shell .touch-only { display: none; }
   }
 
   /* Self-revealing perf cells: hidden until their datum is emitted, so the bar
@@ -204,12 +206,12 @@
     direction: rtl;
     text-align: left;
   }
-  /* Build-provenance chip — debug-mode only. Sits in the same grid slot
-     as .quest (row 2 / col 1), since .quest is play-only the two never
-     collide. Single line, dimmed; ellipsizes from the right if a wide
-     SHA + suffix overflows on small screens. */
+  /* Build-provenance chip — debug-mode only. Sits in row 1 / col 1, the .title
+     slot (title is play-only, so the two never collide) — sharing the tile's row
+     rather than stacking under it, which keeps the debug bar from growing tall.
+     Two rows internally (xsofy sha / lg version), dimmed. */
   #xsofy-shell .info .build {
-    grid-area: 2 / 1;
+    grid-area: 1 / 1;
     color: var(--bar-dim);
     font-size: 10px;
     /* Version gets its own space: xsofy sha on line 1, the (often long) let-go
@@ -226,7 +228,7 @@
     -webkit-user-select: text;
   }
   #xsofy-shell .info .stats {
-    grid-area: 1 / 2;
+    grid-area: 2 / 2;
     justify-self: end;
     color: var(--bar-accent);
     display: flex;
@@ -239,13 +241,10 @@
      desktop users have a real keyboard. */
   #xsofy-shell .touch { display: none; }
 
-  /* In landscape the game's own sidebar shows HP/depth (sidebar drops only
-     when terminal width < ~80 cols, which is the portrait case). Hide the
-     duplicated stats block so the bar carries only what isn't already on
-     screen — title + quest + font chip. */
-  @media (orientation: landscape) {
-    #xsofy-shell .info .stats { display: none; }
-  }
+  /* (The old landscape .stats hide is gone: .stats used to duplicate the
+     sidebar's HP/depth, but #121 removed those — it now holds only the URL-gated
+     turn/perf diagnostics, which should appear wherever ?mode=debug/dev asks,
+     landscape or portrait.) */
 
   /* Portrait / force-touch: the shell absorbs the space under the 55vh
      terminal (the terminal-height rules live at the top of this file).
@@ -382,19 +381,21 @@
   }
   #xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
 
-  /* Tier visibility. The three tiers are an additive ladder (play ⊂ debug ⊂
-     dev): mode-play is the permanent base on the root; ?mode=debug adds
-     mode-debug; ?mode=dev adds mode-dev on top. Each tier's chrome is gated on
-     its own class, so a higher tier keeps everything the lower ones show:
-       - .play-only  — title / quest / play stats (d, hp)
-       - .debug-only — build provenance + perf counters (player-visible diagnostics)
-       - .dev-only   — dev tooling (force-touch)
-     play-only chrome folds away once debug diagnostics are up, since debug
-     eyeballs are on numbers, not the quest item. The OPTIONS tile toggles the
-     debug tier at runtime; the dev tier is URL-only (?mode=dev). */
-  #xsofy-shell:not(.mode-debug) .debug-only { display: none; }
-  #xsofy-shell:not(.mode-dev)   .dev-only   { display: none; }
-  #xsofy-shell.mode-debug .play-only        { display: none; }
+  /* Tier visibility — two axes. The OPTIONS↔BACK tile reveals *player options*
+     at runtime (mode-debug, reachable by tapping OR by ?mode=debug/dev); the
+     *diagnostics* (turn + perf counters) are URL-only (mode-urldiag, set solely
+     from ?mode=debug/dev), so a runtime tap never surfaces dev noise. Each group
+     gates on its own class:
+       - .play-only  — title / quest (fold away once options are open)
+       - .debug-only — build provenance + font / hold-to-repeat (the OPTIONS tap reveals these)
+       - .diag-only  — turn + perf counters (URL-gated: ?mode=debug or ?mode=dev only)
+       - .dev-only   — dev tooling (force-touch; ?mode=dev only)
+     play-only folds under mode-debug because build (bottom-left) reuses the quest
+     slot; the tile toggles mode-debug at runtime, diag + dev are URL-only. */
+  #xsofy-shell:not(.mode-debug)   .debug-only { display: none; }
+  #xsofy-shell:not(.mode-urldiag) .diag-only  { display: none; }
+  #xsofy-shell:not(.mode-dev)     .dev-only   { display: none; }
+  #xsofy-shell.mode-debug .play-only          { display: none; }
 
 </style>
 
@@ -409,13 +410,13 @@
            browser chrome no longer duplicates them. title + quest stay — the
            grid has no home for those. The bridge still emits hp/depth; they're
            just not displayed here. -->
-      <span class="debug-only"><span class="k">t</span><span id="xs-turn">·</span></span>
-      <span class="debug-only" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
-      <span class="debug-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
-      <span class="debug-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
-      <span class="debug-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
-      <span class="debug-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
-      <span class="debug-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
+      <span class="diag-only"><span class="k">t</span><span id="xs-turn">·</span></span>
+      <span class="diag-only" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
+      <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
+      <span class="diag-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
+      <span class="diag-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
+      <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
+      <span class="diag-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
     </span>
     <div class="chips">
       <!-- Player options live inside the OPTIONS panel (mode-debug), not always
@@ -1012,9 +1013,9 @@
     // Old keys (xsofy/info-mode, xsofy/chip-page) are intentionally ignored.
     const SHELL_LS_KEY = "xsofy/shell-state";
     const SHELL_STATES = ["play", "debug"];
-    // Tile label per destination: "OPTIONS →" when tapping reveals diagnostics,
-    // "PLAY →" when it hides them.
-    const STATE_LABEL = { play: "PLAY", debug: "OPTIONS" };
+    // Tile label names the action: "OPTIONS →" opens the options view, "BACK →"
+    // closes it (returns to the play view).
+    const STATE_LABEL = { play: "BACK", debug: "OPTIONS" };
     const shellRoot = document.getElementById("xsofy-shell");
     const cycleEl_ = $("xs-shell-cycle");
     const cycleLabelEl = $("xs-shell-cycle-label");
@@ -1034,6 +1035,8 @@
       // (its force-touch chrome can't appear without the debug diagnostics under it).
       shellRoot.classList.toggle("mode-debug", currentShellState === "debug" || devMode);
       shellRoot.classList.toggle("mode-dev", devMode);
+      // Diagnostics (turn + perf) are URL-only — never surfaced by a runtime tap.
+      shellRoot.classList.toggle("mode-urldiag", urlMode === "debug" || urlMode === "dev");
       // Label names the destination — what tapping switches TO — matching the
       // action-grid nav tile's convention.
       if (cycleLabelEl) {
