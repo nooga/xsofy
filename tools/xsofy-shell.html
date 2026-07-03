@@ -885,19 +885,25 @@
     });
     repeatToggleEl?.addEventListener("mousedown", (e) => e.preventDefault());
 
-    // Force-touch toggle. Default behavior hides the touch UI in
-    // landscape (desktop users have a real keyboard); flipping this on
-    // overrides that — useful for testing the touch layout on a desktop
-    // and as an escape hatch for tablet-landscape sessions without a
-    // keyboard. Class lives on <body> because it also retargets the
+    // Touch UI visibility. A coarse primary pointer (phone/tablet) needs the
+    // on-screen controls in EVERY orientation — landscape included, where they
+    // used to be hidden on the assumption that landscape == desktop-with-
+    // keyboard, which left a phone/tablet rotated to landscape with no controls
+    // at all. The .force-touch class already reveals the touch UI regardless of
+    // orientation, so drive it from capability OR the manual toggle; the toggle
+    // stays an override for keyboardless fine-pointer sessions (desktop testing,
+    // tablet-with-trackpad). Class lives on <body> because it also retargets the
     // terminal element (sibling of #xsofy-shell, not a descendant).
     const FORCE_TOUCH_LS_KEY = "xsofy/force-touch";
     const touchToggleEl = $("xs-touch-toggle");
     const touchStateEl = $("xs-touch-state");
+    const coarsePointer = !!window.matchMedia?.("(pointer: coarse)")?.matches;
     let forceTouchEnabled = localStorage.getItem(FORCE_TOUCH_LS_KEY) === "1";
 
     function paintForceTouchState() {
-      document.body.classList.toggle("force-touch", forceTouchEnabled);
+      // Capability forces it on (a touch device can't turn off its only input
+      // method); the toggle only matters on fine-pointer devices.
+      document.body.classList.toggle("force-touch", coarsePointer || forceTouchEnabled);
       if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? "on" : "off";
       if (touchToggleEl) touchToggleEl.style.opacity = forceTouchEnabled ? "" : "0.5";
     }
