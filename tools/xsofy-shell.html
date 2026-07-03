@@ -573,8 +573,9 @@
           const xs = (d.xsofy || "").slice(0, 7);
           const lg = (d["let-go"] || "");              // full — no truncation
           const dt = d.date || "";
-          // Two rows: xsofy sha (+ date) on top, the often-long let-go version below.
-          buildEl.innerHTML = `${xs}${dt ? " ·" + dt : ""}<br>lg ${lg}`;
+          // Two rows: xsofy sha (+ date) on top, the often-long let-go version
+          // below. Both rows label their repo (xsofy / lg) so the shas aren't ambiguous.
+          buildEl.innerHTML = `xsofy ${xs}${dt ? " ·" + dt : ""}<br>lg ${lg}`;
         })
         .catch(() => {});
     }
