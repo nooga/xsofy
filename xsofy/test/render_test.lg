@@ -28,6 +28,22 @@
       (is (= 0 (:count window)))
       (is (= 0 (:max-scroll window))))))
 
+;; nooga/xsofy#112 review — camera state must not leak across runs.
+;; last-camera is a module atom and camera validity keys only on depth +
+;; viewport dims, so a fresh depth-1 run with the same viewport would reuse the
+;; prior run's offset. assemble-world calls reset-camera! to prevent that.
+(deftest reset-camera-prevents-cross-run-leak
+  (testing "a fresh run centers on the player instead of inheriting a stale camera"
+    ;; Simulate a prior run that scrolled the camera on depth 1.
+    (render/commit-camera! {:depth 1} {:w 40 :h 20 :cx 30 :cy 5})
+    ;; New-run construction resets it (what assemble-world now does).
+    (render/reset-camera!)
+    ;; camera-for on the fresh world centers: the player sits mid-viewport,
+    ;; so cx = px - w/2 = 30, cy = py - h/2 = 10 — not the stale [30 5].
+    (let [world {:width 100 :height 40 :depth 1
+                 :entities {:player {:pos [50 20]}}}]
+      (is (= [30 10] (render/camera-for world {:w 40 :h 20}))))))
+
 ;; nooga/xsofy#30 — stacked entities on a dirty cell.
 
 (deftest entity-z-priority-ranks-player-over-creature-over-item

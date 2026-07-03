@@ -163,6 +163,14 @@
                        :rw    (:w mr)
                        :rh    (:h mr)}))
 
+(defn reset-camera!
+  "Drop any stored camera so the next render centers on the player. Called at
+   run construction (assemble-world) so a new run never inherits the prior
+   run's offset — camera validity keys only on depth + viewport dims, so a
+   same-depth, same-viewport restart otherwise reuses the stale camera."
+  []
+  (reset! last-camera nil))
+
 (defn map-cell
   "Translate world (x y) → terminal [col row] for map rect r, honoring
    the rect's camera offset (:cx :cy, default 0). Returns nil if the
