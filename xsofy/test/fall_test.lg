@@ -204,12 +204,13 @@
       (is (= 3 (count up))))))
 
 (deftest morph-target-follows-player
-  (testing "Camera target stays at player position (on floor)"
+  (testing "Camera target stays at the player's cell center in world units
+            (col 3 -> x 3*0.5+0.25, row 7 -> z 7*1.0+0.5)"
     (let [player [3 7]
           result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player player :heading :north})
           target (get-in result [:camera :target])]
-      (is (approx= (nth player 0) (nth target 0)))
-      (is (approx= (nth player 1) (nth target 2))))))
+      (is (approx= 1.75 (nth target 0)))
+      (is (approx= 7.5 (nth target 2))))))
 
 ;; ==========================================================
 ;; Morph Return Structure

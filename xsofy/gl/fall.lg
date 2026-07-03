@@ -38,6 +38,10 @@
   [{:keys [t grid-w grid-h player heading]}]
   (let [t-eased (ease t)
         [px py] player
+        ;; Player cell center in WORLD units (cell-w 0.5, cell-h 1.0 — the
+        ;; grid.lg convention). px/py arrive as grid col/row.
+        wx (+ (* (float px) 0.5) 0.25)
+        wz (+ (* (float py) 1.0) 0.5)
 
         ;; Plane tilt: 0 → π/2 radians as t goes 0 → 1
         tilt-rad (* (/ 3.14159265359 2.0) t-eased)
@@ -70,10 +74,10 @@
                        :west 0
                        0)
 
-        cam-eye [(+ (float px) cam-offset-x)
+        cam-eye [(+ wx cam-offset-x)
                  cam-height
-                 (+ (float py) cam-offset-z)]
-        cam-target [(float px) 0.5 (float py)]
+                 (+ wz cam-offset-z)]
+        cam-target [wx 0.5 wz]
         cam-up [0 1 0]]
 
     {:plane-tilt-rad tilt-rad

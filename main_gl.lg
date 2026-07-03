@@ -87,6 +87,28 @@
         (#(reduce world/log-msg % (:messages quest))))))
 
 ;; ==========================================================
+;; Matrix Helpers
+;; ==========================================================
+
+(defn build-top-down-mvp
+  "Build MVP for top-down view: rotate xz-ground into xy-plane, then project.
+   Grid is on xz plane (y=0); rotate-x(π/2) maps (x,0,z) → (x,-z,0).
+   Then ortho projects [0,39.5]×[-30,0]×[-1,1] → [-1,1]³."
+  []
+  (let [rot-90 (mat4/rotate-x (/ 3.14159265359 2.0))
+        ortho (mat4/ortho 0.0 39.5 -30.0 0.0 -1.0 1.0)]
+    (mat4/mul ortho rot-90)))
+
+(defn project-world-point
+  "Project a world point through an MVP matrix to normalized device coordinates.
+   Returns [x_ndc y_ndc z_ndc] by dividing by homogeneous w component."
+  [mvp [x y z]]
+  (let [v4 (mat4/mul-v mvp [x y z 1.0])
+        w (get v4 3)
+        w-safe (if (zero? w) 1.0 w)]
+    [(/ (get v4 0) w-safe) (/ (get v4 1) w-safe) (/ (get v4 2) w-safe)]))
+
+;; ==========================================================
 ;; Presentation State Machine
 ;; ==========================================================
 
@@ -107,8 +129,11 @@
                                (>= current-time force-fall-at)
                                (< current-time (+ force-fall-at 3.0)))]
     (cond
-      ;; Depth increased: start falling
-      (or (> depth prev-depth) in-falling-window)
+      ;; Depth increased (or forced): start falling — only from top-down,
+      ;; else the 3s force window re-arms :fall-start every frame and the
+      ;; animation stays pinned at t=0.
+      (and (= (:mode pres-state) :top-down)
+           (or (> depth prev-depth) in-falling-window))
       (assoc pres-state :mode :falling :fall-start current-time)
 
       ;; If in falling mode, check if animation complete
@@ -172,19 +197,46 @@
             (range 16))))
 
 (defn render-top-down
-  "Render top-down view with ortho projection."
+  "Render top-down view with ortho projection (xz-ground mapped to screen via rotate-x).
+   Verify clip-space projection with two test points: cell (0,0) and cell (0,29)."
   [world tex-id atlas dump? frame]
   (let [map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
         cells (bridge/grid-cells world map-rect)
         {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
         bg-count (quot (count bg) 9)
-        glyph-count (quot (count glyphs) 9)]
+        glyph-count (quot (count glyphs) 9)
+
+        ;; Build correct MVP
+        mvp (build-top-down-mvp)
+
+        ;; Test projection: cell corners in world space
+        ;; Cell (0,0): corner at (0, 0, 0)
+        ;; Cell (0,29): corner at (0, 0, 29)
+        ;; Cell (78,0): corner at (39.5, 0, 0)
+        pt-00 (project-world-point mvp [0.0 0.0 0.0])
+        pt-0-29 (project-world-point mvp [0.0 0.0 29.0])
+        pt-78-0 (project-world-point mvp [39.5 0.0 0.0])]
+
+    (glplat/SetMatrix mvp)
+
     (when dump?
       (when (= frame 0)
         (print (str "XSOFY_GL_DUMP: top-down frame 0\n"))
         (print (str "  bg-batch: " (count bg) " floats, " bg-count " vertices\n"))
         (print (str "  glyph-batch: " (count glyphs) " floats, " glyph-count " vertices\n"))
-        (print (str "  total cells: " (count cells) "\n"))))
+        (print (str "  total cells: " (count cells) "\n"))
+        (print (str "  CLIP-SPACE PROJECTION TEST:\n"))
+        (print (str "    cell (0,0) @ (0,0,0) → clip " pt-00 "\n"))
+        (print (str "    cell (0,29) @ (0,0,29) → clip " pt-0-29 "\n"))
+        (print (str "    cell (78,0) @ (39.5,0,0) → clip " pt-78-0 "\n"))
+        ;; Sanity checks
+        (when-not (and (>= (nth pt-00 0) -1.0) (<= (nth pt-00 0) 1.0))
+          (print "WARN: pt-00 x out of clip bounds\n"))
+        (when-not (and (>= (nth pt-0-29 0) -1.0) (<= (nth pt-0-29 0) 1.0))
+          (print "WARN: pt-0-29 x out of clip bounds\n"))
+        (when-not (> (nth pt-00 1) (nth pt-0-29 1))
+          (print "WARN: row 0 clip-y should be > row 29 clip-y (inverted y-screen)\n"))))
+
     ;; Submit batches
     (when (seq bg)
       (glplat/SubmitTriangles 0 bg))
@@ -213,28 +265,23 @@
                                   :player [px py] :heading (:facing pres-state)})
         {:keys [plane-tilt-rad wall-height camera projection-blend]} morph-params
 
-        ;; Build ortho and perspective MVPs
-        proj-ortho (mat4/ortho 0.0 39.5 30.0 0.0 -1.0 1.0)
-        view-ortho (mat4/identity-m)
-        mvp-ortho (mat4/mul proj-ortho view-ortho)
+        ;; Build ortho and perspective MVPs. The ortho end must equal the
+        ;; top-down MVP exactly, or the view pops when the fall starts.
+        mvp-ortho (build-top-down-mvp)
 
         ;; Perspective MVP
-        fovy (/ 70.0 180.0 3.14159265359)  ; 70 degrees to radians
+        fovy (* 70.0 (/ 3.14159265359 180.0))  ; 70 degrees in radians
         aspect (/ 800.0 600.0)
         proj-pers (mat4/perspective fovy aspect 0.05 60.0)
         view-pers (mat4/look-at (:eye camera) (:target camera) (:up camera))
         mvp-pers (mat4/mul proj-pers view-pers)
 
-        ;; Blend MVP
-        mvp (lerp-matrix-component mvp-ortho mvp-pers projection-blend)
-
-        ;; Apply tilt rotation (about player pivot)
-        pivot [px 0.0 py]
-        tilt-rot (mat4/rotate-x plane-tilt-rad)
-        translate-pivot (mat4/translate pivot)
-        translate-back (mat4/translate (vec (map - pivot)))
-        model-tilt (mat4/mul translate-pivot (mat4/mul tilt-rot translate-back))
-        final-mvp (mat4/mul mvp model-tilt)
+        ;; Blend MVP. The geometry already lives in the 3D world (floor on
+        ;; xz plane), so the camera descent + projection blend IS the
+        ;; tip-over. Rotating the model by plane-tilt-rad as well would
+        ;; double the tilt and stand the floor up vertically at t=1;
+        ;; the morph's tilt value only drives wall extrusion timing now.
+        final-mvp (lerp-matrix-component mvp-ortho mvp-pers projection-blend)
 
         ;; Floor quads (untilted still)
         bg-count (quot (count bg) 9)
@@ -247,7 +294,7 @@
     (glplat/SetMatrix final-mvp)
 
     (when dump?
-      (when (or (< fall-t 0.01) (> fall-t 0.49) (< fall-t 0.51))
+      (when (or (< fall-t 0.01) (and (> fall-t 0.45) (< fall-t 0.55)))
         (print (str "XSOFY_GL_DUMP: falling frame t=" (format "%.2f" fall-t) "\n"))
         (print (str "  plane-tilt-rad: " (format "%.3f" plane-tilt-rad) "\n"))
         (print (str "  wall-height: " (format "%.3f" wall-height) "\n"))
@@ -275,7 +322,7 @@
 
         ;; Camera pose
         pose (fpview/fp-camera-pose [px py] facing)
-        fovy (/ 70.0 180.0 3.14159265359)  ; 70 degrees to radians
+        fovy (* 70.0 (/ 3.14159265359 180.0))  ; 70 degrees in radians
         aspect (/ 800.0 600.0)
         proj (mat4/perspective fovy aspect 0.05 60.0)
         view (mat4/look-at (:eye pose) (:target pose) (:up pose))
@@ -344,7 +391,7 @@
         dump? (boolean (os/getenv "XSOFY_GL_DUMP"))
         force-fall-str (os/getenv "XSOFY_GL_FORCE_FALL")
         force-fall-secs (when force-fall-str
-                         (parse-number force-fall-str -1.0))
+                          (parse-number force-fall-str -1.0))
 
         ;; Initialize GL
         _ (glplat/Init 800 600 "xsofy — GL Frontend")
@@ -404,9 +451,7 @@
                 ;; Render frame
                 (glplat/BeginFrame 0.1 0.1 0.15)
                 (case (:mode pres')
-                  :top-down (do
-                              (glplat/SetMatrix (mat4/ortho 0.0 39.5 30.0 0.0 -1.0 1.0))
-                              (render-top-down w-after-input tex-id atlas dump? frame))
+                  :top-down (render-top-down w-after-input tex-id atlas dump? frame)
                   :falling (render-falling w-after-input pres' t tex-id atlas dump?)
                   :fp (render-first-person w-after-input pres' tex-id atlas dump? frame)
                   (render-top-down w-after-input tex-id atlas dump? frame))
