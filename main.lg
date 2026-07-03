@@ -326,6 +326,9 @@
    gameplay seed chain — so this world replays identically to one made by
    new-game from the same seed."
   [seed title scheme quest]
+  ;; Fresh run: drop any prior run's camera so a same-depth/same-viewport
+  ;; restart re-centers on the player instead of inheriting the old offset.
+  (render/reset-camera!)
   (-> (world/make-world 79 30 seed)
       (assoc :title title
              :scheme scheme
