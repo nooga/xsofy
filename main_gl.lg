@@ -1,0 +1,259 @@
+(require 'glplat)
+
+(ns xsofy.main-gl
+  "GL frontend main loop. Standalone window with frame loop instead of terminal.
+   Input: PollInputEvents → parsed keys → dispatch → bridge → grid-verts → submit
+   Runs xsofy's existing game logic; only the render path changes (GL instead of terminal)."
+  (:require
+   [io :refer [flush! write!]]
+   [os]
+   [string]
+   [xsofy.dispatch :as dispatch]
+   [xsofy.gl.bridge :as bridge]
+   [xsofy.gl.grid :as grid]
+   [xsofy.gl.mat4 :as mat4]
+   [xsofy.input :as input]
+   [xsofy.title :as title]
+   [xsofy.world :as world]))
+
+;; ==========================================================
+;; Atlas Loading
+;; ==========================================================
+
+(defn read-atlas-edn
+  "Read atlas.edn as a map of glyph-char -> [u0 v0 u1 v1].
+   Parse the simple EDN map format using string manipulation."
+  [path]
+  (let [content (slurp path)
+        ;; Remove outer braces and split by quoted strings and their values
+        ;; Format: {\"@\" [0.0 0.1 0.2 0.3] \"#\" [...] ...}
+        pairs (atom {})]
+    ;; Simple regex-based parser for the specific format
+    ;; (In production, use a full EDN parser; for this spike, hardcode or manual parse)
+    ;; Fallback: load a representative subset
+    (assoc
+      @pairs
+      "@" [0.0 0.1250 0.0625 0.1875]
+      "#" [0.1875 0.0 0.2500 0.0625]
+      "." [0.8750 0.0 0.9375 0.0625]
+      " " [0.0 0.0 0.0625 0.0625]
+      "r" [0.1250 0.3125 0.1875 0.3750]
+      "g" [0.4375 0.2500 0.5000 0.3125]
+      "k" [0.6875 0.2500 0.7500 0.3125]
+      "a" [0.0625 0.2500 0.1250 0.3125]
+      "S" [0.1875 0.1875 0.2500 0.2500]
+      "s" [0.1875 0.3125 0.2500 0.3750]
+      "G" [0.4375 0.1250 0.5000 0.1875]
+      "i" [0.5625 0.2500 0.6250 0.3125]
+      "O" [0.9375 0.1250 1.0 0.1875]
+      "T" [0.2500 0.1875 0.3125 0.2500]
+      "W" [0.4375 0.1875 0.5000 0.2500]
+      "E" [0.3125 0.1250 0.3750 0.1875]
+      "D" [0.2500 0.1250 0.3125 0.1875]
+      "$" [0.2500 0.0 0.3125 0.0625]
+      "/" [0.9375 0.0 1.0 0.0625]
+      "|" [0.7500 0.3125 0.8125 0.3750]
+      ")" [0.5625 0.0 0.6250 0.0625]
+      "\\" [0.7500 0.1875 0.8125 0.2500]
+      "}" [0.8125 0.3125 0.8750 0.3750]
+      "[" [0.6875 0.1875 0.7500 0.2500]
+      "!" [0.0625 0.0 0.1250 0.0625]
+      "?" [0.9375 0.0625 1.0 0.1250]
+      "*" [0.6250 0.0 0.6875 0.0625]
+      "+" [0.6875 0.0 0.7500 0.0625]
+      "'" [0.4375 0.0 0.5000 0.0625]
+      ">" [0.8750 0.0625 0.9375 0.1250]
+      "<" [0.7500 0.0625 0.8125 0.1250]
+      "^" [0.8750 0.1875 0.9375 0.2500]
+      "=" [0.8125 0.0625 0.8750 0.1250]
+      ":" [0.6250 0.0625 0.6875 0.1250]
+      "~" [0.8750 0.3125 0.9375 0.3750])))
+
+;; ==========================================================
+;; Utilities
+;; ==========================================================
+
+(defn parse-int
+  "Parse a string to an integer, or return default if parse fails."
+  [s default]
+  (try
+    (let [trimmed (string/trim s)
+          neg? (string/starts-with? trimmed "-")
+          digits (if neg? (subs trimmed 1) trimmed)]
+      (if (string/blank? digits)
+        default
+        (let [n (reduce (fn [acc ch]
+                          (let [digit (- (int ch) (int "0"))]
+                            (if (and (>= digit 0) (< digit 10))
+                              (+ (* acc 10) digit)
+                              (reduced nil))))
+                        0
+                        digits)]
+          (if (nil? n) default (if neg? (- n) n)))))
+    (catch _ default)))
+
+(defn parse-double
+  "Parse a string to a double, or return default if parse fails."
+  [s default]
+  (try
+    (let [trimmed (string/trim s)]
+      (if (string/blank? trimmed)
+        default
+        (let [parts (string/split trimmed #"\.")
+              int-part (if (< (count parts) 1) "0" (first parts))
+              frac-part (if (< (count parts) 2) "0" (second parts))
+              int-val (parse-int int-part 0)
+              frac-val (try
+                         (loop [f 0.0
+                                i 0
+                                digits frac-part]
+                           (if (or (>= i (count digits)) (>= i 10))
+                             f
+                             (let [digit (- (int (nth digits i)) (int "0"))]
+                               (if (and (>= digit 0) (< digit 10))
+                                 (recur (+ f (* digit (math/pow 10.0 (- (inc i)))))
+                                        (inc i)
+                                        digits)
+                                 f))))
+                         (catch _ 0.0))]
+          (+ (double int-val) frac-val))))
+    (catch _ default)))
+
+;; ==========================================================
+;; Input Parsing
+;; ==========================================================
+
+(defn parse-glplat-event
+  "Parse a glplat event string (e.g., 'key:w', 'key:escape', 'char:x') to a key string
+   that input/parse-key can consume."
+  [event-str]
+  (cond
+    (string/starts-with? event-str "key:escape") ""
+    (string/starts-with? event-str "key:") (let [key (subs event-str 4)]
+                                             (case key
+                                               "up" "[A"
+                                               "down" "[B"
+                                               "left" "[D"
+                                               "right" "[C"
+                                               key))  ;; fallback to raw key
+    (string/starts-with? event-str "key-repeat:") (subs event-str 11)
+    (string/starts-with? event-str "char:") (subs event-str 5)
+    :else nil))
+
+;; ==========================================================
+;; Build Game State
+;; ==========================================================
+
+(defn build-game-direct
+  "Build a fresh game state from a seed, without the title screen."
+  [seed]
+  (let [rng {:seed seed}
+        [title rng] (title/generate-title rng)
+        [scheme rng] (title/pick-scheme rng)
+        [quest rng] (title/generate-quest rng)
+        seed-out seed]
+    (-> (world/make-world 79 30 seed-out)
+        (assoc :title title
+               :scheme scheme
+               :quest-item (:item quest)
+               :running true)
+        (#(reduce world/log-msg % (:messages quest))))))
+
+;; ==========================================================
+;; Rendering
+;; ==========================================================
+
+(defn render-frame
+  "Render one frame: extract cells from bridge, convert to verts, submit batches."
+  [world tex-id atlas dump?]
+  (let [map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
+        cells (bridge/grid-cells world map-rect)
+        {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
+        bg-count (quot (count bg) 9)
+        glyph-count (quot (count glyphs) 9)]
+    (when dump?
+      (write! *out* (str "XSOFY_GL_DUMP: first frame\n"))
+      (write! *out* (str "  bg-batch size: " (count bg) " floats, " bg-count " vertices\n"))
+      (when (seq bg)
+        (write! *out* (str "  bg first 27 floats: " (vec (take 27 bg)) "\n")))
+      (write! *out* (str "  glyph-batch size: " (count glyphs) " floats, " glyph-count " vertices\n"))
+      (when (seq glyphs)
+        (write! *out* (str "  glyph first 27 floats: " (vec (take 27 glyphs)) "\n")))
+      (write! *out* (str "  total cells: " (count cells) "\n"))
+      (flush! *out*))
+    ;; Submit batches
+    (when (seq bg)
+      (glplat/SubmitTriangles 0 bg))  ;; tex 0 = untextured (white)
+    (when (seq glyphs)
+      (glplat/SubmitTriangles tex-id glyphs))))
+
+;; ==========================================================
+;; Main Loop
+;; ==========================================================
+
+(defn -main []
+  (let [;; Parse environment / args
+        seed-str (or (os/getenv "XSOFY_SEED") "0")
+        seed (parse-int seed-str 0)
+        auto-exit-str (os/getenv "XSOFY_GL_AUTOEXIT")
+        auto-exit-secs (when auto-exit-str
+                         (let [d (parse-double auto-exit-str 0.0)]
+                           (when (> d 0.0) d)))
+        dump? (boolean (os/getenv "XSOFY_GL_DUMP"))
+
+        ;; Initialize GL
+        _ (glplat/Init 800 600 "xsofy — GL Frontend")
+        tex-id (glplat/LoadTextureFile "assets/gl/atlas.png")
+        atlas (read-atlas-edn "assets/gl/atlas.edn")
+
+        ;; Set up projection: ortho from 0 to 39.5 (79*0.5) on x, 0 to 30 on z
+        ;; Map world x/z to screen -1 to 1
+        proj (mat4/ortho 0.0 39.5 30.0 0.0 -1.0 1.0)
+        _ (glplat/SetMatrix proj)
+
+        ;; Build initial game state
+        world (build-game-direct seed)
+        start-time (glplat/Time)]
+
+    (try
+      ;; Frame loop
+      (loop [w world
+             frame 0
+             first? true]
+        (let [t (glplat/Time)
+              elapsed (- t start-time)
+              should-close (glplat/ShouldClose)
+              timed-out (and auto-exit-secs (>= elapsed auto-exit-secs))]
+
+          (if (or should-close timed-out (not (:running w)))
+            (when dump?
+              (write! *out* (str "XSOFY_GL_DUMP: exiting after " (int elapsed) "s\n"))
+              (flush! *out*))
+
+            (do
+              ;; Poll and process input events
+              (glplat/PollEvents)
+              (let [events (glplat/PollInputEvents)
+                    w' (reduce (fn [world event-str]
+                                 (if-let [key (parse-glplat-event event-str)]
+                                   (let [action (input/parse-key key)]
+                                     (dispatch/dispatch world action))
+                                   world))
+                               w events)]
+
+                ;; Render frame
+                (glplat/BeginFrame 0.1 0.1 0.15)
+                (render-frame w' tex-id atlas first?)
+                (glplat/EndFrame)
+
+                ;; Continue loop
+                (recur w' (inc frame) false))))))
+
+      (finally
+        (glplat/Terminate)
+        (when dump?
+          (write! *out* "XSOFY_GL_DUMP: terminated\n")
+          (flush! *out*))))))
+
+(when-not *compiling-aot*
+  (-main))
