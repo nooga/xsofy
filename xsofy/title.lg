@@ -107,23 +107,40 @@
         cy (quot th 2)
         tx (max 1 (- cx (quot (count title) 2)))
         sx (max 1 (- cx (quot (count subtitle) 2)))
-        title-fade (min 1.0 (/ (float frame) 20.0))]
-    ;; draw pulsing runes — each rune redraws only its own cell
+        title-fade (min 1.0 (/ (float frame) 20.0))
+        sline (when seed (str "seed " seed))
+        ssx (if sline (max 1 (- cx (quot (count sline) 2))) cx)
+        ;; Text "moat": the pulsing runes scatter to random cells (screenfx/
+        ;; scatter-runes) with no collision check, so some land on the title,
+        ;; "press any key", and seed rows — and because a faded rune redraws its
+        ;; cell as blank every frame, it eats the text under it. Keep runes out
+        ;; of a box covering all three text rows (cy, cy+2, cy+4) plus a 1-cell
+        ;; ring, sized to the widest line.
+        moat-x0 (- (min tx sx ssx) 1)
+        moat-x1 (+ (max (+ tx (count title))
+                        (+ sx (count subtitle))
+                        (+ ssx (count (or sline "")))) 1)
+        moat-y0 (- cy 1)
+        moat-y1 (+ cy 5)]
+    ;; draw pulsing runes — each redraws only its own cell; skip any inside the
+    ;; text moat so they never draw (or blank) over the title / subtitle / seed.
     (doseq [r runes]
-      (let [b (sfx/rune-brightness (:phase r) frame)
-            [cr cg cb] (:color r)
-            fr (int (* cr b))
-            fg (int (* cg b))
-            fb (int (* cb b))]
-        (term/move-cursor (:x r) (:y r))
-        (if (< b 0.05)
-          ;; dim enough to hide — draw blank
-          (do (term/set-fg 10 10 10)
-              (term/set-bg 10 10 10)
-              (term/write " "))
-          (do (term/set-fg fr fg fb)
-              (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
-              (term/write (:glyph r))))))
+      (when-not (and (>= (:x r) moat-x0) (<= (:x r) moat-x1)
+                     (>= (:y r) moat-y0) (<= (:y r) moat-y1))
+        (let [b (sfx/rune-brightness (:phase r) frame)
+              [cr cg cb] (:color r)
+              fr (int (* cr b))
+              fg (int (* cg b))
+              fb (int (* cb b))]
+          (term/move-cursor (:x r) (:y r))
+          (if (< b 0.05)
+            ;; dim enough to hide — draw blank
+            (do (term/set-fg 10 10 10)
+                (term/set-bg 10 10 10)
+                (term/write " "))
+            (do (term/set-fg fr fg fb)
+                (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
+                (term/write (:glyph r)))))))
     ;; title
     (term/move-cursor tx cy)
     (term/set-fg (int (* 255 title-fade)) (int (* 220 title-fade)) (int (* 120 title-fade)))
@@ -139,13 +156,11 @@
         (term/set-bg 10 10 10)
         (term/write subtitle)))
     ;; seed — dim, under the subtitle. Note it to replay this run via ?seed=.
-    (when (and seed (> frame 30))
-      (let [sline (str "seed " seed)
-            ssx (max 1 (- cx (quot (count sline) 2)))]
-        (term/move-cursor ssx (+ cy 4))
-        (term/set-fg 90 85 70)
-        (term/set-bg 10 10 10)
-        (term/write sline)))
+    (when (and sline (> frame 30))
+      (term/move-cursor ssx (+ cy 4))
+      (term/set-fg 90 85 70)
+      (term/set-bg 10 10 10)
+      (term/write sline))
     (term/flush)))
 
 (defn show-title-screen [rng]
