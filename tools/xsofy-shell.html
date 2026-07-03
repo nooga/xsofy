@@ -157,23 +157,34 @@
        Mirrors the .stats `justify-self: end` so both rows hug the right. */
     justify-self: end;
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    /* Column so the tile pins to the top-right corner and the player-option
+       chips stack UNDER it, rather than sitting to its left and floating the
+       tile to the vertical middle of a tall (2-line font chip) row. */
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.3rem;
   }
 
   /* Chip visibility is tier-gated (see the tier-visibility block below):
      font + repeat are always shown, force-touch is .dev-only. The OPTIONS
      tile carries no tier class, so it persists across every tier. */
-  /* OPTIONS tile — fixed width so OPTIONS →/BACK → don't reflow the info row,
-     with the same dashed border + dark offset as the action grid's .nav tile
-     so the swap affordance reads as chrome, not content. */
+  /* Options/back tile — a compact icon button (⚙ / ←) pinned top-right, with the
+     same dashed border + dark offset as the action grid's .nav tile so it reads
+     as chrome, not content. Square-ish so ⚙↔← don't reflow. */
   #xsofy-shell .shell-cycle {
     background: rgba(245, 176, 65, 0.02);
     border-style: dashed;
-    width: 6rem;
-    text-align: center;
+    width: 2.1rem;
+    min-height: 1.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
-  #xsofy-shell .shell-cycle .label { color: var(--bar-accent); }
+  #xsofy-shell .shell-cycle .label {
+    color: var(--bar-accent);
+    font-size: 1.05rem;
+    line-height: 1;
+  }
 
   /* Hold-to-repeat is a touch affordance — desktop keyboards have OS-level key
      repeat, so hide the toggle on a mouse/desktop pointer (still shown under
@@ -419,9 +430,14 @@
       <span class="diag-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
     </span>
     <div class="chips">
-      <!-- Player options live inside the OPTIONS panel (mode-debug), not always
-           on. Font size = accessibility. Hold-to-repeat is a touch affordance
-           (.touch-only) — hidden on desktop, where the OS handles key repeat. -->
+      <!-- Options tile first (top of the column) so it stays pinned top-right;
+           the player-option chips below tuck UNDER it (mode-debug). Icon toggles
+           ⚙ (open options) ↔ ← (back to play); the dev tier is URL-only. -->
+      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
+        <span class="label" id="xs-shell-cycle-label">⚙</span>
+      </button>
+      <!-- Player options: font size = accessibility; hold-to-repeat is a touch
+           affordance (.touch-only) — hidden on desktop, where the OS handles it. -->
       <button class="font-cycle debug-only touch-only" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
         <span class="glyph">↻</span><span id="xs-repeat-state">on</span>
       </button>
@@ -432,12 +448,6 @@
            touch UI on desktop/tablet-landscape for testing — not a player pref. -->
       <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
         <span class="glyph">▦</span><span id="xs-touch-state">off</span>
-      </button>
-      <!-- OPTIONS tile. Toggles the panel (mode-debug: font, repeat, build,
-           perf) at runtime; the dev tier is URL-only (?mode=dev). No tier
-           class, so it persists across every tier. -->
-      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Cycle options (play / debug)">
-        <span class="label" id="xs-shell-cycle-label">OPTIONS →</span>
       </button>
     </div>
   </div>
@@ -1013,9 +1023,9 @@
     // Old keys (xsofy/info-mode, xsofy/chip-page) are intentionally ignored.
     const SHELL_LS_KEY = "xsofy/shell-state";
     const SHELL_STATES = ["play", "debug"];
-    // Tile label names the action: "OPTIONS →" opens the options view, "BACK →"
-    // closes it (returns to the play view).
-    const STATE_LABEL = { play: "BACK", debug: "OPTIONS" };
+    // Tile icon names the action: ⚙ opens the options view, ← closes it (back
+    // to play). Shown for the *destination* tier (what tapping switches to).
+    const STATE_LABEL = { play: "←", debug: "⚙" };
     const shellRoot = document.getElementById("xsofy-shell");
     const cycleEl_ = $("xs-shell-cycle");
     const cycleLabelEl = $("xs-shell-cycle-label");
@@ -1037,11 +1047,10 @@
       shellRoot.classList.toggle("mode-dev", devMode);
       // Diagnostics (turn + perf) are URL-only — never surfaced by a runtime tap.
       shellRoot.classList.toggle("mode-urldiag", urlMode === "debug" || urlMode === "dev");
-      // Label names the destination — what tapping switches TO — matching the
-      // action-grid nav tile's convention.
+      // Icon names the destination — what tapping switches TO.
       if (cycleLabelEl) {
         const next = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
-        cycleLabelEl.textContent = STATE_LABEL[next] + " →";
+        cycleLabelEl.textContent = STATE_LABEL[next];
       }
     }
     applyShellState();
