@@ -507,7 +507,7 @@
              (if *in-wasm*
                (do
                  (render/render-hazard-prompt world "Start a new game?")
-                 (if (= (term/read-key) "y")
+                 (if (= (read-dismiss-key!) "y")
                    (let [w (new-game)]
                      (render/render-full w)
                      (recur w w (term/size)))
@@ -522,7 +522,7 @@
            (render/render-full world)
            (let [prompt (or (:hazard-prompt world) "Are you sure?")
                  k (do (render/render-hazard-prompt world prompt)
-                       (term/read-key))
+                       (read-dismiss-key!))
                  w (if (= k "y")
                      (world/confirm-hazard-step world)
                      (world/cancel-hazard-step world))]
@@ -536,7 +536,7 @@
                           "Are you sure you want to restart?"
                           "Are you sure you want to quit?")
                  k (do (render/render-hazard-prompt world prompt)
-                       (term/read-key))
+                       (read-dismiss-key!))
                  w (if (= k "y")
                      (if *in-wasm*
                        (new-game)
