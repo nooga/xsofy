@@ -107,15 +107,14 @@
   /* Two-row info bar. Single-row crammed title/quest/stats/chips into
      ~375px and lost the right half of both proper-noun strings on every
      phone. Grid layout:
-       row 1:  [ title ]   [ stats ]
-       row 2:  [ quest ]   [ chips ]
-     Stats sit next to the title because they're both gameplay info
-     (d/hp/turn-counter); the chip cluster sits bottom-right at thumb
-     reach. Each text element only competes with the small fixed-width
-     thing in its own row, so neither truncates the other.
-     The chip row holds the player options (font, repeat) plus the OPTIONS
-     tile always, and the dev-only force-touch chip under ?mode=dev — a small
-     fixed set, so the row stays single-line.
+       row 1:  [ title ]   [ tile ]
+       row 2:  [ quest ]   [ stats + option chips ]
+     The left column carries the proper-noun strings (title, quest) — each
+     only competes with the fixed-width col-2 cell in its own row, so neither
+     truncates. Col 2: the OPTIONS tile sits alone top-right (row 1); the
+     URL-gated perf stats plus the player options (font, repeat) and the
+     dev-only force-touch chip share ONE horizontal row beneath it (row 2) —
+     a small fixed set, so the row stays single-line.
      `minmax(0, 1fr)` lets the left column shrink below content width so
      text-overflow:ellipsis fires; without the explicit `0` minimum, grid
      would honor the auto track size and the ellipsis never triggers. */
@@ -146,21 +145,26 @@
     white-space: nowrap;
     min-width: 0;
   }
+  /* Row 1 / col 2 holds ONLY the OPTIONS/back tile, pinned top-right and alone.
+     justify-self: end snaps it to the right edge of column 2 (the auto track
+     otherwise sizes to the widest of its rows and floats the tile left). */
   #xsofy-shell .info .chips {
     grid-area: 1 / 2;
-    /* justify-self: end snaps the chips container to the right edge of
-       column 2. Without it, column 2 sizes to the widest of (chips, stats)
-       — in debug the perf stats are wider, so the chips sit left-aligned
-       inside a stats-sized column and visually float off the right edge.
-       Mirrors the .stats `justify-self: end` so both rows hug the right. */
     justify-self: end;
     display: flex;
-    /* Column so the tile pins to the top-right corner and the player-option
-       chips stack UNDER it, rather than sitting to its left and floating the
-       tile to the vertical middle of a tall (2-line font chip) row. */
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.3rem;
+  }
+  /* Row 2 / col 2: the URL-gated perf stats and the player-option chips share
+     ONE horizontal row, right-aligned — the tile sits above them in row 1.
+     A row (not the old column) keeps the bar short: stacking font/repeat/touch
+     vertically made ?mode=dev grow tall. Per-item tier classes still gate what
+     shows, so in play this row is empty. */
+  #xsofy-shell .info .debug-row {
+    grid-area: 2 / 2;
+    justify-self: end;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   /* Chip visibility is tier-gated (see the tier-visibility block below):
@@ -236,12 +240,13 @@
     user-select: text;
     -webkit-user-select: text;
   }
+  /* Perf/diagnostics — now a nested flex group inside the .chips row (no longer
+     its own grid cell), so it reads inline before the option chips. */
   #xsofy-shell .info .stats {
-    grid-area: 2 / 2;
-    justify-self: end;
-    color: var(--bar-accent);
     display: flex;
-    gap: 0.7rem;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--bar-accent);
     font-variant-numeric: tabular-nums;
   }
   #xsofy-shell .info .stats .k { color: var(--bar-dim); }
@@ -413,27 +418,33 @@
     <span class="title play-only" id="xs-title">—</span>
     <span class="quest play-only" id="xs-quest"></span>
     <span class="build debug-only" id="xs-build" title="Build provenance — written by local-scripts/deploy.sh"></span>
-    <span class="stats">
-      <!-- HP and depth used to live here (play-only), but the in-grid top bar
-           (sidebar when wide, top bar when narrow) now carries both, so the
-           browser chrome no longer duplicates them. title + quest stay — the
-           grid has no home for those. The bridge still emits hp/depth; they're
-           just not displayed here. -->
-      <span class="diag-only"><span class="k">t</span><span id="xs-turn">·</span></span>
-      <span class="diag-only" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
-      <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
-      <span class="diag-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
-      <span class="diag-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
-      <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
-      <span class="diag-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
-    </span>
     <div class="chips">
-      <!-- Options tile first (top of the column) so it stays pinned top-right;
-           the player-option chips below tuck UNDER it (mode-debug). Icon toggles
-           ⚙ (open options) ↔ ← (back to play); the dev tier is URL-only. -->
+      <!-- Row 1 / col 2: the OPTIONS/back tile, pinned top-right and alone.
+           Icon toggles ⚙ (open options) ↔ ← (back to play); dev tier is URL-only. -->
       <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
         <span class="label" id="xs-shell-cycle-label">⚙</span>
       </button>
+    </div>
+    <div class="debug-row">
+      <!-- Row 2 / col 2: URL-gated perf stats, then the player-option chips —
+           one horizontal row, right-aligned, sitting under the tile. Tier
+           classes gate each item, so this row is empty in play. -->
+      <span class="stats">
+        <!-- HP and depth used to live here (play-only), but the in-grid top bar
+             (sidebar when wide, top bar when narrow) now carries both, so the
+             browser chrome no longer duplicates them. title + quest stay — the
+             grid has no home for those. The bridge still emits hp/depth; they're
+             just not displayed here. -->
+        <span class="diag-only stat-hidden"><span class="k">t</span><span id="xs-turn">·</span></span>
+        <span class="diag-only stat-hidden" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
+        <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
+        <!-- cols×rows self-reveals (stat-hidden) once term-size fires; with no
+             value it stays hidden instead of showing dead middots. -->
+        <span class="diag-only stat-hidden" id="xs-dims"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
+      </span>
       <!-- Player options: font size = accessibility; hold-to-repeat is a touch
            affordance (.touch-only) — hidden on desktop, where the OS handles it. -->
       <button class="font-cycle debug-only touch-only" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
@@ -603,8 +614,10 @@
       const d = e.detail || {};
       titleEl.textContent = d.title || "—";
       questEl.textContent = nameOf(d.quest);
-      // Reset the turn counter on a new run — it fills in after the first tick.
+      // Reset the turn counter on a new run and re-hide it — it self-reveals
+      // after the first real tick, so the title never shows a dead "t·"/"t0".
       turnEl.textContent = "0";
+      turnEl.parentElement.classList.add("stat-hidden");
     });
 
     // @t reports the turn the perf measurements were taken for; by design
@@ -623,7 +636,7 @@
       // while @t lags t by the expected 1 turn and reveal it only on real drift.
       const inSync = lastTurn != null && lastPerfTurn != null
         && Number(lastTurn) - Number(lastPerfTurn) === 1;
-      perfTurnWrap.style.display = (lastPerfTurn == null || inSync) ? "none" : "";
+      perfTurnWrap.classList.toggle("stat-hidden", lastPerfTurn == null || inSync);
     }
 
     window.addEventListener("xsofy/stats", (e) => {
@@ -632,6 +645,7 @@
       // (the in-grid HUD carries them); only the debug turn counter reads here.
       if (d.turn != null) {
         turnEl.textContent = d.turn;
+        turnEl.parentElement.classList.remove("stat-hidden");  // self-reveal on the first real tick
         lastTurn = d.turn;
         paintPerfTurnDrift();
       }
@@ -642,10 +656,14 @@
     // surface at certain dimensions are reproducible without guesswork.
     const colsEl = $("xs-cols");
     const rowsEl = $("xs-rows");
+    const dimsEl = $("xs-dims");
     window.addEventListener("xsofy/term-size", (e) => {
       const d = e.detail || {};
       if (d.cols != null && colsEl) colsEl.textContent = d.cols;
       if (d.rows != null && rowsEl) rowsEl.textContent = d.rows;
+      // Self-reveal: only show cols×rows once it carries a real value, so the
+      // bar never displays a dead "·×·".
+      if (d.cols != null && d.rows != null) dimsEl?.classList.remove("stat-hidden");
     });
 
     // Per-turn engine vs render split. The total ms gauge in the map
