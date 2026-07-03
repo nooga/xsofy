@@ -1003,8 +1003,10 @@
 
     function applyShellState() {
       // mode-play stays as the permanent base class on the div; only the higher
-      // tiers toggle. dev is independent of the play↔debug cycle.
-      shellRoot.classList.toggle("mode-debug", currentShellState === "debug");
+      // tiers toggle. dev is a strict superset of debug — ?mode=dev pins mode-debug
+      // on regardless of the play↔debug cycle, so dev never shows less than debug
+      // (its force-touch chrome can't appear without the debug diagnostics under it).
+      shellRoot.classList.toggle("mode-debug", currentShellState === "debug" || devMode);
       shellRoot.classList.toggle("mode-dev", devMode);
       if (cycleDotsEl) {
         cycleDotsEl.textContent = SHELL_STATES.map((s) => s === currentShellState ? "●" : "○").join(" ");
