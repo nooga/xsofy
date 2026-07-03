@@ -92,6 +92,13 @@
 ;; Matrix Multiplication
 ;; ==========================================================
 
+(defn- mat-vec-dot [row vec4]
+  "Dot product of a matrix row (4 elements) with a vec4."
+  (+ (* (nth row 0) (nth vec4 0))
+     (* (nth row 1) (nth vec4 1))
+     (* (nth row 2) (nth vec4 2))
+     (* (nth row 3) (nth vec4 3))))
+
 (defn mul
   "Multiply two 4x4 matrices: m1 * m2 (m2 is applied first, column-major).
    Result is in column-major order as a 16-element flat vector."
@@ -106,13 +113,6 @@
                         (mat-vec-dot (nth rows row-idx) (nth cols col-idx)))
                       (range 4)))
               (range 4))))))
-
-(defn- mat-vec-dot [row vec4]
-  "Dot product of a matrix row (4 elements) with a vec4."
-  (+ (* (nth row 0) (nth vec4 0))
-     (* (nth row 1) (nth vec4 1))
-     (* (nth row 2) (nth vec4 2))
-     (* (nth row 3) (nth vec4 3))))
 
 (defn mul-v
   "Multiply 4x4 matrix by vec4: m * v. Returns transformed vec4."
@@ -196,13 +196,13 @@
 (defn ortho
   "Orthographic projection: left, right, bottom, top, near, far."
   [l r b t n f]
-  (let [rl (/ 2.0 (- r l))
-        tb (/ 2.0 (- t b))
+  (let [rl (/ 1.0 (- r l))
+        tb (/ 1.0 (- t b))
         nf (/ 1.0 (- n f))]
-    [(* rl 2.0) 0 0 0
-     0 (* tb 2.0) 0 0
-     0 0 nf 0
-     (- (* (+ r l) rl)) (- (* (+ t b) tb)) (* n nf) 1]))
+    [(* 2.0 rl) 0 0 0
+     0 (* 2.0 tb) 0 0
+     0 0 (* 2.0 nf) 0
+     (- (* (+ r l) rl)) (- (* (+ t b) tb)) (* (+ f n) nf) 1]))
 
 ;; ==========================================================
 ;; Camera Matrices
@@ -217,7 +217,7 @@
         u (v3-cross s f)
         tx (v3-dot s eye)
         ty (v3-dot u eye)
-        tz (v3-dot [(- (nth f 0)) (- (nth f 1)) (- (nth f 2))] eye)]
+        tz (v3-dot f eye)]
     [(nth s 0) (nth u 0) (- (nth f 0)) 0
      (nth s 1) (nth u 1) (- (nth f 1)) 0
      (nth s 2) (nth u 2) (- (nth f 2)) 0

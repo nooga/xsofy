@@ -93,21 +93,26 @@
     (let [i (m/identity-m)]
       (is (= 16 (count i))))))
 
-;; NOTE: Matrix multiplication tests (identity * m = m, etc.) are commented out
-;; pending investigation of the mul function. The core vec3 and basic matrix
-;; functions work correctly. Matrix composition is tested implicitly in the
-;; transform and projection tests.
-;; (deftest identity-m-mul-identity
-;;   (testing "identity * m = m"
-;;     (let [i (m/identity-m)
-;;           m [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]]
-;;       (is (approx-vec= m (m/mul i m))))))
-;;
-;; (deftest m-mul-identity
-;;   (testing "m * identity = m"
-;;     (let [i (m/identity-m)
-;;           m [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]]
-;;       (is (approx-vec= m (m/mul m i))))))
+(deftest identity-m-mul-identity
+  (testing "identity * m = m"
+    (let [i (m/identity-m)
+          mm [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]]
+      (is (approx-vec= mm (m/mul i mm))))))
+
+(deftest m-mul-identity
+  (testing "m * identity = m"
+    (let [i (m/identity-m)
+          mm [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]]
+      (is (approx-vec= mm (m/mul mm i))))))
+
+(deftest mul-composes-with-mul-v
+  (testing "(mul a b) applied to v equals a applied to (b applied to v)"
+    (let [a (m/translate [1 2 3])
+          b (m/rotate-z (/ 3.14159265359 2))
+          v [1 0 0 1]
+          via-mul (m/mul-v (m/mul a b) v)
+          via-steps (m/mul-v a (m/mul-v b v))]
+      (is (approx-vec= via-steps via-mul)))))
 
 ;; ==========================================================
 ;; Matrix-Vector Multiplication
@@ -251,6 +256,14 @@
       (is (approx= 0 (nth v 0)))
       (is (approx= 0 (nth v 1))))))
 
+(deftest ortho-corners-map-to-ndc-corners
+  (testing "ortho maps frustum corners to NDC corners (asymmetric bounds)"
+    (let [o (m/ortho 0 10 0 5 1 100)
+          lo (m/mul-v o [0 0 -1 1])
+          hi (m/mul-v o [10 5 -100 1])]
+      (is (approx-vec= [-1 -1 -1 1] lo))
+      (is (approx-vec= [1 1 1 1] hi)))))
+
 ;; ==========================================================
 ;; Look-At
 ;; ==========================================================
@@ -267,3 +280,13 @@
           up [0 1 0]
           la (m/look-at eye target up)]
       (is (= 16 (count la))))))
+
+(deftest look-at-maps-eye-to-origin
+  (testing "view matrix maps the eye point to the view-space origin"
+    (let [la (m/look-at [0 0 5] [0 0 0] [0 1 0])]
+      (is (approx-vec= [0 0 0 1] (m/mul-v la [0 0 5 1]))))))
+
+(deftest look-at-target-in-front
+  (testing "the target lies on -z in view space at distance |eye-target|"
+    (let [la (m/look-at [0 0 5] [0 0 0] [0 1 0])]
+      (is (approx-vec= [0 0 -5 1] (m/mul-v la [0 0 0 1]))))))
