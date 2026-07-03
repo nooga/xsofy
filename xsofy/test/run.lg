@@ -8,6 +8,7 @@
    [xsofy.test.det-test]
    [xsofy.test.dispatch-test]
    [xsofy.test.fall-test]
+   [xsofy.test.grid-test]
    [xsofy.test.hash-test]
    [xsofy.test.input-test]
    [xsofy.test.invariant-test]
