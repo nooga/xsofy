@@ -1,0 +1,84 @@
+(ns xsofy.gl.fall
+  "Parametric playfield-fall transition for level 2 entry. Pure functions
+   mapping game state + animation parameter t into camera/geometry config.
+
+   At t=0: top-down ortho view over glyph plane, walls flat, no tilt.
+   At t=1: plane tips 90° to become the floor, camera behind player at eye level
+           facing the player's heading, walls extrude 1 world unit.")
+
+;; ==========================================================
+;; Easing
+;; ==========================================================
+
+(defn ease
+  "Smoothstep easing: 3t² - 2t³. Maps [0,1] → [0,1] smoothly."
+  [t]
+  (let [t (max 0.0 (min 1.0 (float t)))]
+    (- (* 3 (* t t)) (* 2 (* t (* t t))))))
+
+;; ==========================================================
+;; Playfield Morph Parameters
+;; ==========================================================
+
+(defn morph
+  "Parametric playfield fall: t ∈ [0,1] animates from top-down to first-person.
+
+   Input map:
+     :t           — animation parameter [0,1]
+     :grid-w      — playfield width in cells
+     :grid-h      — playfield height in cells
+     :player      — player position [px py]
+     :heading     — :north/:south/:east/:west
+
+   Returns map:
+     :plane-tilt-rad  — tilt angle in radians (0 at t=0, π/2 at t=1)
+     :wall-height     — wall extrusion in world units (0 at t=0, 1 at t=1)
+     :camera          — {:eye [x y z] :target [x y z] :up [x y z]}
+     :projection-blend — ortho/perspective blend (0 at t=0, 1 at t=1)"
+  [{:keys [t grid-w grid-h player heading]}]
+  (let [t-eased (ease t)
+        [px py] player
+
+        ;; Plane tilt: 0 → π/2 radians as t goes 0 → 1
+        tilt-rad (* (/ 3.14159265359 2.0) t-eased)
+
+        ;; Wall height: 0 → 1 world unit
+        wall-height t-eased
+
+        ;; Playfield center in world space
+        field-cx (* (+ grid-w 1) 0.5)
+        field-cy (* (+ grid-h 1) 0.5)
+
+        ;; At t=0: camera overhead, looking down
+        ;; At t=1: camera behind player at eye level (~0.5 units), facing heading
+        cam-dist 5.0  ;; distance from player (in world units)
+        cam-height (+ 0.5 (* 3.0 (- 1.0 t-eased)))  ;; 3.5 down to 0.5
+        cam-behind 0.3  ;; offset behind player
+
+        ;; Camera position depends on player heading
+        ;; Camera is always BEHIND the player facing their heading direction
+        cam-offset-x (case heading
+                       :north 0
+                       :south 0
+                       :east (- cam-dist)
+                       :west cam-dist
+                       0)
+        cam-offset-z (case heading
+                       :north cam-dist
+                       :south (- cam-dist)
+                       :east 0
+                       :west 0
+                       0)
+
+        cam-eye [(+ (float px) cam-offset-x)
+                 cam-height
+                 (+ (float py) cam-offset-z)]
+        cam-target [(float px) 0.5 (float py)]
+        cam-up [0 1 0]]
+
+    {:plane-tilt-rad tilt-rad
+     :wall-height wall-height
+     :camera {:eye cam-eye
+              :target cam-target
+              :up cam-up}
+     :projection-blend t-eased}))
