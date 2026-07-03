@@ -52,15 +52,4 @@ runs:
     #    from 404-ing — the smoke gate counts any console error as a failure.
     - name: Write build-info.json
       shell: bash
-      run: |
-        letgo="unknown"
-        if [ -f .let-go-version ]; then
-          letgo="$(awk '!/^[[:space:]]*(#|$)/ {print $1; exit}' .let-go-version)"
-        fi
-        cat > "${{ inputs.dist }}/build-info.json" <<JSON
-        {
-          "xsofy": "$(git rev-parse HEAD)",
-          "let-go": "$letgo",
-          "date": "$(date -u +%Y-%m-%d)"
-        }
-        JSON
+      run: bash tools/write-build-info.sh "${{ inputs.dist }}"
