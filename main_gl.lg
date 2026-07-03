@@ -1,17 +1,21 @@
 (require 'glplat)
 
 (ns xsofy.main-gl
-  "GL frontend main loop. Standalone window with frame loop instead of terminal.
-   Input: PollInputEvents → parsed keys → dispatch → bridge → grid-verts → submit
-   Runs xsofy's existing game logic; only the render path changes (GL instead of terminal)."
+  "GL frontend main loop with level-2 transition and first-person mode.
+   Presentation state machine: :top-down (default) → :falling (anim) → :fp.
+   Game logic unchanged; animation/input remapping are presentation-only.
+   Input: PollInputEvents → input remapping (FP-specific) → dispatch → bridge → grid-verts → submit"
   (:require
    [os]
    [string]
    [xsofy.dispatch :as dispatch]
    [xsofy.gl.bridge :as bridge]
+   [xsofy.gl.fall :as fall]
+   [xsofy.gl.fpview :as fpview]
    [xsofy.gl.grid :as grid]
    [xsofy.gl.mat4 :as mat4]
    [xsofy.input :as input]
+   [xsofy.terrain :as terrain]
    [xsofy.title :as title]
    [xsofy.world :as world]))
 
@@ -83,31 +87,247 @@
         (#(reduce world/log-msg % (:messages quest))))))
 
 ;; ==========================================================
-;; Rendering
+;; Presentation State Machine
 ;; ==========================================================
 
-(defn render-frame
-  "Render one frame: extract cells from bridge, convert to verts, submit batches."
-  [world tex-id atlas dump?]
+(defn make-pres-state
+  "Create initial presentation state (top-down mode, no animation)."
+  []
+  {:mode :top-down        ; :top-down | :falling | :fp
+   :facing :north         ; Current facing direction (:north/:south/:east/:west)
+   :fall-start nil        ; Wall-clock time fall animation started (if :falling)
+   :fall-duration 2.5})   ; Duration in seconds
+
+(defn advance-pres-state
+  "Advance presentation state machine: check for depth change, update animations."
+  [pres-state world prev-world current-time force-fall-at]
+  (let [depth (:depth world)
+        prev-depth (:depth prev-world)
+        in-falling-window (and (some? force-fall-at)
+                               (>= current-time force-fall-at)
+                               (< current-time (+ force-fall-at 3.0)))]
+    (cond
+      ;; Depth increased: start falling
+      (or (> depth prev-depth) in-falling-window)
+      (assoc pres-state :mode :falling :fall-start current-time)
+
+      ;; If in falling mode, check if animation complete
+      (= (:mode pres-state) :falling)
+      (let [fall-time (- current-time (:fall-start pres-state))
+            fall-t (min 1.0 (/ fall-time (:fall-duration pres-state)))]
+        (if (>= fall-t 1.0)
+          (assoc pres-state :mode :fp)  ; Animation complete, enter FP
+          pres-state))
+
+      :else pres-state)))
+
+;; ==========================================================
+;; Rendering Helpers
+;; ==========================================================
+
+(defn is-wall-tile [tile]
+  "Check if a tile should be rendered as a 3D wall."
+  (or (= tile 8) (= tile 9)))  ; wall-stone and wall-torch
+
+(defn build-wall-batch
+  "Collect wall vertices for all wall cells in the visible grid."
+  [world atlas]
+  (let [{:keys [terrain width height fov]} world
+        verts (atom [])]
+    (dotimes [row height]
+      (dotimes [col width]
+        (when (contains? fov [col row])
+          (let [tile (terrain/tget terrain width col row)]
+            (when (is-wall-tile tile)
+              (let [wall-verts (grid/wall-extrude-verts
+                                 {:col col :row row :glyph (get terrain/tile-chars tile "?")}
+                                 1.0 atlas {:cell-w 0.5 :cell-h 1.0})]
+                (when (seq wall-verts)
+                  (swap! verts concat wall-verts))))))))
+    (vec @verts)))
+
+(defn build-entity-batch
+  "Collect entity billboard vertices for visible entities (not player)."
+  [world atlas yaw]
+  (let [{:keys [entities fov]} world
+        ents (filter #(and (not= :item (:entity-type %))
+                           (not= :player (:id %)))
+                     (vals entities))
+        verts (atom [])]
+    (doseq [ent ents]
+      (when-let [pos (:pos ent)]
+        (when (contains? fov pos)
+          (let [glyph (get-in ent [:visual :glyph] "?")
+                fg (get-in ent [:visual :color] [200 60 60])
+                entity-cell {:col (nth pos 0) :row (nth pos 1) :glyph glyph :fg fg}
+                bill-verts (fpview/entity-billboard entity-cell yaw atlas {:cell-w 0.5 :cell-h 1.0})]
+            (when (seq bill-verts)
+              (swap! verts concat bill-verts))))))
+    (vec @verts)))
+
+(defn lerp-matrix-component
+  "Component-wise linear interpolation between two matrices."
+  [m0 m1 t]
+  (vec (map (fn [i] (+ (get m0 i) (* t (- (get m1 i) (get m0 i)))))
+            (range 16))))
+
+(defn render-top-down
+  "Render top-down view with ortho projection."
+  [world tex-id atlas dump? frame]
   (let [map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
         cells (bridge/grid-cells world map-rect)
         {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
         bg-count (quot (count bg) 9)
         glyph-count (quot (count glyphs) 9)]
     (when dump?
-      (print (str "XSOFY_GL_DUMP: first frame\n"))
-      (print (str "  bg-batch size: " (count bg) " floats, " bg-count " vertices\n"))
-      (when (seq bg)
-        (print (str "  bg first 27 floats: " (vec (take 27 bg)) "\n")))
-      (print (str "  glyph-batch size: " (count glyphs) " floats, " glyph-count " vertices\n"))
-      (when (seq glyphs)
-        (print (str "  glyph first 27 floats: " (vec (take 27 glyphs)) "\n")))
-      (print (str "  total cells: " (count cells) "\n")))
+      (when (= frame 0)
+        (print (str "XSOFY_GL_DUMP: top-down frame 0\n"))
+        (print (str "  bg-batch: " (count bg) " floats, " bg-count " vertices\n"))
+        (print (str "  glyph-batch: " (count glyphs) " floats, " glyph-count " vertices\n"))
+        (print (str "  total cells: " (count cells) "\n"))))
     ;; Submit batches
     (when (seq bg)
-      (glplat/SubmitTriangles 0 bg))  ;; tex 0 = untextured (white)
+      (glplat/SubmitTriangles 0 bg))
     (when (seq glyphs)
       (glplat/SubmitTriangles tex-id glyphs))))
+
+(defn render-falling
+  "Render morphing view: blended camera, tilted geometry, extruding walls."
+  [world pres-state current-time tex-id atlas dump?]
+  (let [fall-time (- current-time (:fall-start pres-state))
+        fall-duration (:fall-duration pres-state)
+        fall-t (min 1.0 (/ fall-time fall-duration))
+
+        ;; Grid setup
+        map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
+        cells (bridge/grid-cells world map-rect)
+        {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
+
+        ;; Player position for morph
+        [px py] (get-in world [:entities :player :pos])
+        grid-w (:width world)
+        grid-h (:height world)
+
+        ;; Get morph parameters
+        morph-params (fall/morph {:t fall-t :grid-w grid-w :grid-h grid-h
+                                  :player [px py] :heading (:facing pres-state)})
+        {:keys [plane-tilt-rad wall-height camera projection-blend]} morph-params
+
+        ;; Build ortho and perspective MVPs
+        proj-ortho (mat4/ortho 0.0 39.5 30.0 0.0 -1.0 1.0)
+        view-ortho (mat4/identity-m)
+        mvp-ortho (mat4/mul proj-ortho view-ortho)
+
+        ;; Perspective MVP
+        fovy (/ 70.0 180.0 3.14159265359)  ; 70 degrees to radians
+        aspect (/ 800.0 600.0)
+        proj-pers (mat4/perspective fovy aspect 0.05 60.0)
+        view-pers (mat4/look-at (:eye camera) (:target camera) (:up camera))
+        mvp-pers (mat4/mul proj-pers view-pers)
+
+        ;; Blend MVP
+        mvp (lerp-matrix-component mvp-ortho mvp-pers projection-blend)
+
+        ;; Apply tilt rotation (about player pivot)
+        pivot [px 0.0 py]
+        tilt-rot (mat4/rotate-x plane-tilt-rad)
+        translate-pivot (mat4/translate pivot)
+        translate-back (mat4/translate (vec (map - pivot)))
+        model-tilt (mat4/mul translate-pivot (mat4/mul tilt-rot translate-back))
+        final-mvp (mat4/mul mvp model-tilt)
+
+        ;; Floor quads (untilted still)
+        bg-count (quot (count bg) 9)
+        glyph-count (quot (count glyphs) 9)
+
+        ;; Wall batch
+        wall-verts (build-wall-batch world atlas)
+        wall-count (quot (count wall-verts) 9)]
+
+    (glplat/SetMatrix final-mvp)
+
+    (when dump?
+      (when (or (< fall-t 0.01) (> fall-t 0.49) (< fall-t 0.51))
+        (print (str "XSOFY_GL_DUMP: falling frame t=" (format "%.2f" fall-t) "\n"))
+        (print (str "  plane-tilt-rad: " (format "%.3f" plane-tilt-rad) "\n"))
+        (print (str "  wall-height: " (format "%.3f" wall-height) "\n"))
+        (print (str "  camera eye: " (:eye camera) "\n"))
+        (print (str "  bg-batch: " bg-count " verts, wall-batch: " wall-count " verts\n"))
+        (when (and (seq wall-verts) (= wall-count 0))
+          (print "WARN: wall-verts non-empty but wall-count is 0\n"))
+        (when (and (> (count wall-verts) 0) (= wall-count 0))
+          (print "WARN: walls expected but wall-count is 0\n"))))
+
+    ;; Submit batches in order: bg, walls, glyphs
+    (when (seq bg)
+      (glplat/SubmitTriangles 0 bg))
+    (when (seq wall-verts)
+      (glplat/SubmitTriangles tex-id wall-verts))
+    (when (seq glyphs)
+      (glplat/SubmitTriangles tex-id glyphs))))
+
+(defn render-first-person
+  "Render first-person view: perspective camera, billboarded entities."
+  [world pres-state tex-id atlas dump? frame]
+  (let [;; Player position
+        [px py] (get-in world [:entities :player :pos])
+        facing (:facing pres-state)
+
+        ;; Camera pose
+        pose (fpview/fp-camera-pose [px py] facing)
+        fovy (/ 70.0 180.0 3.14159265359)  ; 70 degrees to radians
+        aspect (/ 800.0 600.0)
+        proj (mat4/perspective fovy aspect 0.05 60.0)
+        view (mat4/look-at (:eye pose) (:target pose) (:up pose))
+        mvp (mat4/mul proj view)
+
+        ;; Geometry
+        map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
+        cells (bridge/grid-cells world map-rect)
+        {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
+
+        ;; Walls: only render visible wall cells
+        wall-verts (build-wall-batch world atlas)
+
+        ;; Billboards for entities
+        yaw (fpview/facing-to-angle facing)
+        entity-verts (build-entity-batch world atlas yaw)
+
+        bg-count (quot (count bg) 9)
+        glyph-count (quot (count glyphs) 9)
+        wall-count (quot (count wall-verts) 9)
+        entity-count (quot (count entity-verts) 9)]
+
+    (glplat/SetMatrix mvp)
+
+    (when dump?
+      (when (= frame 0)
+        (print (str "XSOFY_GL_DUMP: first-person frame 0\n"))
+        (print (str "  camera eye: " (:eye pose) "\n"))
+        (print (str "  facing: " facing "\n"))
+        (print (str "  bg-batch: " bg-count " verts\n"))
+        (print (str "  wall-batch: " wall-count " verts\n"))
+        (print (str "  entity-batch: " entity-count " verts\n"))
+        (when (= entity-count 0)
+          (print "INFO: no entity billboards in frame (ok for empty level)\n"))))
+
+    ;; Submit batches: floors, walls, entities, glyphs
+    (when (seq bg)
+      (glplat/SubmitTriangles 0 bg))
+    (when (seq wall-verts)
+      (glplat/SubmitTriangles tex-id wall-verts))
+    (when (seq entity-verts)
+      (glplat/SubmitTriangles tex-id entity-verts))
+    (when (seq glyphs)
+      (glplat/SubmitTriangles tex-id glyphs))))
+
+(defn apply-screenfx-tint
+  "Draw a full-screen tint quad if there's an active flash effect.
+   Rendered last with z=-0.999 for depth handling."
+  [world tex-id]
+  ;; TODO: screenfx accessor + tint quad rendering
+  ;; Placeholder for now (no active flashes in Level 1)
+  nil)
 
 ;; ==========================================================
 ;; Main Loop
@@ -122,53 +342,78 @@
                          (let [d (parse-number auto-exit-str 0.0)]
                            (when (> d 0.0) d)))
         dump? (boolean (os/getenv "XSOFY_GL_DUMP"))
+        force-fall-str (os/getenv "XSOFY_GL_FORCE_FALL")
+        force-fall-secs (when force-fall-str
+                         (parse-number force-fall-str -1.0))
 
         ;; Initialize GL
         _ (glplat/Init 800 600 "xsofy — GL Frontend")
         tex-id (glplat/LoadTextureFile "assets/gl/atlas.png")
         atlas (read-atlas-edn "assets/gl/atlas.edn")
 
-        ;; Set up projection: ortho from 0 to 39.5 (79*0.5) on x, 0 to 30 on z
-        ;; Map world x/z to screen -1 to 1
-        proj (mat4/ortho 0.0 39.5 30.0 0.0 -1.0 1.0)
-        _ (glplat/SetMatrix proj)
-
         ;; Build initial game state
         world (build-game-direct seed)
-        start-time (glplat/Time)]
+        start-time (glplat/Time)
+
+        ;; Compute force-fall trigger time (absolute wall-clock, or nil)
+        force-fall-at (when (and force-fall-secs (>= force-fall-secs 0.0))
+                        (+ start-time force-fall-secs))]
 
     (try
       ;; Frame loop
       (loop [w world
-             frame 0
-             first? true]
+             pres (make-pres-state)
+             frame 0]
         (let [t (glplat/Time)
               elapsed (- t start-time)
               should-close (glplat/ShouldClose)
-              timed-out (and auto-exit-secs (>= elapsed auto-exit-secs))]
+              timed-out (and auto-exit-secs (>= elapsed auto-exit-secs))
+              depth-prev (:depth w)]
 
           (if (or should-close timed-out (not (:running w)))
             (when dump?
-              (print (str "XSOFY_GL_DUMP: exiting after " (int elapsed) "s\n")))
+              (print (str "XSOFY_GL_DUMP: exiting after " (int elapsed) "s, mode: " (:mode pres) "\n")))
 
             (do
               ;; Poll and process input events
               (glplat/PollEvents)
               (let [events (glplat/PollInputEvents)
-                    w' (reduce (fn [world event-str]
-                                 (if-let [key (parse-glplat-event event-str)]
-                                   (let [action (input/parse-key key)]
-                                     (dispatch/dispatch world action))
-                                   world))
-                               w events)]
+                    ;; Process input: accumulate world changes and presentation facing
+                    [w-after-input pres-with-facing]
+                    (reduce (fn [[world pres-acc] event-str]
+                              (if-let [key (parse-glplat-event event-str)]
+                                (let [action (input/parse-key key)]
+                                  (if (= (:mode pres-acc) :fp)
+                                    ;; FP input remapping
+                                    (let [remapped (fpview/remap-fp-input action (:facing pres-acc))
+                                          final-action (:action remapped)
+                                          new-facing (:facing remapped)
+                                          pres-updated (assoc pres-acc :facing new-facing)
+                                          world-updated (if final-action
+                                                          (dispatch/dispatch world final-action)
+                                                          world)]
+                                      [world-updated pres-updated])
+                                    ;; Top-down / falling: normal dispatch
+                                    [(dispatch/dispatch world action) pres-acc]))
+                                [world pres-acc]))
+                            [w pres] events)
+
+                    ;; Advance presentation state (check for depth change)
+                    pres' (advance-pres-state pres-with-facing w w-after-input t force-fall-at)]
 
                 ;; Render frame
                 (glplat/BeginFrame 0.1 0.1 0.15)
-                (render-frame w' tex-id atlas first?)
+                (case (:mode pres')
+                  :top-down (do
+                              (glplat/SetMatrix (mat4/ortho 0.0 39.5 30.0 0.0 -1.0 1.0))
+                              (render-top-down w-after-input tex-id atlas dump? frame))
+                  :falling (render-falling w-after-input pres' t tex-id atlas dump?)
+                  :fp (render-first-person w-after-input pres' tex-id atlas dump? frame)
+                  (render-top-down w-after-input tex-id atlas dump? frame))
                 (glplat/EndFrame)
 
                 ;; Continue loop
-                (recur w' (inc frame) false))))))
+                (recur w-after-input pres' (inc frame)))))))
 
       (finally
         (glplat/Terminate)

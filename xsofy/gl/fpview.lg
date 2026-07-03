@@ -1,0 +1,201 @@
+(ns xsofy.gl.fpview
+  "First-person view presentation layer. Manages camera poses, billboards,
+   and input remapping for dungeon-crawler controls (up/down/left/right for
+   move/turn, dungeon-crawler style)."
+  (:require
+   [xsofy.gl.mat4 :as mat4]))
+
+;; ==========================================================
+;; FP Input Mapping
+;; ==========================================================
+
+(defn turn-left [facing]
+  "Rotate facing 90° counter-clockwise."
+  (case facing
+    :north :west
+    :west :south
+    :south :east
+    :east :north
+    :north))
+
+(defn turn-right [facing]
+  "Rotate facing 90° clockwise."
+  (case facing
+    :north :east
+    :east :south
+    :south :west
+    :west :north
+    :north))
+
+(defn remap-fp-input
+  "In first-person mode, remap input to dungeon-crawler controls.
+   :up/:k = step forward in facing direction
+   :down/:j = step backward (opposite of facing direction)
+   :left/:h = turn left in place (no dispatch)
+   :right/:l = turn right in place (no dispatch)
+   .:wait, <:ascend, >:descend preserved as-is
+
+   Returns {:action action-keyword-or-nil, :facing new-facing, :turn-only bool}.
+   :turn-only = true means facing changed but no dispatch occurred."
+  [key-action current-facing]
+  (case key-action
+    ;; Forward/backward movement (maps to cardinal directions)
+    :up (case current-facing
+          :north {:action :north :facing current-facing :turn-only false}
+          :south {:action :south :facing current-facing :turn-only false}
+          :east {:action :east :facing current-facing :turn-only false}
+          :west {:action :west :facing current-facing :turn-only false}
+          {:action nil :facing current-facing :turn-only false})
+    :k (case current-facing
+         :north {:action :north :facing current-facing :turn-only false}
+         :south {:action :south :facing current-facing :turn-only false}
+         :east {:action :east :facing current-facing :turn-only false}
+         :west {:action :west :facing current-facing :turn-only false}
+         {:action nil :facing current-facing :turn-only false})
+
+    ;; Backward movement
+    :down (case current-facing
+            :north {:action :south :facing current-facing :turn-only false}
+            :south {:action :north :facing current-facing :turn-only false}
+            :east {:action :west :facing current-facing :turn-only false}
+            :west {:action :east :facing current-facing :turn-only false}
+            {:action nil :facing current-facing :turn-only false})
+    :j (case current-facing
+         :north {:action :south :facing current-facing :turn-only false}
+         :south {:action :north :facing current-facing :turn-only false}
+         :east {:action :west :facing current-facing :turn-only false}
+         :west {:action :east :facing current-facing :turn-only false}
+         {:action nil :facing current-facing :turn-only false})
+
+    ;; Turn in place (presentation-only, no dispatch)
+    :left (let [new-facing (turn-left current-facing)]
+            {:action nil :facing new-facing :turn-only true})
+    :h (let [new-facing (turn-left current-facing)]
+         {:action nil :facing new-facing :turn-only true})
+
+    :right (let [new-facing (turn-right current-facing)]
+             {:action nil :facing new-facing :turn-only true})
+    :l (let [new-facing (turn-right current-facing)]
+         {:action nil :facing new-facing :turn-only true})
+
+    ;; Preserved actions
+    :wait {:action :wait :facing current-facing :turn-only false}
+    ". " {:action :wait :facing current-facing :turn-only false}
+    :ascend {:action :ascend :facing current-facing :turn-only false}
+    :<  {:action :ascend :facing current-facing :turn-only false}
+    :descend {:action :descend :facing current-facing :turn-only false}
+    :>  {:action :descend :facing current-facing :turn-only false}
+
+    ;; Everything else passes through unchanged, preserving facing
+    {:action key-action :facing current-facing :turn-only false}))
+
+;; ==========================================================
+;; Camera Pose and Animation
+;; ==========================================================
+
+(defn facing-to-angle
+  "Convert facing direction to yaw angle in radians (0 = -z, π/2 = +x).
+   Used for camera rotation and billboard facing."
+  [facing]
+  (case facing
+    :north 0.0
+    :east (* 0.5 3.14159265359)      ; π/2
+    :south 3.14159265359              ; π
+    :west (* 1.5 3.14159265359)       ; 3π/2
+    0.0))
+
+(defn player-cell-center
+  "World position of player cell center at floor level (y=0).
+   Cell (col, row) with cell-w=0.5, cell-h=1.0:
+   x = col * 0.5 + 0.25, z = row * 1.0 + 0.5"
+  [player-pos]
+  (let [[col row] player-pos]
+    [(+ (* (float col) 0.5) 0.25)
+     (+ (* (float row) 1.0) 0.5)]))
+
+(defn fp-camera-pose
+  "Compute FP camera pose for a given facing and player position.
+   Returns {:eye [x y z] :target [x y z] :up [x y z]}.
+   Eye is at height 0.5 above player cell center, positioned behind and facing forward."
+  [player-pos facing]
+  (let [eye-height 0.5
+        [px pz] (player-cell-center player-pos)
+        py eye-height
+
+        ;; Camera positioned 1 unit back along -facing direction, looking at player center
+        offset (case facing
+                 :north [0 0 -0.8]   ; looking +z, camera at -z
+                 :south [0 0 0.8]
+                 :east [1.0 0 0]
+                 :west [-1.0 0 0]
+                 [0 0 0])
+        [ox _ oz] offset
+        cam-eye [(+ px ox) py (+ pz oz)]
+        cam-target [px py pz]
+        cam-up [0 1 0]]
+    {:eye cam-eye :target cam-target :up cam-up}))
+
+(defn lerp-pose
+  "Linear interpolation between two camera poses. t ∈ [0, 1]."
+  [pose0 pose1 t]
+  (let [eye0 (:eye pose0) eye1 (:eye pose1)
+        tgt0 (:target pose0) tgt1 (:target pose1)
+        eye [(+ (get eye0 0) (* t (- (get eye1 0) (get eye0 0))))
+             (+ (get eye0 1) (* t (- (get eye1 1) (get eye0 1))))
+             (+ (get eye0 2) (* t (- (get eye1 2) (get eye0 2))))]
+        tgt [(+ (get tgt0 0) (* t (- (get tgt1 0) (get tgt0 0))))
+             (+ (get tgt0 1) (* t (- (get tgt1 1) (get tgt0 1))))
+             (+ (get tgt0 2) (* t (- (get tgt1 2) (get tgt0 2))))]]
+    {:eye eye :target tgt :up [0 1 0]}))
+
+;; ==========================================================
+;; Entity Billboards
+;; ==========================================================
+
+(defn entity-billboard
+  "Create a glyph billboard quad for an entity.
+   Input: entity cell map {:col :row :glyph :fg :bg}, facing yaw (for alignment).
+   Returns: 54-float vector (2 triangles) with verts in world space.
+
+   Billboard is upright (y-up) and always faces the camera."
+  [entity-cell yaw atlas {:keys [cell-w cell-h fallback] :or {cell-w 0.5 cell-h 1.0 fallback "?"}}]
+  (let [glyph-use (or (:glyph entity-cell) "?")
+        uv-bounds (or (get atlas glyph-use)
+                      (get atlas fallback))]
+    (if-not uv-bounds
+      []
+      (let [[u0 v0 u1 v1] uv-bounds
+            fg-color (or (:fg entity-cell) [200 60 60])
+            [fr fg fb] fg-color
+            [r g b a] [(/ (float fr) 255.0)
+                       (/ (float fg) 255.0)
+                       (/ (float fb) 255.0)
+                       1.0]
+            ;; World position: cell center at floor level
+            [cx cz] (player-cell-center [(:col entity-cell) (:row entity-cell)])
+            y0 0.0
+            y1 1.0
+
+            ;; Billboard quad: centered on entity, always upright
+            ;; Not rotated by yaw; just scaled by size
+            size 0.4
+            x0 (- cx size)
+            x1 (+ cx size)
+            z (+ cz 0.1)  ;; slight forward offset to avoid z-fighting
+
+            v0-vrt [x0 y0 z u0 v1 r g b a]
+            v1-vrt [x1 y0 z u1 v1 r g b a]
+            v2-vrt [x1 y1 z u1 v0 r g b a]
+            v3-vrt [x0 y1 z u0 v0 r g b a]]
+        (vec (concat [v0-vrt v1-vrt v3-vrt v1-vrt v2-vrt v3-vrt]))))))
+
+(defn is-wall-tile [tile]
+  "Check if a tile is a wall that should be rendered as a 3D box."
+  (or (= tile 8) (= tile 9)))  ; wall-stone and wall-torch
+
+(defn is-visible-cell [world col row]
+  "Check if a cell is currently visible (not fully dark/unseen)."
+  (let [{:keys [fov memory]} world
+        visible (contains? fov [col row])
+        remembered (get memory [col row])]
+    (or visible (and remembered (not= remembered 0)))))
