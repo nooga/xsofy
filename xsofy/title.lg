@@ -153,19 +153,29 @@
         [tw th] (or (term/size) [100 36])
         [title rng]  (generate-title rng)
         subtitle "Press any key"
-        [scheme rng] (pick-scheme rng)
-        runes (sfx/scatter-runes tw th 40 scheme)]
+        [scheme rng] (pick-scheme rng)]
     (sfx/clear-screen tw th)
     ;; Animate via the poll-based event loop: a cosmetic clock advances the
     ;; particle frame each tick; any key ends the screen. Never blocks while
     ;; idle, so it stays responsive in native + wasm (see xsofy.ui / #56).
+    ;; :size and :runes live in state so a resize / font-size change mid-title
+    ;; re-scatters for the new dims and repaints. Without it the screen stays
+    ;; frozen at the size it opened at — play.lg already re-reads size per
+    ;; tick; the animated wait screens didn't.
     (ui/run-loop
       {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
-       :state    {:frame 0}
+       :state    {:frame 0 :size [tw th] :runes (sfx/scatter-runes tw th 40 scheme)}
        :step     (fn [st ev]
                    (let [[tag payload] ev]
                      (case tag
-                       :tick   (assoc st :frame payload)
+                       :tick   (let [cur (or (term/size) (:size st))]
+                                 (if (= cur (:size st))
+                                   (assoc st :frame payload)
+                                   ;; resized: re-scatter + clear for the new size
+                                   (let [[nw nh] cur]
+                                     (sfx/clear-screen nw nh)
+                                     (assoc st :frame payload :size cur
+                                            :runes (sfx/scatter-runes nw nh 40 scheme)))))
                        ;; Any key ends the title — except the shell's resize
                        ;; nudge (a lone BEL, 0x07), which wakes read-key on a
                        ;; browser resize but is not a user keypress. Without this
@@ -174,7 +184,9 @@
                        ;; :unknown and must still start the game.
                        :action (if (= payload (str (char 7))) st (reduced st))
                        st)))
-       :render   (fn [st] (draw-frame runes title subtitle tw th (:frame st) seed))
+       :render   (fn [st]
+                   (let [[tw th] (:size st)]
+                     (draw-frame (:runes st) title subtitle tw th (:frame st) seed)))
        :frame-ms 120})
     {:title title :scheme scheme :rng rng}))
 
