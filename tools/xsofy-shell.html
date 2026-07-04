@@ -107,16 +107,14 @@
   /* Two-row info bar. Single-row crammed title/quest/stats/chips into
      ~375px and lost the right half of both proper-noun strings on every
      phone. Grid layout:
-       row 1:  [ title ]   [ stats ]
-       row 2:  [ quest ]   [ chips ]
-     Stats sit next to the title because they're both gameplay info
-     (d/hp/turn-counter); the chip cluster sits bottom-right at thumb
-     reach. Each text element only competes with the small fixed-width
-     thing in its own row, so neither truncates the other.
-     Chip-row width is bounded by paging — see the .shell-cycle tile +
-     per-page data-chip-page tags below. Only one virtual chip group is
-     visible at a time, so the row stays single-line in debug even with
-     8+ debug chips defined.
+       row 1:  [ title ]   [ tile ]
+       row 2:  [ quest ]   [ stats + option chips ]
+     The left column carries the proper-noun strings (title, quest) — each
+     only competes with the fixed-width col-2 cell in its own row, so neither
+     truncates. Col 2: the OPTIONS tile sits alone top-right (row 1); the
+     URL-gated perf stats plus the player options (font, repeat) and the
+     dev-only force-touch chip share ONE horizontal row beneath it (row 2) —
+     a small fixed set, so the row stays single-line.
      `minmax(0, 1fr)` lets the left column shrink below content width so
      text-overflow:ellipsis fires; without the explicit `0` minimum, grid
      would honor the auto track size and the ellipsis never triggers. */
@@ -126,9 +124,17 @@
     grid-template-rows: auto auto;
     column-gap: 0.6rem;
     row-gap: 0.35rem;
-    align-items: center;
+    /* Top-anchor the rows so the tile (and title) sit at a fixed top position in
+       the always-tall bar; the empty space pools at the bottom in play. */
+    align-items: start;
+    padding-top: 0.5rem;
     border-bottom: 1px solid var(--bar-rule);
-    min-height: 46px;
+    /* Keep the bar at a fixed tall height always, so opening/closing options
+       never resizes it — the tile stays anchored top-right and the options
+       (font, version) simply fill the space below it, which is empty in play.
+       Sized to the options-open height; the URL-only diagnostics (?mode=debug/
+       dev) can push it taller still, but those are loaded, not toggled. */
+    min-height: 88px;
   }
   #xsofy-shell .info .title {
     grid-area: 1 / 1;
@@ -139,36 +145,62 @@
     white-space: nowrap;
     min-width: 0;
   }
+  /* Row 1 / col 2 holds ONLY the OPTIONS/back tile, pinned top-right and alone.
+     justify-self: end snaps it to the right edge of column 2 (the auto track
+     otherwise sizes to the widest of its rows and floats the tile left). */
   #xsofy-shell .info .chips {
-    grid-area: 2 / 2;
-    /* justify-self: end snaps the chips container to the right edge of
-       column 2. Without it, column 2 sizes to the widest of (chips, stats)
-       — in debug the perf stats are wider, so the chips sit left-aligned
-       inside a stats-sized column and visually float off the right edge.
-       Mirrors the .stats `justify-self: end` so both rows hug the right. */
+    grid-area: 1 / 2;
     justify-self: end;
     display: flex;
+  }
+  /* Row 2 / col 2: the URL-gated perf stats and the player-option chips share
+     ONE horizontal row, right-aligned — the tile sits above them in row 1.
+     A row (not the old column) keeps the bar short: stacking font/repeat/touch
+     vertically made ?mode=dev grow tall. Per-item tier classes still gate what
+     shows, so in play this row is empty. */
+  #xsofy-shell .info .debug-row {
+    grid-area: 2 / 2;
+    justify-self: end;
+    display: flex;
+    flex-direction: row;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
   }
 
-  /* Chip paging — single physical row that cycles through PLAY + 3 virtual
-     debug groups via one .shell-cycle tile (replaces what used to be a
-     separate mode-cycle + chip-nav). Per-chip data-chip-page tags which
-     group a chip belongs to; chips WITHOUT the attribute (only the cycle
-     tile itself) are persistent across every state. The container's
-     data-page picks the active group; "play" hides ALL debug chips so
-     play-mode reveals only the cycle tile in the right column. Adding a
-     chip = drop one button with the right data-chip-page; no CSS or JS
-     changes needed. */
-  #xsofy-shell .chips[data-page="play"]    [data-chip-page] { display: none; }
-  #xsofy-shell .chips[data-page="toggles"] [data-chip-page]:not([data-chip-page="toggles"]) { display: none; }
-  /* Shell-cycle reuses .font-cycle's compact sizing so it sits flush in
-     the row; dashed border mirrors the action grid's .nav tile so the
-     swap affordance reads as chrome, not content. */
-  #xsofy-shell .shell-cycle { border-style: dashed; }
-  #xsofy-shell .shell-cycle .glyph { letter-spacing: 0.15em; color: var(--bar-fg); }
-  #xsofy-shell .shell-cycle .label { color: var(--bar-accent); }
+  /* Chip visibility is tier-gated (see the tier-visibility block below):
+     font + repeat are always shown, force-touch is .dev-only. The OPTIONS
+     tile carries no tier class, so it persists across every tier. */
+  /* Options/back tile — a compact icon button (⚙ / ←) pinned top-right, with the
+     same dashed border + dark offset as the action grid's .nav tile so it reads
+     as chrome, not content. Square-ish so ⚙↔← don't reflow. */
+  #xsofy-shell .shell-cycle {
+    background: rgba(245, 176, 65, 0.02);
+    border-style: dashed;
+    width: 2.1rem;
+    min-height: 1.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #xsofy-shell .shell-cycle .label {
+    color: var(--bar-accent);
+    font-size: 1.05rem;
+    line-height: 1;
+  }
+
+  /* Hold-to-repeat is a touch affordance — desktop keyboards have OS-level key
+     repeat, so hide the toggle on a mouse/desktop pointer (still shown under
+     force-touch testing). */
+  @media (hover: hover) and (pointer: fine) {
+    /* force-touch lives on <body>, not #xsofy-shell — use the descendant form so
+       the escape hatch (show the toggle when force-touch is on for testing) works. */
+    body:not(.force-touch) #xsofy-shell .touch-only { display: none; }
+  }
+
+  /* Self-revealing perf cells: hidden until their datum is emitted, so the bar
+     shows only live numbers, not dead middots. emit-perf isn't wired yet, so
+     these stay hidden until a bench / instrumentation follow-up feeds them. */
+  #xsofy-shell .stat-hidden { display: none; }
   #xsofy-shell .info .quest {
     grid-area: 2 / 1;
     color: var(--bar-dim);
@@ -187,17 +219,19 @@
     direction: rtl;
     text-align: left;
   }
-  /* Build-provenance chip — debug-mode only. Sits in the same grid slot
-     as .quest (row 2 / col 1), since .quest is play-only the two never
-     collide. Single line, dimmed; ellipsizes from the right if a wide
-     SHA + suffix overflows on small screens. */
+  /* Build-provenance chip — debug-mode only. Sits in row 1 / col 1, the .title
+     slot (title is play-only, so the two never collide) — sharing the tile's row
+     rather than stacking under it, which keeps the debug bar from growing tall.
+     Two rows internally (xsofy sha / lg version), dimmed. */
   #xsofy-shell .info .build {
-    grid-area: 2 / 1;
+    grid-area: 1 / 1;
     color: var(--bar-dim);
     font-size: 10px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Version gets its own space: xsofy sha on line 1, the (often long) let-go
+       version on line 2. Wrap instead of truncating with an ellipsis. */
+    white-space: normal;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
     min-width: 0;
     font-variant-numeric: tabular-nums;
     /* Override the shell-wide user-select:none so you can drag-select
@@ -206,12 +240,13 @@
     user-select: text;
     -webkit-user-select: text;
   }
+  /* Perf/diagnostics — now a nested flex group inside the .chips row (no longer
+     its own grid cell), so it reads inline before the option chips. */
   #xsofy-shell .info .stats {
-    grid-area: 1 / 2;
-    justify-self: end;
-    color: var(--bar-accent);
     display: flex;
-    gap: 0.7rem;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--bar-accent);
     font-variant-numeric: tabular-nums;
   }
   #xsofy-shell .info .stats .k { color: var(--bar-dim); }
@@ -220,13 +255,10 @@
      desktop users have a real keyboard. */
   #xsofy-shell .touch { display: none; }
 
-  /* In landscape the game's own sidebar shows HP/depth (sidebar drops only
-     when terminal width < ~80 cols, which is the portrait case). Hide the
-     duplicated stats block so the bar carries only what isn't already on
-     screen — title + quest + font chip. */
-  @media (orientation: landscape) {
-    #xsofy-shell .info .stats { display: none; }
-  }
+  /* (The old landscape .stats hide is gone: .stats used to duplicate the
+     sidebar's HP/depth, but #121 removed those — it now holds only the URL-gated
+     turn/perf diagnostics, which should appear wherever ?mode=debug/dev asks,
+     landscape or portrait.) */
 
   /* Portrait / force-touch: the shell absorbs the space under the 55vh
      terminal (the terminal-height rules live at the top of this file).
@@ -363,19 +395,21 @@
   }
   #xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
 
-  /* Info-bar mode visibility. The shell root carries .mode-play or
-     .mode-debug; tag stats / chips / quest with .play-only / .debug-only
-     and they vanish in the off mode. The play mode shows only the
-     gameplay-relevant trio (d, hp, t) and tucks the perf cluster
-     + toggles into debug. Quest also folds away in debug since debug
-     eyeballs are usually on numbers, not the quest item.
-     The mode class + the chip-strip data-page are driven from a single
-     .shell-cycle tile (2 states: play / toggles); see the chip-paging
-     CSS block above and the cycle handler below. */
-  #xsofy-shell.mode-play .debug-only,
-  #xsofy-shell.mode-debug .play-only {
-    display: none;
-  }
+  /* Tier visibility — two axes. The OPTIONS↔BACK tile reveals *player options*
+     at runtime (mode-debug, reachable by tapping OR by ?mode=debug/dev); the
+     *diagnostics* (turn + perf counters) are URL-only (mode-urldiag, set solely
+     from ?mode=debug/dev), so a runtime tap never surfaces dev noise. Each group
+     gates on its own class:
+       - .play-only  — title / quest (fold away once options are open)
+       - .debug-only — build provenance + font / hold-to-repeat (the OPTIONS tap reveals these)
+       - .diag-only  — turn + perf counters (URL-gated: ?mode=debug or ?mode=dev only)
+       - .dev-only   — dev tooling (force-touch; ?mode=dev only)
+     play-only folds under mode-debug because build (bottom-left) reuses the quest
+     slot; the tile toggles mode-debug at runtime, diag + dev are URL-only. */
+  #xsofy-shell:not(.mode-debug)   .debug-only { display: none; }
+  #xsofy-shell:not(.mode-urldiag) .diag-only  { display: none; }
+  #xsofy-shell:not(.mode-dev)     .dev-only   { display: none; }
+  #xsofy-shell.mode-debug .play-only          { display: none; }
 
 </style>
 
@@ -384,34 +418,45 @@
     <span class="title play-only" id="xs-title">—</span>
     <span class="quest play-only" id="xs-quest"></span>
     <span class="build debug-only" id="xs-build" title="Build provenance — written by local-scripts/deploy.sh"></span>
-    <span class="stats">
-      <span class="play-only"><span class="k">d</span> <span id="xs-depth">·</span></span>
-      <span class="play-only"><span class="k">hp</span> <span id="xs-hp">·</span>/<span id="xs-max">·</span></span>
-      <span class="debug-only"><span class="k">t</span><span id="xs-turn">·</span></span>
-      <span class="debug-only" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
-      <span class="debug-only"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
-      <span class="debug-only"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
-      <span class="debug-only"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
-      <span class="debug-only"><span class="k">c</span><span id="xs-cells">·</span></span>
-      <span class="debug-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
-    </span>
-    <div class="chips" data-page="play">
-      <button class="font-cycle debug-only" data-chip-page="toggles" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
+    <div class="chips">
+      <!-- Row 1 / col 2: the OPTIONS/back tile, pinned top-right and alone.
+           Icon toggles ⚙ (open options) ↔ ← (back to play); dev tier is URL-only. -->
+      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
+        <span class="label" id="xs-shell-cycle-label">⚙</span>
+      </button>
+    </div>
+    <div class="debug-row">
+      <!-- Row 2 / col 2: URL-gated perf stats, then the player-option chips —
+           one horizontal row, right-aligned, sitting under the tile. Tier
+           classes gate each item, so this row is empty in play. -->
+      <span class="stats">
+        <!-- HP and depth used to live here (play-only), but the in-grid top bar
+             (sidebar when wide, top bar when narrow) now carries both, so the
+             browser chrome no longer duplicates them. title + quest stay — the
+             grid has no home for those. The bridge still emits hp/depth; they're
+             just not displayed here. -->
+        <span class="diag-only stat-hidden"><span class="k">t</span><span id="xs-turn">·</span></span>
+        <span class="diag-only stat-hidden" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
+        <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
+        <!-- cols×rows self-reveals (stat-hidden) once term-size fires; with no
+             value it stays hidden instead of showing dead middots. -->
+        <span class="diag-only stat-hidden" id="xs-dims"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
+      </span>
+      <!-- Player options: font size = accessibility; hold-to-repeat is a touch
+           affordance (.touch-only) — hidden on desktop, where the OS handles it. -->
+      <button class="font-cycle debug-only touch-only" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
         <span class="glyph">↻</span><span id="xs-repeat-state">on</span>
       </button>
-      <button class="font-cycle debug-only" data-chip-page="toggles" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
-        <span class="glyph">▦</span><span id="xs-touch-state">off</span>
-      </button>
-      <button class="font-cycle debug-only" data-chip-page="toggles" id="xs-font-cycle" title="Cycle char size">
+      <button class="font-cycle debug-only" id="xs-font-cycle" title="Cycle char size">
         <span class="glyph">Aa</span><span id="xs-font-px">22</span>
       </button>
-      <!-- Shell cycle. Single tile drives BOTH the body mode class
-           (.mode-play in "play" state, .mode-debug everywhere else) AND
-           the chip-strip data-page. 2 states cycle: play → toggles → play.
-           Persistent (no data-chip-page) so it shows in every state — it's
-           the only way back out of debug. -->
-      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Cycle shell state (play / toggles)">
-        <span class="glyph" id="xs-shell-cycle-dots">● ○</span><span class="label" id="xs-shell-cycle-label">TOGGLES →</span>
+      <!-- Dev tooling: only under ?mode=dev. Force-touch reveals the phone
+           touch UI on desktop/tablet-landscape for testing — not a player pref. -->
+      <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
+        <span class="glyph">▦</span><span id="xs-touch-state">off</span>
       </button>
     </div>
   </div>
@@ -589,9 +634,6 @@
     const $ = (id) => document.getElementById(id);
     const titleEl = $("xs-title");
     const questEl = $("xs-quest");
-    const depthEl = $("xs-depth");
-    const hpEl = $("xs-hp");
-    const maxEl = $("xs-max");
     const turnEl = $("xs-turn");
 
     // Capitalize a quest-item name for the bar. Keep it terse.
@@ -613,9 +655,11 @@
         .then((d) => {
           if (!d) return;
           const xs = (d.xsofy || "").slice(0, 7);
-          const lg = (d["let-go"] || "").slice(0, 7);
+          const lg = (d["let-go"] || "");              // full — no truncation
           const dt = d.date || "";
-          buildEl.textContent = `${xs}·lg ${lg}·${dt}`;
+          // Two rows: xsofy sha (+ date) on top, the often-long let-go version
+          // below. Both rows label their repo (xsofy / lg) so the shas aren't ambiguous.
+          buildEl.innerHTML = `xsofy ${xs}${dt ? " ·" + dt : ""}<br>lg ${lg}`;
         })
         .catch(() => {});
     }
@@ -624,11 +668,10 @@
       const d = e.detail || {};
       titleEl.textContent = d.title || "—";
       questEl.textContent = nameOf(d.quest);
-      // Reset stats on new run — they'll fill in after the first tick.
-      hpEl.textContent = "·";
-      maxEl.textContent = "·";
-      depthEl.textContent = "1";
+      // Reset the turn counter on a new run and re-hide it — it self-reveals
+      // after the first real tick, so the title never shows a dead "t·"/"t0".
       turnEl.textContent = "0";
+      turnEl.parentElement.classList.add("stat-hidden");
     });
 
     // @t reports the turn the perf measurements were taken for; by design
@@ -643,18 +686,20 @@
     const perfTurnWrap = $("xs-perf-turn-wrap");
     function paintPerfTurnDrift() {
       if (!perfTurnWrap) return;
+      // Hidden until perf data exists (self-revealing); once it does, hide it
+      // while @t lags t by the expected 1 turn and reveal it only on real drift.
       const inSync = lastTurn != null && lastPerfTurn != null
         && Number(lastTurn) - Number(lastPerfTurn) === 1;
-      perfTurnWrap.style.display = inSync ? "none" : "";
+      perfTurnWrap.classList.toggle("stat-hidden", lastPerfTurn == null || inSync);
     }
 
     window.addEventListener("xsofy/stats", (e) => {
       const d = e.detail || {};
-      if (d.hp != null) hpEl.textContent = d.hp;
-      if (d["max-hp"] != null) maxEl.textContent = d["max-hp"];
-      if (d.depth != null) depthEl.textContent = d.depth;
+      // hp / max-hp / depth are still emitted but no longer shown in the chrome
+      // (the in-grid HUD carries them); only the debug turn counter reads here.
       if (d.turn != null) {
         turnEl.textContent = d.turn;
+        turnEl.parentElement.classList.remove("stat-hidden");  // self-reveal on the first real tick
         lastTurn = d.turn;
         paintPerfTurnDrift();
       }
@@ -665,10 +710,14 @@
     // surface at certain dimensions are reproducible without guesswork.
     const colsEl = $("xs-cols");
     const rowsEl = $("xs-rows");
+    const dimsEl = $("xs-dims");
     window.addEventListener("xsofy/term-size", (e) => {
       const d = e.detail || {};
       if (d.cols != null && colsEl) colsEl.textContent = d.cols;
       if (d.rows != null && rowsEl) rowsEl.textContent = d.rows;
+      // Self-reveal: only show cols×rows once it carries a real value, so the
+      // bar never displays a dead "·×·".
+      if (d.cols != null && d.rows != null) dimsEl?.classList.remove("stat-hidden");
     });
 
     // Per-turn engine vs render split. The total ms gauge in the map
@@ -690,14 +739,15 @@
     let pendingPerf = null;
     window.addEventListener("xsofy/perf", (e) => {
       if (pendingPerf) {
-        if (pendingPerf.update != null) updateEl.textContent = pendingPerf.update;
-        if (pendingPerf.render != null) renderEl.textContent = pendingPerf.render;
+        // Reveal each cell as its datum arrives (self-revealing — see .stat-hidden).
+        if (pendingPerf.update != null) { updateEl.textContent = pendingPerf.update; updateEl.parentElement.classList.remove("stat-hidden"); }
+        if (pendingPerf.render != null) { renderEl.textContent = pendingPerf.render; renderEl.parentElement.classList.remove("stat-hidden"); }
         // input-lag is :input-lag let-go-side; hyphen survives the JSON
         // marshal as a "input-lag" string key.
-        if (pendingPerf["input-lag"] != null) inputLagEl.textContent = pendingPerf["input-lag"];
+        if (pendingPerf["input-lag"] != null) { inputLagEl.textContent = pendingPerf["input-lag"]; inputLagEl.parentElement.classList.remove("stat-hidden"); }
         // Cells touched by render this turn — distinguishes FOV-expansion
         // spikes (high c) from per-cell-expensive turns (low c + high r).
-        if (pendingPerf.cells != null) cellsEl.textContent = pendingPerf.cells;
+        if (pendingPerf.cells != null) { cellsEl.textContent = pendingPerf.cells; cellsEl.parentElement.classList.remove("stat-hidden"); }
         // Game turn the perf values are from. Compare against the gauge's
         // tN prefix and the t stat to read the alignment at a glance:
         // - if @t and gauge t match → bar and gauge are in sync
@@ -877,14 +927,11 @@
       // panes, and it must not start a hold-to-repeat cycle.
       const nav = document.createElement("button");
       nav.className = "nav";
-      const dots = PANES.map((_, i) => i === currentPane ? "●" : "○").join(" ");
       // Label names the destination, not the current pane — reads as an
       // action ("tap to go to ITEMS") rather than a status ("you are on
-      // ITEMS"). Dots stay as a position indicator; label is the verb.
-      // Trailing arrow reinforces "tap to advance to <X>" — useful once
-      // there are 3+ dots and the label isn't visually obvious from them.
+      // ITEMS"). Trailing arrow reinforces "tap to advance to <X>".
       const label = PANES[(currentPane + 1) % PANES.length].label + " →";
-      nav.innerHTML = `<span class="glyph">${dots}</span><span class="label">${label}</span>`;
+      nav.innerHTML = `<span class="label">${label}</span>`;
       nav.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         // Kill any in-flight repeat from a tile we just replaced, so we
@@ -1034,40 +1081,46 @@
     // pre-open fit() is caught. The chip text updates immediately.
     initFontSize();
 
-    // Shell-state cycle. One tile drives BOTH the body mode class
-    // (.mode-play / .mode-debug — gates .play-only / .debug-only visibility)
-    // AND the chip-strip data-page (which group of debug chips is showing).
-    // States cycle: play → toggles → play.
-    //   - play     → mode-play; debug-only stuff hidden; chip strip shows
-    //                only the cycle tile itself.
-    //   - toggles  → mode-debug + chips data-page=toggles  (repeat/touch/font)
-    // Persisted under one key so pulling debug back up resumes on whichever
-    // group the player was last looking at. Old keys (xsofy/info-mode,
-    // xsofy/chip-page) are intentionally ignored — small UI, fine to reset.
+    // OPTIONS tile — runtime toggle of the debug tier, plus a URL-seeded dev
+    // tier. Tier classes are additive: mode-play is the permanent base (on the
+    // div); the tile adds/removes mode-debug (player-visible diagnostics: build
+    // + perf); ?mode=dev adds mode-dev on top (dev tooling: force-touch). The
+    // tile cycles play ↔ debug only — the dev tier is URL-gated, so dev tooling
+    // never appears just from tapping.
+    //
+    // ?mode= seeds the initial tier: debug|dev start in debug, play starts in
+    // play; with no param we resume the last tapped state from localStorage.
+    // Old keys (xsofy/info-mode, xsofy/chip-page) are intentionally ignored.
     const SHELL_LS_KEY = "xsofy/shell-state";
-    const SHELL_STATES = ["play", "toggles"];
+    const SHELL_STATES = ["play", "debug"];
+    // Tile icon names the action: ⚙ opens the options view, ← closes it (back
+    // to play). Shown for the *destination* tier (what tapping switches to).
+    const STATE_LABEL = { play: "←", debug: "⚙" };
     const shellRoot = document.getElementById("xsofy-shell");
-    const chipsEl = document.querySelector("#xsofy-shell .chips");
     const cycleEl_ = $("xs-shell-cycle");
-    const cycleDotsEl = $("xs-shell-cycle-dots");
     const cycleLabelEl = $("xs-shell-cycle-label");
+
+    const urlMode = new URLSearchParams(location.search).get("mode");
+    const devMode = urlMode === "dev";
     let currentShellState = localStorage.getItem(SHELL_LS_KEY);
-    if (!SHELL_STATES.includes(currentShellState)) currentShellState = "play";
+    if (currentShellState === "toggles") currentShellState = "debug"; // migrate old key
+    if (urlMode === "dev" || urlMode === "debug") currentShellState = "debug";
+    else if (urlMode === "play") currentShellState = "play";
+    else if (!SHELL_STATES.includes(currentShellState)) currentShellState = "play";
 
     function applyShellState() {
-      const isPlay = currentShellState === "play";
-      shellRoot.classList.toggle("mode-play", isPlay);
-      shellRoot.classList.toggle("mode-debug", !isPlay);
-      if (chipsEl) chipsEl.dataset.page = currentShellState;
-      if (cycleDotsEl) {
-        cycleDotsEl.textContent = SHELL_STATES.map((s) => s === currentShellState ? "●" : "○").join(" ");
-      }
-      // Label names the destination — what tapping switches TO — matching
-      // the action-grid nav tile's convention. Dots show position; label
-      // reads as a verb (PLAY → / TOGGLES →).
+      // mode-play stays as the permanent base class on the div; only the higher
+      // tiers toggle. dev is a strict superset of debug — ?mode=dev pins mode-debug
+      // on regardless of the play↔debug cycle, so dev never shows less than debug
+      // (its force-touch chrome can't appear without the debug diagnostics under it).
+      shellRoot.classList.toggle("mode-debug", currentShellState === "debug" || devMode);
+      shellRoot.classList.toggle("mode-dev", devMode);
+      // Diagnostics (turn + perf) are URL-only — never surfaced by a runtime tap.
+      shellRoot.classList.toggle("mode-urldiag", urlMode === "debug" || urlMode === "dev");
+      // Icon names the destination — what tapping switches TO.
       if (cycleLabelEl) {
         const next = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
-        cycleLabelEl.textContent = next.toUpperCase() + " →";
+        cycleLabelEl.textContent = STATE_LABEL[next];
       }
     }
     applyShellState();
