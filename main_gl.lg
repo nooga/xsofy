@@ -13,7 +13,9 @@
    [xsofy.gl.fall :as fall]
    [xsofy.gl.fpview :as fpview]
    [xsofy.gl.grid :as grid]
+   [xsofy.gl.hud :as hud]
    [xsofy.gl.mat4 :as mat4]
+   [xsofy.gl.vfx :as vfx]
    [xsofy.input :as input]
    [xsofy.terrain :as terrain]
    [xsofy.title :as title]
@@ -45,6 +47,66 @@
         (let [n (try (read-string s) (catch _ nil))]
           (when (number? n) n)))
       default))
+
+;; ==========================================================
+;; Auto-Action Helpers (pure logic from xsofy.play)
+;; ==========================================================
+
+(defn auto-key-for
+  "The implicit action for an in-flight auto-mode, or nil if not auto-moving.
+   Replicates xsofy.play/auto-key-for to avoid requiring that module (it depends
+   on term, which isn't available in GL context)."
+  [world]
+  (cond
+    (:resting world) :wait
+    (:running-dir world) (let [[dx dy] (:running-dir world)]
+                           (cond (and (= dx 0) (< dy 0)) :up
+                                 (and (= dx 0) (> dy 0)) :down
+                                 (and (< dx 0) (= dy 0)) :left
+                                 (and (> dx 0) (= dy 0)) :right
+                                 :else nil))
+    (:autoexploring world) :autoexplore
+    (:auto-target world) :auto-target-step
+    :else nil))
+
+(defn apply-auto-stops
+  "Stop an active auto-mode when something interesting happens — death, a
+   visible threatening enemy, finished resting, a blocked run, or a full
+   inventory. `world` is the pre-turn world (for the run-blocked turn check).
+   Replicates xsofy.play/apply-auto-stops to avoid requiring that module."
+  [new-world world]
+  (if (or (:resting new-world)
+          (:running-dir new-world)
+          (:autoexploring new-world)
+          (:auto-target new-world))
+    (let [player (get-in new-world [:entities :player])
+          hp (get-in player [:body :hp] 0)
+          max-hp (get-in player [:body :max-hp] 1)
+          fov (or (:fov new-world) #{})
+          enemies (some (fn [e]
+                          (and (:ai e)
+                               (not= :player (:id e))
+                               (:pos e)
+                               (contains? fov (:pos e))
+                               (contains? #{:hunt :investigate :flee}
+                                 (get-in e [:ai :state]))))
+                        (vals (:entities new-world)))
+          run-blocked (and (or (:running-dir new-world) (:autoexploring new-world))
+                           (= (:turn new-world) (:turn world)))
+          dead (nil? player)]
+      (cond
+        dead (dissoc new-world :resting :running-dir :autoexploring :auto-target)
+        enemies (-> new-world
+                    (dissoc :resting :running-dir :autoexploring :auto-target)
+                    (world/log-msg "You stop — enemy spotted!"))
+        (and (:resting new-world) (>= hp max-hp))
+        (-> new-world (dissoc :resting) (world/log-msg "You finish resting."))
+        run-blocked (dissoc new-world :running-dir :autoexploring :auto-target)
+        (:inventory-full new-world)
+        (-> new-world
+            (dissoc :autoexploring :auto-target :inventory-full))
+        :else new-world))
+    new-world))
 
 ;; ==========================================================
 ;; Input Parsing
@@ -199,7 +261,7 @@
 (defn render-top-down
   "Render top-down view with ortho projection (xz-ground mapped to screen via rotate-x).
    Verify clip-space projection with two test points: cell (0,0) and cell (0,29)."
-  [world tex-id atlas dump? frame]
+  [world tex-id atlas dump? frame vfx]
   (let [map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
         cells (bridge/grid-cells world map-rect)
         {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
@@ -241,11 +303,18 @@
     (when (seq bg)
       (glplat/SubmitTriangles 0 bg))
     (when (seq glyphs)
-      (glplat/SubmitTriangles tex-id glyphs))))
+      (glplat/SubmitTriangles tex-id glyphs))
+    ;; Submit VFX
+    (let [{:keys [tinted glyphs]} (vfx/vfx-verts vfx atlas {:cell-w 0.5
+                                                            :cell-h 1.0})]
+      (when (seq tinted)
+        (glplat/SubmitTriangles 0 tinted))
+      (when (seq glyphs)
+        (glplat/SubmitTriangles tex-id glyphs)))))
 
 (defn render-falling
   "Render morphing view: blended camera, tilted geometry, extruding walls."
-  [world pres-state current-time tex-id atlas dump?]
+  [world pres-state current-time tex-id atlas dump? vfx]
   (let [fall-time (- current-time (:fall-start pres-state))
         fall-duration (:fall-duration pres-state)
         fall-t (min 1.0 (/ fall-time fall-duration))
@@ -311,11 +380,18 @@
     (when (seq wall-verts)
       (glplat/SubmitTriangles tex-id wall-verts))
     (when (seq glyphs)
-      (glplat/SubmitTriangles tex-id glyphs))))
+      (glplat/SubmitTriangles tex-id glyphs))
+    ;; Submit VFX
+    (let [{:keys [tinted glyphs]} (vfx/vfx-verts vfx atlas {:cell-w 0.5
+                                                            :cell-h 1.0})]
+      (when (seq tinted)
+        (glplat/SubmitTriangles 0 tinted))
+      (when (seq glyphs)
+        (glplat/SubmitTriangles tex-id glyphs)))))
 
 (defn render-first-person
   "Render first-person view: perspective camera, billboarded entities."
-  [world pres-state tex-id atlas dump? frame]
+  [world pres-state tex-id atlas dump? frame vfx]
   (let [;; Player position
         [px py] (get-in world [:entities :player :pos])
         facing (:facing pres-state)
@@ -366,6 +442,28 @@
     (when (seq entity-verts)
       (glplat/SubmitTriangles tex-id entity-verts))
     (when (seq glyphs)
+      (glplat/SubmitTriangles tex-id glyphs))
+    ;; Submit VFX
+    (let [{:keys [tinted glyphs]} (vfx/vfx-verts vfx atlas {:cell-w 0.5
+                                                            :cell-h 1.0})]
+      (when (seq tinted)
+        (glplat/SubmitTriangles 0 tinted))
+      (when (seq glyphs)
+        (glplat/SubmitTriangles tex-id glyphs)))))
+
+(defn render-hud
+  "Screen-space HUD overlay pass, drawn after the scene each frame.
+   hud.lg builds quads in screen-cell space (79×30, y down, z=0); the ortho
+   here uses near=0 so those quads land at NDC depth -1 — in front of all
+   scene geometry under the LEQUAL depth test (SubmitTriangles draws
+   immediately with the current matrix, so a mid-frame SetMatrix is safe)."
+  [world tex-id atlas]
+  (let [{:keys [solids glyphs]} (hud/hud-verts world atlas {:cell-w 0.5 :cell-h 1.0})
+        hud-mvp (mat4/ortho 0.0 39.5 30.0 0.0 0.0 1.0)]
+    (glplat/SetMatrix hud-mvp)
+    (when (seq solids)
+      (glplat/SubmitTriangles 0 solids))
+    (when (seq glyphs)
       (glplat/SubmitTriangles tex-id glyphs))))
 
 (defn apply-screenfx-tint
@@ -381,6 +479,10 @@
 ;; ==========================================================
 
 (defn -main []
+  ;; Mark GL mode BEFORE any worldgen: title/show-descending-screen no-ops on
+  ;; this var — otherwise descending animates runes into the launching
+  ;; terminal (term/size succeeds there) and stalls the GL window.
+  (os/setenv "XSOFY_GL_FRONTEND" "1")
   (let [;; Parse environment / args
         seed-str (or (os/getenv "XSOFY_SEED") "0")
         seed (parse-number seed-str 0)
@@ -410,7 +512,10 @@
       ;; Frame loop
       (loop [w world
              pres (make-pres-state)
-             frame 0]
+             frame 0
+             last-auto-t start-time
+             vfx-events []
+             last-vfx-t start-time]
         (let [t (glplat/Time)
               elapsed (- t start-time)
               should-close (glplat/ShouldClose)
@@ -426,39 +531,89 @@
               (glplat/PollEvents)
               (let [events (glplat/PollInputEvents)
                     ;; Process input: accumulate world changes and presentation facing
-                    [w-after-input pres-with-facing]
-                    (reduce (fn [[world pres-acc] event-str]
+                    ;; Track whether any action was dispatched
+                    [w-after-input pres-with-facing action-dispatched]
+                    (reduce (fn [[world pres-acc action-flag] event-str]
                               (if-let [key (parse-glplat-event event-str)]
-                                (let [action (input/parse-key key)]
+                                (let [action (input/parse-key key)
+                                      ;; Interrupt auto-mode with real key presses
+                                      world-interrupted (dissoc world :resting :running-dir
+                                                                :autoexploring :auto-target)]
                                   (if (= (:mode pres-acc) :fp)
                                     ;; FP input remapping
                                     (let [remapped (fpview/remap-fp-input action (:facing pres-acc))
                                           final-action (:action remapped)
                                           new-facing (:facing remapped)
                                           pres-updated (assoc pres-acc :facing new-facing)
-                                          world-updated (if final-action
-                                                          (dispatch/dispatch world final-action)
-                                                          world)]
-                                      [world-updated pres-updated])
+                                          world-dispatched (if final-action
+                                                             (apply-auto-stops
+                                                               (dispatch/dispatch
+                                                                 world-interrupted
+                                                                 final-action)
+                                                               world)
+                                                             world-interrupted)]
+                                      [world-dispatched pres-updated true])
                                     ;; Top-down / falling: normal dispatch
-                                    [(dispatch/dispatch world action) pres-acc]))
-                                [world pres-acc]))
-                            [w pres] events)
+                                    (let [world-dispatched (apply-auto-stops
+                                                             (dispatch/dispatch
+                                                               world-interrupted
+                                                               action)
+                                                             world)]
+                                      [world-dispatched pres-acc true])))
+                                [world pres-acc action-flag]))
+                            [w pres false] events)
+
+                    ;; Check if we should try auto-action (only if no input action this frame)
+                    [w-final pres-with-facing last-auto-t-next]
+                    (if (and (not action-dispatched)
+                             (not= (:mode pres-with-facing) :falling)
+                             (>= (- t last-auto-t) 0.06))
+                      ;; Try auto-action
+                      (if-let [auto-action (auto-key-for w-after-input)]
+                        (let [w-auto (apply-auto-stops
+                                       (dispatch/dispatch w-after-input auto-action)
+                                       w-after-input)]
+                          (when dump?
+                            (print (str "XSOFY_GL_DUMP: auto-step " auto-action " turn "
+                                     (:turn w-auto) "\n")))
+                          [w-auto pres-with-facing t])
+                        [w-after-input pres-with-facing last-auto-t])
+                      [w-after-input pres-with-facing last-auto-t])
+
+                    ;; Extract and accumulate vfx events from world
+                    new-vfx-events (if-let [world-vfx (:vfx w-final)]
+                                     (vec (concat vfx-events world-vfx))
+                                     vfx-events)
+                    w-no-vfx (dissoc w-final :vfx)
+
+                    ;; Tick vfx if enough time has passed
+                    [vfx-events-ticked last-vfx-t-next]
+                    (if (and (seq new-vfx-events) (>= (- t last-vfx-t) 0.03))
+                      [(vfx/tick-vfx new-vfx-events) t]
+                      [new-vfx-events last-vfx-t])
 
                     ;; Advance presentation state (check for depth change)
-                    pres' (advance-pres-state pres-with-facing w w-after-input t force-fall-at)]
+                    ;; args: pres, NEW world, PREV world — order matters for the
+                    ;; depth-increase check that triggers the fall.
+                    pres' (advance-pres-state pres-with-facing w-no-vfx w t force-fall-at)]
 
                 ;; Render frame
                 (glplat/BeginFrame 0.1 0.1 0.15)
                 (case (:mode pres')
-                  :top-down (render-top-down w-after-input tex-id atlas dump? frame)
-                  :falling (render-falling w-after-input pres' t tex-id atlas dump?)
-                  :fp (render-first-person w-after-input pres' tex-id atlas dump? frame)
-                  (render-top-down w-after-input tex-id atlas dump? frame))
+                  :top-down (render-top-down w-no-vfx tex-id atlas dump? frame
+                              vfx-events-ticked)
+                  :falling (render-falling w-no-vfx pres' t tex-id atlas dump?
+                             vfx-events-ticked)
+                  :fp (render-first-person w-no-vfx pres' tex-id atlas dump? frame
+                        vfx-events-ticked)
+                  (render-top-down w-no-vfx tex-id atlas dump? frame
+                    vfx-events-ticked))
+                (render-hud w-no-vfx tex-id atlas)
                 (glplat/EndFrame)
 
                 ;; Continue loop
-                (recur w-after-input pres' (inc frame)))))))
+                (recur w-no-vfx pres' (inc frame) last-auto-t-next
+                  vfx-events-ticked last-vfx-t-next))))))
 
       (finally
         (glplat/Terminate)

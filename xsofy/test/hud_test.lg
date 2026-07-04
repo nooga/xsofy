@@ -1,0 +1,341 @@
+(ns xsofy.test.hud-test
+  "Tests for xsofy.gl.hud — HUD quad builder for screen-space overlay."
+  (:require
+   [string :as str]
+   [test :refer [deftest is testing]]
+   [xsofy.gl.hud :as hud]))
+
+;; ==========================================================
+;; Float Comparison Helper
+;; ==========================================================
+
+(defn approx=
+  "Approximate equality for floats (epsilon = 1e-5)."
+  [a b]
+  (let [eps 1e-5]
+    (if (and (number? a) (number? b))
+      (< (math/abs (- a b)) eps)
+      (= a b))))
+
+(defn approx-vec=
+  "Approximate equality for vectors of floats."
+  [v1 v2]
+  (and (= (count v1) (count v2))
+       (loop [v1s v1 v2s v2]
+         (if (empty? v1s)
+           true
+           (and (approx= (first v1s) (first v2s))
+                (recur (rest v1s) (rest v2s)))))))
+
+;; ==========================================================
+;; Test Data
+;; ==========================================================
+
+(def test-atlas
+  {"x" [0.0 0.0 0.5 1.0]
+   "." [0.5 0.0 1.0 1.0]
+   "@" [0.0 0.5 0.5 1.0]
+   "?" [0.75 0.0 1.0 1.0]})
+
+(def default-opts {:cell-w 0.5 :cell-h 1.0 :fallback "?"})
+
+;; ==========================================================
+;; char-quad Tests
+;; ==========================================================
+
+(deftest char-quad-basic
+  (testing "char-quad generates 54 floats for a single glyph"
+    (let [quad (hud/char-quad "x" 0 0 [255 128 64] test-atlas default-opts)]
+      (is (= (count quad) 54)))))
+
+(deftest char-quad-vertex-0-position-0-0
+  (testing "char-quad vertex 0 has correct position for (col=0, row=0)"
+    (let [quad (hud/char-quad "x" 0 0 [255 128 64] test-atlas default-opts)
+          ;; Vertex 0: floats 0-2 [x y z]
+          x0 (nth quad 0)
+          y0 (nth quad 1)
+          z0 (nth quad 2)]
+      (is (approx= x0 0.0))
+      (is (approx= y0 0.0))
+      (is (approx= z0 0.0)))))
+
+(deftest char-quad-vertex-0-position-3-7
+  (testing "char-quad vertex 0 has correct position for (col=3, row=7)"
+    (let [quad (hud/char-quad "x" 3 7 [255 128 64] test-atlas default-opts)
+          ;; Vertex 0: floats 0-2 [x y z]
+          x0 (nth quad 0)
+          y0 (nth quad 1)
+          z0 (nth quad 2)]
+      ;; col=3 → x = 3*0.5 = 1.5
+      ;; row=7 → y = 7*1.0 = 7.0
+      (is (approx= x0 1.5))
+      (is (approx= y0 7.0))
+      (is (approx= z0 0.0)))))
+
+(deftest char-quad-uv-and-color
+  (testing "char-quad vertex 0 has correct UV and color"
+    (let [quad (hud/char-quad "x" 0 0 [255 128 64] test-atlas default-opts)
+          u0 (nth quad 3)
+          v0 (nth quad 4)
+          r0 (nth quad 5)
+          g0 (nth quad 6)
+          b0 (nth quad 7)
+          a0 (nth quad 8)]
+      ;; UV for "x" is [0.0 0.0 0.5 1.0]; vertex 0 (top-left) carries (u0, v0)
+      (is (approx= u0 0.0))
+      (is (approx= v0 0.0))
+      ;; Color [255 128 64] → [1.0 0.502 0.251]
+      (is (approx= r0 1.0))
+      (is (approx= g0 (/ 128.0 255.0)))
+      (is (approx= b0 (/ 64.0 255.0)))
+      (is (approx= a0 1.0)))))
+
+(deftest char-quad-fallback-glyph
+  (testing "char-quad falls back to default glyph if missing"
+    (let [quad (hud/char-quad "missing" 0 0 [255 255 255] test-atlas default-opts)]
+      ;; Should fall back to "?" which is in atlas
+      (is (= (count quad) 54)))))
+
+(deftest char-quad-no-glyph-in-atlas
+  (testing "char-quad returns empty if glyph and fallback both missing"
+    (let [opts (assoc default-opts :fallback "missing")
+          quad (hud/char-quad "missing" 0 0 [255 255 255] test-atlas opts)]
+      (is (= (count quad) 0)))))
+
+(deftest char-quad-alpha-passthrough
+  (testing "char-quad normalizes alpha correctly"
+    (let [quad (hud/char-quad "x" 0 0 [255 128 64 128] test-atlas default-opts)
+          a0 (nth quad 8)]
+      ;; Alpha 128 → 128/255 ≈ 0.502
+      (is (approx= a0 (/ 128.0 255.0))))))
+
+;; ==========================================================
+;; text-quads Tests
+;; ==========================================================
+
+(deftest text-quads-basic
+  (testing "text-quads generates quads for each character"
+    (let [quads (hud/text-quads "x." 0 0 [255 255 255] test-atlas default-opts)]
+      ;; 2 characters × 54 floats = 108
+      (is (= (count quads) 108)))))
+
+(deftest text-quads-skips-spaces
+  (testing "text-quads skips spaces (no quad emitted)"
+    (let [quads (hud/text-quads "x .x" 0 0 [255 255 255] test-atlas default-opts)]
+      ;; 3 non-space characters × 54 floats = 162
+      (is (= (count quads) 162)))))
+
+(deftest text-quads-column-advancement
+  (testing "text-quads advances column correctly"
+    (let [quads (hud/text-quads "x" 5 3 [255 255 255] test-atlas default-opts)
+          ;; Vertex 0 of first (only) quad should be at col=5
+          x0 (nth quads 0)]
+      ;; col=5 → x = 5*0.5 = 2.5
+      (is (approx= x0 2.5)))))
+
+(deftest text-quads-empty-string
+  (testing "text-quads returns empty vector for empty string"
+    (let [quads (hud/text-quads "" 0 0 [255 255 255] test-atlas default-opts)]
+      (is (= (count quads) 0)))))
+
+;; ==========================================================
+;; solid-quad Tests
+;; ==========================================================
+
+(deftest solid-quad-basic
+  (testing "solid-quad generates 54 floats"
+    (let [quad (hud/solid-quad 0 0 5 3 [100 100 100 255] default-opts)]
+      (is (= (count quad) 54)))))
+
+(deftest solid-quad-position-and-extent
+  (testing "solid-quad has correct position and extent"
+    (let [quad (hud/solid-quad 2 5 4 3 [100 100 100 255] default-opts)
+          ;; Vertex 0 (top-left): x = 2*0.5 = 1.0, y = 5*1.0 = 5.0
+          x0 (nth quad 0)
+          y0 (nth quad 1)
+          ;; Vertex 2 (bottom-right): x = 1.0 + 4*0.5 = 3.0, y = 5.0 + 3*1.0 = 8.0
+          ;; Vertices in order: v0 v1 v3 v1 v2 v3
+          ;; v2 is at position 4 (5th vertex), so indices 36-44 in floats
+          x2 (nth quad 36)
+          y2 (nth quad 37)]
+      (is (approx= x0 1.0))
+      (is (approx= y0 5.0))
+      (is (approx= x2 3.0))
+      (is (approx= y2 8.0)))))
+
+(deftest solid-quad-uv-zero
+  (testing "solid-quad has UV [0 0] (untextured)"
+    (let [quad (hud/solid-quad 1 1 2 2 [100 100 100 255] default-opts)
+          u0 (nth quad 3)
+          v0 (nth quad 4)
+          u1 (nth quad 12)  ;; second vertex
+          v1 (nth quad 13)]
+      (is (approx= u0 0.0))
+      (is (approx= v0 0.0))
+      (is (approx= u1 0.0))
+      (is (approx= v1 0.0)))))
+
+(deftest solid-quad-color-normalization
+  (testing "solid-quad normalizes color correctly"
+    (let [quad (hud/solid-quad 0 0 1 1 [200 100 50 150] default-opts)
+          r0 (nth quad 5)
+          g0 (nth quad 6)
+          b0 (nth quad 7)
+          a0 (nth quad 8)]
+      (is (approx= r0 (/ 200.0 255.0)))
+      (is (approx= g0 (/ 100.0 255.0)))
+      (is (approx= b0 (/ 50.0 255.0)))
+      (is (approx= a0 (/ 150.0 255.0))))))
+
+;; ==========================================================
+;; hud-lines Tests
+;; ==========================================================
+
+(deftest hud-lines-basic
+  (testing "hud-lines extracts data from world state"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 20}}}
+                 :depth 3
+                 :turn 42
+                 :log []}
+          lines (hud/hud-lines world)]
+      (is (vector? lines))
+      (is (> (count lines) 0)))))
+
+(deftest hud-lines-status-line
+  (testing "hud-lines includes status line at row 0"
+    (let [world {:entities {:player {:body {:hp 15 :max-hp 30}}}
+                 :depth 5
+                 :turn 100
+                 :log []}
+          lines (hud/hud-lines world)
+          status (first lines)]
+      (is (= (:row status) 0))
+      (is (= (:col status) 1))
+      (is (str/includes? (:text status) "HP"))
+      (is (str/includes? (:text status) "15/30"))
+      (is (str/includes? (:text status) "D:5"))
+      (is (str/includes? (:text status) "T:100")))))
+
+(deftest hud-lines-hp-color-green
+  (testing "hud-lines uses green HP color when hp > 2/3 max-hp"
+    (let [world {:entities {:player {:body {:hp 20 :max-hp 30}}}
+                 :depth 1
+                 :turn 1
+                 :log []}
+          lines (hud/hud-lines world)
+          status (first lines)]
+      ;; hp=20, max-hp=30 → frac=0.667 > 2/3, should be green
+      (is (= (:fg status) [80 220 80])))))
+
+(deftest hud-lines-hp-color-yellow
+  (testing "hud-lines uses yellow HP color when 1/3 < hp <= 2/3 max-hp"
+    (let [world {:entities {:player {:body {:hp 15 :max-hp 30}}}
+                 :depth 1
+                 :turn 1
+                 :log []}
+          lines (hud/hud-lines world)
+          status (first lines)]
+      ;; hp=15, max-hp=30 → frac=0.5 (between 1/3 and 2/3), should be yellow
+      (is (= (:fg status) [220 220 80])))))
+
+(deftest hud-lines-hp-color-red
+  (testing "hud-lines uses red HP color when hp <= 1/3 max-hp"
+    (let [world {:entities {:player {:body {:hp 8 :max-hp 30}}}
+                 :depth 1
+                 :turn 1
+                 :log []}
+          lines (hud/hud-lines world)
+          status (first lines)]
+      ;; hp=8, max-hp=30 → frac=0.267 < 1/3, should be red
+      (is (= (:fg status) [220 80 80])))))
+
+(deftest hud-lines-log-messages
+  (testing "hud-lines includes last 3 log messages at rows 27-29"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log ["msg1" "msg2" "msg3" "msg4"]}
+          lines (hud/hud-lines world)
+          ;; First line is status, rest are messages
+          msg-lines (drop 1 lines)]
+      ;; Should have at most 3 message lines
+      (is (<= (count msg-lines) 3))
+      ;; Messages should be on rows 27, 28, 29
+      (is (some #(= (:row %) 27) msg-lines))
+      (is (some #(= (:row %) 28) msg-lines))
+      (is (some #(= (:row %) 29) msg-lines)))))
+
+(deftest hud-lines-log-order
+  (testing "hud-lines shows newest messages at bottom (row 29)"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log ["old" "new"]}
+          lines (hud/hud-lines world)
+          msg-lines (drop 1 lines)
+          last-msg (last msg-lines)]
+      ;; Newest message (last in log) should be at highest row (29 or closest)
+      (is (= (:text last-msg) "new")))))
+
+(deftest hud-lines-missing-fields
+  (testing "hud-lines handles missing world fields gracefully"
+    (let [world {:entities {}}]
+      (is (vector? (hud/hud-lines world))))))
+
+;; ==========================================================
+;; hud-verts Tests
+;; ==========================================================
+
+(deftest hud-verts-returns-map
+  (testing "hud-verts returns a map with :solids and :glyphs keys"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log []}
+          result (hud/hud-verts world test-atlas default-opts)]
+      (is (map? result))
+      (is (contains? result :solids))
+      (is (contains? result :glyphs)))))
+
+(deftest hud-verts-solids-include-backings
+  (testing "hud-verts includes background strips in :solids"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log []}
+          result (hud/hud-verts world test-atlas default-opts)]
+      ;; Should have at least 2 backing quads (status + messages) × 54 floats
+      (is (>= (count (:solids result)) 108)))))
+
+(deftest hud-verts-glyphs-non-empty
+  (testing "hud-verts includes glyphs for HUD text"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log ["test"]}
+          result (hud/hud-verts world test-atlas default-opts)]
+      ;; Should have glyphs for status text and message
+      (is (> (count (:glyphs result)) 0)))))
+
+(deftest hud-verts-hp-bar
+  (testing "hud-verts includes HP bar background and fill"
+    (let [world {:entities {:player {:body {:hp 5 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log []}
+          result (hud/hud-verts world test-atlas default-opts)]
+      ;; Should have multiple solids (status backing, msg backing, hp-bar-bg, hp-bar-fill)
+      (is (>= (count (:solids result)) 162)))))  ;; at least 3 quads
+
+(deftest hud-verts-batches-are-flat-floats
+  (testing "hud-verts batches contain only numbers and are 9-float aligned
+            (regression: hp-fill once nested a vector into :solids)"
+    (let [world {:entities {:player {:body {:hp 10 :max-hp 10}}}
+                 :depth 1
+                 :turn 1
+                 :log ["a" "b"]}
+          result (hud/hud-verts world test-atlas default-opts)]
+      (is (every? number? (:solids result)))
+      (is (every? number? (:glyphs result)))
+      (is (= 0 (rem (count (:solids result)) 9)))
+      (is (= 0 (rem (count (:glyphs result)) 9))))))

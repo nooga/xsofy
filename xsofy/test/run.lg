@@ -10,6 +10,7 @@
    [xsofy.test.fall-test]
    [xsofy.test.grid-test]
    [xsofy.test.hash-test]
+   [xsofy.test.hud-test]
    [xsofy.test.input-test]
    [xsofy.test.invariant-test]
    [xsofy.test.mapgen-audit-test]
@@ -23,6 +24,7 @@
    [xsofy.test.spell-prop]
    [xsofy.test.title-test]
    [xsofy.test.ui-test]
+   [xsofy.test.vfx-test]
    [xsofy.test.world-prop]
    [xsofy.test.world-seed-test]))
 

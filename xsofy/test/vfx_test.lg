@@ -1,0 +1,193 @@
+(ns xsofy.test.vfx-test
+  "Tests for xsofy.gl.vfx — VFX vertex batch builders."
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.gl.vfx :as vfx]))
+
+;; ==========================================================
+;; Float Comparison Helper
+;; ==========================================================
+
+(defn approx=
+  "Approximate equality for floats (epsilon = 1e-5)."
+  [a b]
+  (let [eps 1e-5]
+    (if (and (number? a) (number? b))
+      (< (math/abs (- a b)) eps)
+      (= a b))))
+
+;; ==========================================================
+;; Test Data
+;; ==========================================================
+
+(def test-opts {:cell-w 0.5 :cell-h 1.0})
+
+(def test-atlas
+  {"-" [0.0 0.0 0.5 1.0]
+   "~" [0.5 0.0 1.0 1.0]})
+
+;; ==========================================================
+;; tick-vfx Tests
+;; ==========================================================
+
+(deftest tick-vfx-projectile-advances-step
+  (testing "tick-vfx increments projectile step"
+    (let [vfx [{:type :projectile :path [[0 0] [1 0] [2 0]] :step 0}]
+          next-vfx (vfx/tick-vfx vfx)]
+      (is (= 1 (:step (first next-vfx)))))))
+
+(deftest tick-vfx-projectile-expires
+  (testing "tick-vfx removes projectile at end of path"
+    (let [vfx [{:type :projectile :path [[0 0] [1 0]] :step 1}]
+          next-vfx (vfx/tick-vfx vfx)]
+      (is (= 0 (count next-vfx))))))
+
+(deftest tick-vfx-bolt-decays
+  (testing "tick-vfx decrements bolt decay"
+    (let [vfx [{:type :bolt :from [0 0] :to [2 0] :decay 5 :max-decay 5}]
+          next-vfx (vfx/tick-vfx vfx)]
+      (is (= 4 (:decay (first next-vfx)))))))
+
+(deftest tick-vfx-bolt-expires
+  (testing "tick-vfx removes bolt at decay = 0"
+    (let [vfx [{:type :bolt :from [0 0] :to [2 0] :decay 1}]
+          next-vfx (vfx/tick-vfx vfx)]
+      (is (= 0 (count next-vfx))))))
+
+(deftest tick-vfx-flash-decays
+  (testing "tick-vfx decrements flash decay"
+    (let [vfx [{:type :flash :pos [1 1] :decay 3}]
+          next-vfx (vfx/tick-vfx vfx)]
+      (is (= 2 (:decay (first next-vfx)))))))
+
+(deftest tick-vfx-mixed-events
+  (testing "tick-vfx handles mixed event types"
+    (let [vfx [{:type :projectile :path [[0 0] [1 0]] :step 0}
+               {:type :bolt :from [0 0] :to [2 0] :decay 2 :max-decay 2}
+               {:type :flash :pos [1 1] :decay 1}]
+          next-vfx (vfx/tick-vfx vfx)]
+      (is (= 2 (count next-vfx)))
+      (is (= 1 (:step (first next-vfx)))))))
+
+;; ==========================================================
+;; vfx-verts Tests
+;; ==========================================================
+
+(deftest vfx-verts-empty-list
+  (testing "vfx-verts handles empty vfx list"
+    (let [result (vfx/vfx-verts [] test-atlas test-opts)]
+      (is (= 0 (count (:tinted result))))
+      (is (= 0 (count (:glyphs result)))))))
+
+(deftest vfx-verts-projectile-count
+  (testing "vfx-verts emits 54 floats (1 quad) for projectile"
+    (let [vfx [{:type :projectile :path [[0 0]] :step 0 :glyph "-" :color [200 180 120]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)]
+      (is (= 54 (count (:glyphs result))))
+      (is (= 0 (count (:tinted result)))))))
+
+(deftest vfx-verts-projectile-position
+  (testing "vfx-verts places projectile quad at path[step]"
+    (let [vfx [{:type :projectile :path [[1 2]] :step 0 :glyph "-" :color [255 255 255]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          glyphs (:glyphs result)
+          ;; First vertex x should be col * cell-w = 1 * 0.5 = 0.5
+          x0 (nth glyphs 0)
+          ;; First vertex z should be row * cell-h = 2 * 1.0 = 2.0
+          z0 (nth glyphs 2)]
+      (is (approx= x0 0.5))
+      (is (approx= z0 2.0)))))
+
+(deftest vfx-verts-projectile-y-height
+  (testing "vfx-verts places projectile at y=0.02"
+    (let [vfx [{:type :projectile :path [[0 0]] :step 0 :glyph "-" :color [255 255 255]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          glyphs (:glyphs result)
+          ;; All y coordinates (every 9th starting at 1) should be 0.02
+          y-coords (loop [i 1 ys []]
+                     (if (>= i (count glyphs))
+                       ys
+                       (recur (+ i 9) (conj ys (nth glyphs i)))))]
+      (is (every? #(approx= % 0.02) y-coords)))))
+
+(deftest vfx-verts-bolt-count
+  (testing "vfx-verts emits quads for each bolt cell"
+    (let [vfx [{:type :bolt :from [0 0] :to [2 0] :decay 1 :max-decay 1}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          ;; Line from (0,0) to (2,0) has 3 cells
+          expected-verts (* 3 54)]
+      (is (= expected-verts (count (:tinted result)))))))
+
+(deftest vfx-verts-bolt-alpha
+  (testing "vfx-verts applies correct bolt alpha = 0.5 * intensity"
+    (let [vfx [{:type :bolt :from [0 0] :to [0 0] :decay 2 :max-decay 4 :color [255 0 0]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          tinted (:tinted result)
+          ;; Alpha is at index 8 of each vertex (9 floats per vertex)
+          alpha (nth tinted 8)]
+      ;; intensity = 2/4 = 0.5, alpha = 0.5 * 0.5 = 0.25
+      (is (approx= alpha 0.25)))))
+
+(deftest vfx-verts-flash-count
+  (testing "vfx-verts emits 54 floats (1 quad) for flash"
+    (let [vfx [{:type :flash :pos [1 1] :decay 1 :max-decay 1 :color [255 255 255]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)]
+      (is (= 54 (count (:tinted result))))
+      (is (= 0 (count (:glyphs result)))))))
+
+(deftest vfx-verts-flash-alpha
+  (testing "vfx-verts applies correct flash alpha = 0.6 * intensity^2"
+    (let [vfx [{:type :flash :pos [0 0] :decay 2 :max-decay 4 :color [255 255 255]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          tinted (:tinted result)
+          ;; Alpha is at index 8 of first vertex
+          alpha (nth tinted 8)]
+      ;; intensity = 2/4 = 0.5, alpha = 0.6 * 0.5^2 = 0.15
+      (is (approx= alpha 0.15)))))
+
+(deftest vfx-verts-flash-position
+  (testing "vfx-verts places flash at correct position"
+    (let [vfx [{:type :flash :pos [3 2] :decay 1 :max-decay 1}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          tinted (:tinted result)
+          x0 (nth tinted 0)
+          z0 (nth tinted 2)]
+      ;; col=3, cell-w=0.5 → x=1.5
+      ;; row=2, cell-h=1.0 → z=2.0
+      (is (approx= x0 1.5))
+      (is (approx= z0 2.0)))))
+
+(deftest vfx-verts-mixed-types
+  (testing "vfx-verts separates tinted and glyph batches"
+    (let [vfx [{:type :projectile :path [[0 0]] :step 0 :glyph "-" :color [255 255 255]}
+               {:type :bolt :from [0 0] :to [0 0] :decay 1 :max-decay 1}
+               {:type :flash :pos [1 1] :decay 1 :max-decay 1}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)]
+      ;; 1 projectile quad = 54, 1 bolt cell quad = 54, 1 flash quad = 54
+      (is (= 108 (count (:tinted result))))  ;; bolt + flash
+      (is (= 54 (count (:glyphs result)))))))   ;; projectile
+
+(deftest vfx-verts-missing-glyph
+  (testing "vfx-verts skips projectile with missing glyph"
+    (let [vfx [{:type :projectile :path [[0 0]] :step 0 :glyph "missing" :color [255 255 255]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)]
+      (is (= 0 (count (:glyphs result)))))))
+
+(deftest vfx-verts-projectile-out-of-bounds
+  (testing "vfx-verts skips projectile with out-of-bounds step"
+    (let [vfx [{:type :projectile :path [[0 0]] :step 5 :glyph "-" :color [255 255 255]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)]
+      (is (= 0 (count (:glyphs result)))))))
+
+(deftest vfx-verts-default-colors
+  (testing "vfx-verts uses default colors when not specified"
+    (let [vfx [{:type :flash :pos [0 0]}]
+          result (vfx/vfx-verts vfx test-atlas test-opts)
+          tinted (:tinted result)
+          ;; Default flash color is [255 255 255], normalized to [1 1 1]
+          r (nth tinted 5)
+          g (nth tinted 6)
+          b (nth tinted 7)]
+      (is (approx= r 1.0))
+      (is (approx= g 1.0))
+      (is (approx= b 1.0)))))
