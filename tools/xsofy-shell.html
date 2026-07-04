@@ -304,6 +304,46 @@
     }
   }
 
+  /* Phone landscape (short viewport) — split the shell to the RIGHT instead of
+     stacking it below the terminal (the block above leaves a phone only ~130px
+     of game). Terminal keeps the left ~70% so the game's own left HUD sidebar
+     has the width to stay open — unlike portrait, where the narrow terminal
+     drops it. Portrait's exact control block — side-by-side D-pad + the
+     multi-pane action column (cycle + all panes intact) — is transplanted
+     verbatim into a ~30% right column: we only REPOSITION it, not reshape it.
+     Scoped by max-height so tablet/desktop force-touch opt-in (taller
+     viewports) keeps the centered strip above. First cut — ratio tuned
+     on-device (F18). */
+  @media (orientation: landscape) and (max-height: 500px) {
+    body.force-touch                { flex-direction: row; }
+    body.force-touch #terminal      { height: 100vh; flex: 1 1 auto; min-width: 0; }
+    body.force-touch #xsofy-shell   {
+      flex: 0 0 30%;
+      height: 100vh;
+      overflow: auto;
+      border-top: none;
+      border-left: 1px solid var(--bar-rule);
+    }
+    /* Keep portrait's touch grid verbatim (base .touch = 3fr/2fr D-pad|actions,
+       panes intact). Only undo the 560px strip-centering from the landscape
+       block above and restore fill sizing (that block pins 60px rows). */
+    body.force-touch #xsofy-shell .touch {
+      max-width: none;
+      width: auto;
+      margin: 0;
+    }
+    body.force-touch #xsofy-shell .pad,
+    body.force-touch #xsofy-shell .actions {
+      grid-template-rows: repeat(3, 1fr);
+      height: 100%;
+    }
+    /* Narrow rail: collapse the info bar to a single column so title/quest
+       don't fight the fixed-width chips for space. */
+    body.force-touch #xsofy-shell .info {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
   #xsofy-shell button {
     font-family: inherit;
     font-size: 14px;
