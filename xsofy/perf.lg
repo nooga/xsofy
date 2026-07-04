@@ -1,0 +1,81 @@
+(ns xsofy.perf
+  (:require [xsofy.world :as world]
+            [xsofy.input :as input]))
+
+;; Shared benchmark core — the UI-agnostic engine-timing primitives that both
+;; the native harness (bench/native.lg) and the in-bundle WASM harness
+;; (xsofy/bench.lg) drive. World+input only: no render, no bridge, no xterm,
+;; no println, no profiling — those belong to the drivers. Keeping this core
+;; dependency-free is what lets the native harness stand alone.
+;;
+;; A fixture is [name keystroke-fn turn-count]. keystroke-fn takes the 0-based
+;; turn index and returns the *string* form of a key; the driver owns the list.
+;;
+;; Determinism: make-world threads `seed` through the world's det state (RNG +
+;; :next-id), so a given seed replays bit-identically run-to-run. Drivers choose
+;; their seed strategy (spread of worlds vs a pinned world) via run-fixture args.
+
+(defn time-turn
+  "Run one turn; return [new-world ms]."
+  [w key-str]
+  (let [k  (input/parse-key key-str)
+        t0 (System/currentTimeMillis)
+        w' (world/update-world w k)
+        dt (- (System/currentTimeMillis) t0)]
+    [w' dt]))
+
+(defn run-trial
+  "One trial: fresh world at `seed`, up to n turns (stops early on player
+   death). Returns a vector of per-turn ms."
+  [keystroke-fn n seed]
+  (loop [w (world/make-world 79 30 seed)
+         i 0
+         samples (transient [])]
+    (cond
+      (= i n)                               (persistent! samples)
+      (nil? (get-in w [:entities :player])) (persistent! samples)
+      :else
+      (let [[w' dt] (time-turn w (keystroke-fn i))]
+        (recur w' (inc i) (conj! samples dt))))))
+
+(defn percentile [sorted p]
+  (let [n (count sorted)
+        idx (min (dec n) (int (* (dec n) p)))]
+    (nth sorted idx)))
+
+(defn summarize [samples]
+  ;; Short-circuit the empty case: percentile calls (nth sorted -1) on an empty
+  ;; vector otherwise. run-fixture can hand us no samples (empty seeds, zero
+  ;; trials, or a zero-turn fixture).
+  (let [n (count samples)]
+    (if (zero? n)
+      {:n 0 :avg 0 :p50 0 :p95 0 :max 0}
+      (let [sorted (vec (sort samples))
+            sum (reduce + samples)]
+        {:n   n
+         :avg (quot sum n)
+         :p50 (percentile sorted 0.50)
+         :p95 (percentile sorted 0.95)
+         :max (last sorted)}))))
+
+(defn run-fixture
+  "Run `fixture` once per seed in `seeds`, `trials` times per seed. Returns
+   {:name kw, <aggregate summarize keys>, :per-seed [{:seed n ...} ...]}.
+   Aggregate spans all samples; :per-seed surfaces seed-specific variance.
+     - spread-of-worlds: (run-fixture f (vec (range TRIALS)) 1)
+     - pinned world:     (run-fixture f [42] TRIALS)"
+  [[name keystroke-fn turn-count] seeds trials]
+  (let [per (mapv (fn [seed]
+                    {:seed seed
+                     :samples (loop [i 0 acc []]
+                                (if (= i trials)
+                                  acc
+                                  (recur (inc i)
+                                         (into acc (run-trial keystroke-fn turn-count seed)))))})
+                  seeds)
+        all (vec (mapcat :samples per))]
+    (merge (summarize all)
+           {:name     name
+            :per-seed (mapv (fn [{:keys [seed samples]}]
+                              (assoc (summarize samples) :seed seed))
+                            per)})))
