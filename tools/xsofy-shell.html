@@ -30,6 +30,14 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <style>
+  /* Own the color scheme so iOS Safari doesn't apply its dark-mode color
+     transform to our fixed dark terminal. Without this, Dark Mode + the
+     @font-face below (a documented Safari combination) renders the dim rune
+     and lighting tints wrong; Light Mode looked fine (finding F3). The shell
+     is always dark (theme bg #0a0e14), so we declare `dark`. Mirrored as a
+     <meta> injected at boot (below) for the earliest, race-free signal. */
+  :root { color-scheme: dark; }
+
   /* Terminal font: Fairfax HD (OFL, Kreative Software), inlined below as a
      base64 WOFF2 so it ships in the bundle — no external request, no CDN, no
      COEP crossorigin dance under require-corp. ONE face for the whole terminal
@@ -429,6 +437,17 @@
       m.name = "viewport";
       m.content = "width=device-width, initial-scale=1, viewport-fit=cover";
       document.head.appendChild(m);
+    }
+
+    // --- Color scheme. Pair to the CSS `:root { color-scheme: dark }` above:
+    // tells iOS Safari this page owns its (fixed dark) appearance so it doesn't
+    // dark-mode-transform our colors (finding F3). The meta is the earliest,
+    // most reliable signal for Safari's scheme-evaluation timing. ---
+    if (!document.querySelector('meta[name="color-scheme"]')) {
+      const cs = document.createElement("meta");
+      cs.name = "color-scheme";
+      cs.content = "dark";
+      document.head.appendChild(cs);
     }
 
     // --- Terminal ownership. Previously let-go's host.html + lg-shell-xterm.js
