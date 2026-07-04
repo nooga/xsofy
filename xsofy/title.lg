@@ -166,7 +166,13 @@
                    (let [[tag payload] ev]
                      (case tag
                        :tick   (assoc st :frame payload)
-                       :action (reduced st)   ;; any key ends the title
+                       ;; Any key ends the title — except the shell's resize
+                       ;; nudge (a lone BEL, 0x07), which wakes read-key on a
+                       ;; browser resize but is not a user keypress. Without this
+                       ;; guard the nudge auto-dismisses the title. Match BEL
+                       ;; exactly rather than via parse-key: space also parses to
+                       ;; :unknown and must still start the game.
+                       :action (if (= payload (str (char 7))) st (reduced st))
                        st)))
        :render   (fn [st] (draw-frame runes title subtitle tw th (:frame st) seed))
        :frame-ms 120})
