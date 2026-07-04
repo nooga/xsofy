@@ -480,7 +480,31 @@
     // Mirrors native SIGWINCH behavior; gated on grid change so per-pixel
     // resize events don't spam the worker.
     function refit() {
+      // Clear the letterbox padding before fitting so fit() measures the full
+      // box, not the previously-padded one (which would ratchet inward).
+      const host = term.element ? term.element.parentElement : null; // #terminal
+      if (host) { host.style.padding = "0px"; }
       try { fit.fit(); } catch (_) {}
+      // Letterbox the sub-cell fit remainder on both axes. The grid is a whole
+      // number of fixed-size cells, so up to ~one cell is left over per axis;
+      // xterm pins the grid top-left, pooling the slack on the right and bottom
+      // edges. Split each axis into equal padding so the grid sits centered —
+      // the geometry is unchanged, only where the slack lives. #terminal's
+      // border-box is fixed by flex (height) and stretch (width), so this
+      // padding stays inside it and never shifts the bar below.
+      const screen = host ? host.querySelector(".xterm-screen") : null;
+      if (host && screen) {
+        const slackX = host.clientWidth - screen.clientWidth;
+        const slackY = host.clientHeight - screen.clientHeight;
+        if (slackX > 1) {
+          const p = Math.floor(slackX / 2) + "px";
+          host.style.paddingLeft = p; host.style.paddingRight = p;
+        }
+        if (slackY > 1) {
+          const p = Math.floor(slackY / 2) + "px";
+          host.style.paddingTop = p; host.style.paddingBottom = p;
+        }
+      }
       if (term.cols !== lastCols || term.rows !== lastRows) {
         lastCols = term.cols; lastRows = term.rows;
         if (boundMode === "worker" && window.LetGoHost) {
@@ -519,9 +543,39 @@
         term.onResize(({ cols, rows }) => window.LetGoHost.setSize(cols, rows));
         term.onData((d) => window.LetGoHost.sendInput(d));
       }
+      // Center the grid on first paint. lastCols/lastRows are already set, so
+      // this only applies the letterbox padding — it won't re-advertise size.
+      refit();
     });
 
-    window.addEventListener("resize", refit);
+    // Ambient viewport changes — drag-resize, rotation, and the mobile URL bar
+    // showing/hiding — arrive as a burst of events over the gesture. Debounce
+    // to the trailing edge and coalesce the fit into one rAF so it runs once
+    // per settle, never mid-gesture or on an intermediate size. Discrete user
+    // actions (font cycle, touch-control toggle) call refit() directly below —
+    // they're single events and don't need settling.
+    let refitTimer = null, refitRaf = null;
+    function scheduleRefit() {
+      if (refitTimer) clearTimeout(refitTimer);
+      refitTimer = setTimeout(() => {
+        refitTimer = null;
+        if (refitRaf) cancelAnimationFrame(refitRaf);
+        refitRaf = requestAnimationFrame(() => { refitRaf = null; refit(); });
+      }, 120);
+    }
+
+    window.addEventListener("resize", scheduleRefit);
+    // Rotation settles over several resize events; the trailing-edge debounce
+    // waits them out, so no extra orientation-specific delay is needed.
+    window.addEventListener("orientationchange", scheduleRefit);
+    // The URL bar collapsing/expanding reclaims height without always firing a
+    // window resize; it does fire visualViewport resize (and scroll on some
+    // engines). refit() is grid-change-gated, so scroll spam costs nothing when
+    // the row count is unchanged.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", scheduleRefit);
+      window.visualViewport.addEventListener("scroll", scheduleRefit);
+    }
 
     // Shell-owned font sizing — replaces the fork's host-side _lgSetFontSize.
     // Safe before term.open (sets the option; the fit() is caught); the
