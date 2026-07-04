@@ -13,7 +13,18 @@
    The caller renders with ortho(0, 39.5, 30, 0, -1, 1), making row 0 the top.
 
    Vertex format: 9 floats per vertex [x y z u v r g b a].
-   Quads emit 6 vertices (2 triangles): v0 v1 v3, v1 v2 v3.")
+   Quads emit 6 vertices (2 triangles): v0 v1 v3, v1 v2 v3.
+
+   Spell-rune glyphs (xsofy.runes/rune-glyphs) render TWO cells wide with a
+   one-cell advance, so consecutive runes overlap into a composite sigil —
+   reproducing the native terminal, where the halfwidth grid + a full-width
+   fallback font makes inscribed rune sequences overlap by design."
+  (:require
+   [xsofy.runes :as runes]))
+
+(def sigil-glyphs
+  "Glyphs that render wide-with-overlap (the spell rune set)."
+  (set runes/rune-glyphs))
 
 ;; ==========================================================
 ;; Helpers
@@ -90,9 +101,15 @@
       []  ;; No glyph in atlas, emit nothing
       (let [[u0 v0 u1 v1] uv-bounds
             [r g b a] (rgba->normalized fg-255)
-            x (float (* col cell-w))
+            ;; Sigil glyphs: quad spans 2 cells centered on the advance cell
+            ;; (half a cell of overhang each side), so adjacent runes overlap.
+            sigil? (contains? sigil-glyphs ch-use)
+            x (if sigil?
+                (float (* (- col 0.5) cell-w))
+                (float (* col cell-w)))
+            w (if sigil? (* 2.0 cell-w) cell-w)
             y (float (* row cell-h))]
-        (quad-vertices x y cell-w cell-h u0 v0 u1 v1 r g b a)))))
+        (quad-vertices x y w cell-h u0 v0 u1 v1 r g b a)))))
 
 (defn text-quads
   "Convert a string to textured vertex quads, advancing col per character.

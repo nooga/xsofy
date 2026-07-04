@@ -327,6 +327,24 @@
       ;; Should have multiple solids (status backing, msg backing, hp-bar-bg, hp-bar-fill)
       (is (>= (count (:solids result)) 162)))))  ;; at least 3 quads
 
+(deftest char-quad-sigil-glyphs-render-wide
+  (testing "spell-rune glyphs span 2 cells centered on the advance cell
+            (overlapping-sigil rendering); ASCII stays 1 cell"
+    (let [atlas {"ᚠ" [0.0 0.0 0.5 1.0] "A" [0.5 0.0 1.0 1.0]}
+          rune-q (hud/char-quad "ᚠ" 4 2 [255 255 255] atlas default-opts)
+          ascii-q (hud/char-quad "A" 4 2 [255 255 255] atlas default-opts)
+          xs (fn [q] (loop [i 0 acc []]
+                       (if (>= i (count q))
+                         acc
+                         (recur (+ i 9) (conj acc (nth q i))))))
+          rune-xs (xs rune-q)
+          ascii-xs (xs ascii-q)]
+      ;; cell-w 0.5: col 4 → ascii x ∈ [2.0, 2.5]; rune x ∈ [1.75, 2.75]
+      (is (approx= 2.0 (apply min ascii-xs)))
+      (is (approx= 2.5 (apply max ascii-xs)))
+      (is (approx= 1.75 (apply min rune-xs)))
+      (is (approx= 2.75 (apply max rune-xs))))))
+
 (deftest hud-verts-batches-are-flat-floats
   (testing "hud-verts batches contain only numbers and are 9-float aligned
             (regression: hp-fill once nested a vector into :solids)"
