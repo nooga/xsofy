@@ -43,8 +43,12 @@
                     cell-x (* grid-x cell-w)
                     cell-y (* grid-y cell-h)]
 
-                ;; Rasterize glyph
-                (let [glyph-alphas (glplat/FontRasterizeCell font-id glyph cell-w cell-h)]
+                ;; Rasterize glyph. Fairfax HD is a bitmap-style face (native
+                ;; 12x24 grid); the rasterizer antialiases every edge anyway,
+                ;; which reads as faint hairline text on screen. Binarize
+                ;; alpha so strokes are solid, terminal-crisp pixels.
+                (let [glyph-alphas (vec (map #(if (>= % 96.0) 255.0 0.0)
+                                             (glplat/FontRasterizeCell font-id glyph cell-w cell-h)))]
 
                   ;; Blit into atlas
                   (doseq [[local-idx alpha] (map-indexed vector glyph-alphas)]

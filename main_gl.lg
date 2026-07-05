@@ -491,6 +491,10 @@
                          (let [d (parse-number auto-exit-str 0.0)]
                            (when (> d 0.0) d)))
         dump? (boolean (os/getenv "XSOFY_GL_DUMP"))
+        ;; XSOFY_GL_SHOT=path.png captures one frame (before EndFrame swaps)
+        ;; once elapsed >= XSOFY_GL_SHOT_AT seconds (default 1.0).
+        shot-path (os/getenv "XSOFY_GL_SHOT")
+        shot-at (parse-number (os/getenv "XSOFY_GL_SHOT_AT") 1.0)
         force-fall-str (os/getenv "XSOFY_GL_FORCE_FALL")
         force-fall-secs (when force-fall-str
                           (parse-number force-fall-str -1.0))
@@ -515,7 +519,8 @@
              frame 0
              last-auto-t start-time
              vfx-events []
-             last-vfx-t start-time]
+             last-vfx-t start-time
+             shot-done false]
         (let [t (glplat/Time)
               elapsed (- t start-time)
               should-close (glplat/ShouldClose)
@@ -609,11 +614,21 @@
                   (render-top-down w-no-vfx tex-id atlas dump? frame
                     vfx-events-ticked))
                 (render-hud w-no-vfx tex-id atlas)
-                (glplat/EndFrame)
+                ;; Screenshot hook: capture the composed back buffer once,
+                ;; before EndFrame swaps it away.
+                (let [take-shot (and shot-path (not shot-done)
+                                     (>= elapsed shot-at))]
+                  (when take-shot
+                    (glplat/Screenshot shot-path)
+                    (when dump?
+                      (print (str "XSOFY_GL_DUMP: screenshot " shot-path
+                                  " at " (format "%.2f" elapsed) "s\n"))))
+                  (glplat/EndFrame)
 
-                ;; Continue loop
-                (recur w-no-vfx pres' (inc frame) last-auto-t-next
-                  vfx-events-ticked last-vfx-t-next))))))
+                  ;; Continue loop
+                  (recur w-no-vfx pres' (inc frame) last-auto-t-next
+                    vfx-events-ticked last-vfx-t-next
+                    (or shot-done (boolean take-shot)))))))))
 
       (finally
         (glplat/Terminate)
