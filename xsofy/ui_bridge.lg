@@ -1,0 +1,90 @@
+(ns xsofy.ui-bridge
+  (:require [js]))
+
+;; Outbound channel from the game to whatever HTML/JS shell is hosting it.
+;; Builds on let-go's (js/emit ...) — see ../let-go fork on branch
+;; experiment/js-bridge. On native, (js/emit ...) is a validated no-op so the
+;; game runs unchanged in a real terminal; in WASM the event arrives on
+;; window as a CustomEvent whose .detail is the JSON-marshaled data.
+;;
+;; Use `emit` from anywhere in the game when something interesting just
+;; happened. Keep payloads small and shaped for direct UI consumption —
+;; the bridge isn't a state-replication channel, it's a structured
+;; output stream.
+
+(defn emit
+  "Emit a structured event to the HTML/JS host under the `xsofy/` namespace.
+
+   event-key may be unqualified (`:startup`) — it's auto-namespaced to
+   `:xsofy/startup` — or already-qualified (`:xsofy/inventory`), in which
+   case it's used as-is. data is any JSON-serializable let-go value.
+   Returns nil. No-op on native."
+  [event-key data]
+  (let [qualified (if (qualified-keyword? event-key)
+                    event-key
+                    (keyword "xsofy" (name event-key)))]
+    (js/emit qualified data)))
+
+;; --- Named channels ------------------------------------------------------
+;; One function per event the bridge advertises. Centralizing the names
+;; means consumers can grep this file to know what's available, and we
+;; avoid drift between callers if a channel ever gets renamed.
+
+(defn emit-boot
+  "Fired before any title-screen interaction. Useful for HTML shells that
+   want to draw their chrome as soon as the WASM is alive."
+  [phase]
+  (emit :boot {:phase phase}))
+
+(defn emit-startup
+  "Fired once per run, after the procgen title is decided. Tells the HTML
+   shell what to label the session (e.g., in a header bar or page title)."
+  [title quest]
+  (emit :startup {:title title :quest quest}))
+
+(defn emit-stats
+  "Fired after each turn the player sees. Small per-turn summary the HUD
+   uses to render the info row. Skip when there's no player (death) so the
+   bar shows the last known good state until restart."
+  [world]
+  (let [player (get-in world [:entities :player])]
+    (when player
+      (emit :stats {:hp     (get-in player [:body :hp] 0)
+                    :max-hp (get-in player [:body :max-hp] 1)
+                    :depth  (or (:depth world) 1)
+                    :turn   (or (:turn world) 0)}))))
+
+(defn emit-term-size
+  "Fired at game-loop entry and whenever the terminal reports a new size
+   (xsofy/main.lg detects resize via prev-size comparison each turn).
+   The HUD uses this to display cols×rows in debug mode — handy for
+   reproducing rendering bugs that only appear at certain dimensions."
+  [cols rows]
+  (emit :term-size {:cols cols :rows rows}))
+
+(defn emit-perf
+  "Fired after each :game-screen iteration. Caller passes a map with
+   timing in ms; minimum useful keys:
+   :update    — world/update-world cost (AI, sim, FOV, etc.)
+   :render    — render-full or render-dirty cost
+   :total     — :update + :render, exact (computed as the sum, not a
+                separate wall measurement).
+   :input-lag — ms between JS _lgKey and Go term/read-key returning.
+                Measured by the WASM term namespace (no-op = 0 on
+                native). Stale-but-cheap on auto-action turns where
+                read-key isn't called.
+   :turn      — game turn the timing values describe. Lets the bottom-
+                bar display label which turn the u/r/i numbers came
+                from, so the inevitable display-vs-gauge alignment
+                drift under rapid input is legible.
+   :cells     — count of map tiles touched by this turn's render. Lets
+                us distinguish 'render cost dominated by FOV expansion'
+                (high cells) from 'render is per-cell expensive even on
+                small FOVs' (low cells + high :render).
+   :mode      — :full or :dirty
+   :key       — action that drove the turn (string)
+
+   Listen via window.addEventListener('xsofy/perf', e => ...) — the HUD
+   ignores by default. Native callers see the same data in debug.log."
+  [data]
+  (emit :perf data))
