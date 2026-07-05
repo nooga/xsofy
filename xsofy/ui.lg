@@ -1,8 +1,9 @@
 (ns xsofy.ui
-  (:require [term]
-            [async :refer [timeout <!!]]
-            [xsofy.input :as input]
-            [xsofy.util :as u]))
+  (:require
+   [async :refer [<!! timeout]]
+   [term]
+   [xsofy.input :as input]
+   [xsofy.util :as u]))
 
 ;; --- Timing ---
 ;; Shared frame/animation pause. Floors the delay under wasm so the event loop
@@ -220,11 +221,9 @@
    called once per tick; input-source/clock-source are specializations. A single
    [tag …] event is wrapped; a seq of events passes through; nil → no events.
 
-   (A future async/network source would feed a channel and consume it here once
-   let-go gains a non-blocking channel take — nooga/let-go#194. A polling source
-   owns no goroutine, so there is nothing to cancel; that is the leak-free path.
-   The push `chan-source` adapter from the spec is deferred until that primitive
-   exists — its blocking-only `<!`/`>!` can't be polled without parking.)"
+   (A polling source owns no goroutine, so there is nothing to cancel; that is
+   the leak-free path. For push-based producers — goroutines feeding a channel —
+   see `chan-source` below.)"
   [f]
   (fn []
     (let [x (f)]
@@ -232,6 +231,33 @@
         (nil? x) []
         (and (vector? x) (keyword? (first x))) [x]   ;; a single [tag …] event
         :else x))))                                  ;; already a seq of events
+
+(defn chan-source
+  "A source draining events that producer goroutines pushed into channel `ch`,
+   via the non-blocking (async/poll! ch). let-go now has poll!/offer!/alts!
+   (nooga/let-go#194 — this adapter was deferred until then), so push-based
+   producers compose with the poll-based loop contract: the source never
+   blocks, WASM's single thread never parks the frame loop, and goroutines
+   under Go-wasm park/wake through the JS event loop as usual.
+
+   Each drained value is normalized like poll-source: a single [tag …] event
+   is kept as-is, a seq of events is spliced. Producers must not put nil —
+   poll! uses nil for 'channel empty'. Drain is capped ≤16/tick (like
+   input-source) so a producer flood can't stall a frame.
+
+   Ownership: this source owns no goroutine — the caller who started the
+   producers tears them down (e.g. by closing `ch`); a closed drained channel
+   simply yields no events, which is safe."
+  [ch]
+  (fn []
+    (loop [out []]
+      (if (>= (count out) 16)
+        out
+        (let [x (async/poll! ch)]
+          (cond
+            (nil? x) out
+            (and (vector? x) (keyword? (first x))) (recur (conj out x))
+            :else (recur (vec (concat out x)))))))))
 
 (defn- poll-1 [src] (if (map? src) ((:poll src)) (src)))
 
