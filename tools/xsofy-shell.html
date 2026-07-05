@@ -113,10 +113,9 @@
      (d/hp/turn-counter); the chip cluster sits bottom-right at thumb
      reach. Each text element only competes with the small fixed-width
      thing in its own row, so neither truncates the other.
-     Chip-row width is bounded by paging — see the .shell-cycle tile +
-     per-page data-chip-page tags below. Only one virtual chip group is
-     visible at a time, so the row stays single-line in debug even with
-     8+ debug chips defined.
+     The chip row holds the player options (font, repeat) plus the OPTIONS
+     tile always, and the dev-only force-touch chip under ?mode=dev — a small
+     fixed set, so the row stays single-line.
      `minmax(0, 1fr)` lets the left column shrink below content width so
      text-overflow:ellipsis fires; without the explicit `0` minimum, grid
      would honor the auto track size and the ellipsis never triggers. */
@@ -152,17 +151,9 @@
     gap: 0.4rem;
   }
 
-  /* Chip paging — single physical row that cycles through PLAY + 3 virtual
-     debug groups via one .shell-cycle tile (replaces what used to be a
-     separate mode-cycle + chip-nav). Per-chip data-chip-page tags which
-     group a chip belongs to; chips WITHOUT the attribute (only the cycle
-     tile itself) are persistent across every state. The container's
-     data-page picks the active group; "play" hides ALL debug chips so
-     play-mode reveals only the cycle tile in the right column. Adding a
-     chip = drop one button with the right data-chip-page; no CSS or JS
-     changes needed. */
-  #xsofy-shell .chips[data-page="play"]    [data-chip-page] { display: none; }
-  #xsofy-shell .chips[data-page="toggles"] [data-chip-page]:not([data-chip-page="toggles"]) { display: none; }
+  /* Chip visibility is tier-gated (see the tier-visibility block below):
+     font + repeat are always shown, force-touch is .dev-only. The OPTIONS
+     tile carries no tier class, so it persists across every tier. */
   /* Shell-cycle reuses .font-cycle's compact sizing so it sits flush in
      the row; dashed border mirrors the action grid's .nav tile so the
      swap affordance reads as chrome, not content. */
@@ -363,19 +354,19 @@
   }
   #xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
 
-  /* Info-bar mode visibility. The shell root carries .mode-play or
-     .mode-debug; tag stats / chips / quest with .play-only / .debug-only
-     and they vanish in the off mode. The play mode shows only the
-     gameplay-relevant trio (d, hp, t) and tucks the perf cluster
-     + toggles into debug. Quest also folds away in debug since debug
-     eyeballs are usually on numbers, not the quest item.
-     The mode class + the chip-strip data-page are driven from a single
-     .shell-cycle tile (2 states: play / toggles); see the chip-paging
-     CSS block above and the cycle handler below. */
-  #xsofy-shell.mode-play .debug-only,
-  #xsofy-shell.mode-debug .play-only {
-    display: none;
-  }
+  /* Tier visibility. The three tiers are an additive ladder (play ⊂ debug ⊂
+     dev): mode-play is the permanent base on the root; ?mode=debug adds
+     mode-debug; ?mode=dev adds mode-dev on top. Each tier's chrome is gated on
+     its own class, so a higher tier keeps everything the lower ones show:
+       - .play-only  — title / quest / play stats (d, hp)
+       - .debug-only — build provenance + perf counters (player-visible diagnostics)
+       - .dev-only   — dev tooling (force-touch)
+     play-only chrome folds away once debug diagnostics are up, since debug
+     eyeballs are on numbers, not the quest item. The OPTIONS tile toggles the
+     debug tier at runtime; the dev tier is URL-only (?mode=dev). */
+  #xsofy-shell:not(.mode-debug) .debug-only { display: none; }
+  #xsofy-shell:not(.mode-dev)   .dev-only   { display: none; }
+  #xsofy-shell.mode-debug .play-only        { display: none; }
 
 </style>
 
@@ -398,23 +389,25 @@
       <span class="debug-only"><span class="k">c</span><span id="xs-cells">·</span></span>
       <span class="debug-only"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
     </span>
-    <div class="chips" data-page="play">
-      <button class="font-cycle debug-only" data-chip-page="toggles" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
+    <div class="chips">
+      <!-- Player-facing options: always visible (no tier class). Font size is
+           accessibility; hold-to-repeat is control feel. -->
+      <button class="font-cycle" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
         <span class="glyph">↻</span><span id="xs-repeat-state">on</span>
       </button>
-      <button class="font-cycle debug-only" data-chip-page="toggles" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
-        <span class="glyph">▦</span><span id="xs-touch-state">off</span>
-      </button>
-      <button class="font-cycle debug-only" data-chip-page="toggles" id="xs-font-cycle" title="Cycle char size">
+      <button class="font-cycle" id="xs-font-cycle" title="Cycle char size">
         <span class="glyph">Aa</span><span id="xs-font-px">22</span>
       </button>
-      <!-- Shell cycle. Single tile drives BOTH the body mode class
-           (.mode-play in "play" state, .mode-debug everywhere else) AND
-           the chip-strip data-page. 2 states cycle: play → toggles → play.
-           Persistent (no data-chip-page) so it shows in every state — it's
-           the only way back out of debug. -->
-      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Cycle shell state (play / toggles)">
-        <span class="glyph" id="xs-shell-cycle-dots">● ○</span><span class="label" id="xs-shell-cycle-label">TOGGLES →</span>
+      <!-- Dev tooling: only under ?mode=dev. Force-touch reveals the phone
+           touch UI on desktop/tablet-landscape for testing — not a player pref. -->
+      <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
+        <span class="glyph">▦</span><span id="xs-touch-state">off</span>
+      </button>
+      <!-- OPTIONS tile. Toggles the debug tier (mode-debug: build + perf) at
+           runtime; the dev tier is URL-only (?mode=dev). No tier class, so it
+           persists across every tier — the only way back out of debug. -->
+      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Cycle options (play / debug)">
+        <span class="glyph" id="xs-shell-cycle-dots">● ○</span><span class="label" id="xs-shell-cycle-label">OPTIONS →</span>
       </button>
     </div>
   </div>
@@ -976,40 +969,49 @@
     // pre-open fit() is caught. The chip text updates immediately.
     initFontSize();
 
-    // Shell-state cycle. One tile drives BOTH the body mode class
-    // (.mode-play / .mode-debug — gates .play-only / .debug-only visibility)
-    // AND the chip-strip data-page (which group of debug chips is showing).
-    // States cycle: play → toggles → play.
-    //   - play     → mode-play; debug-only stuff hidden; chip strip shows
-    //                only the cycle tile itself.
-    //   - toggles  → mode-debug + chips data-page=toggles  (repeat/touch/font)
-    // Persisted under one key so pulling debug back up resumes on whichever
-    // group the player was last looking at. Old keys (xsofy/info-mode,
-    // xsofy/chip-page) are intentionally ignored — small UI, fine to reset.
+    // OPTIONS tile — runtime toggle of the debug tier, plus a URL-seeded dev
+    // tier. Tier classes are additive: mode-play is the permanent base (on the
+    // div); the tile adds/removes mode-debug (player-visible diagnostics: build
+    // + perf); ?mode=dev adds mode-dev on top (dev tooling: force-touch). The
+    // tile cycles play ↔ debug only — the dev tier is URL-gated, so dev tooling
+    // never appears just from tapping.
+    //
+    // ?mode= seeds the initial tier: debug|dev start in debug, play starts in
+    // play; with no param we resume the last tapped state from localStorage.
+    // Old keys (xsofy/info-mode, xsofy/chip-page) are intentionally ignored.
     const SHELL_LS_KEY = "xsofy/shell-state";
-    const SHELL_STATES = ["play", "toggles"];
+    const SHELL_STATES = ["play", "debug"];
+    // Tile label per destination: "OPTIONS →" when tapping reveals diagnostics,
+    // "PLAY →" when it hides them.
+    const STATE_LABEL = { play: "PLAY", debug: "OPTIONS" };
     const shellRoot = document.getElementById("xsofy-shell");
-    const chipsEl = document.querySelector("#xsofy-shell .chips");
     const cycleEl_ = $("xs-shell-cycle");
     const cycleDotsEl = $("xs-shell-cycle-dots");
     const cycleLabelEl = $("xs-shell-cycle-label");
+
+    const urlMode = new URLSearchParams(location.search).get("mode");
+    const devMode = urlMode === "dev";
     let currentShellState = localStorage.getItem(SHELL_LS_KEY);
-    if (!SHELL_STATES.includes(currentShellState)) currentShellState = "play";
+    if (currentShellState === "toggles") currentShellState = "debug"; // migrate old key
+    if (urlMode === "dev" || urlMode === "debug") currentShellState = "debug";
+    else if (urlMode === "play") currentShellState = "play";
+    else if (!SHELL_STATES.includes(currentShellState)) currentShellState = "play";
 
     function applyShellState() {
-      const isPlay = currentShellState === "play";
-      shellRoot.classList.toggle("mode-play", isPlay);
-      shellRoot.classList.toggle("mode-debug", !isPlay);
-      if (chipsEl) chipsEl.dataset.page = currentShellState;
+      // mode-play stays as the permanent base class on the div; only the higher
+      // tiers toggle. dev is a strict superset of debug — ?mode=dev pins mode-debug
+      // on regardless of the play↔debug cycle, so dev never shows less than debug
+      // (its force-touch chrome can't appear without the debug diagnostics under it).
+      shellRoot.classList.toggle("mode-debug", currentShellState === "debug" || devMode);
+      shellRoot.classList.toggle("mode-dev", devMode);
       if (cycleDotsEl) {
         cycleDotsEl.textContent = SHELL_STATES.map((s) => s === currentShellState ? "●" : "○").join(" ");
       }
-      // Label names the destination — what tapping switches TO — matching
-      // the action-grid nav tile's convention. Dots show position; label
-      // reads as a verb (PLAY → / TOGGLES →).
+      // Label names the destination — what tapping switches TO — matching the
+      // action-grid nav tile's convention. Dots show position.
       if (cycleLabelEl) {
         const next = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
-        cycleLabelEl.textContent = next.toUpperCase() + " →";
+        cycleLabelEl.textContent = STATE_LABEL[next] + " →";
       }
     }
     applyShellState();
