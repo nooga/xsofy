@@ -34,6 +34,11 @@ wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI bridge
 	# lifecycle, which the shell contract (window.LetGoHost) and a static host (e.g.
 	# GitHub Pages, which can't send COOP/COEP) don't cover. Tracked as a follow-up seam.
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/patch_wasm_coi.lg
+	# Build provenance for the shell's debug-bar chip. The shell fetches
+	# build-info.json; without it the fetch 404s and the browser smoke gate
+	# (which counts any console error as a failure) fails. Same generator the
+	# CI build-wasm action runs, so local and Actions builds match.
+	bash tools/write-build-info.sh $(DIST)
 
 e2e: wasm ## Build+patch the bundle, then run the headless-WASM @playwright/test suite (boot + seeded regression)
 	cd tests/e2e && npm install --no-audit --no-fund && npx playwright install chromium

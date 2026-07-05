@@ -130,15 +130,44 @@
         ox (inc (quot (- term-w gw) 2))
         oy (inc (quot (- term-h gh) 2))
         full (rect ox oy gw gh)
-        ;; sidebar on left, map on right
-        [sidebar main] (rect-split-h full sidebar-width)
-        ;; main = map + bottom
-        [map-area bottom] (rect-split-v main (- (:h main) log-height status-height))
-        [log-area status] (rect-split-v bottom log-height)]
-    {:map map-area
+        ;; Drop the sidebar when narrow: below gw=80 (sidebar-width + 60),
+        ;; keeping it would squeeze the map to under ~60 cols. The HTML
+        ;; host's info bar carries the same data (HP / depth / quest), so
+        ;; losing the sidebar here costs nothing under the WASM build.
+        show-sidebar? (>= gw (+ sidebar-width 60))
+        ;; When the sidebar folds, HP + status effects lose their in-grid home
+        ;; (they'd survive only in the browser chrome — nothing for native/SSH).
+        ;; Reclaim them into a one-row top bar (render-topbar). Mutually
+        ;; exclusive with the sidebar, so wide layouts are untouched. Width-only
+        ;; trigger for now; a touch-forced variant is a later phase.
+        show-topbar? (not show-sidebar?)
+        topbar-h     (if show-topbar? 1 0)
+        ;; Status (1 row) shows the keybinding hint, which only fits at ~67 cols
+        ;; — below that it truncates mid-token to something useless, so drop it.
+        show-status? (and (>= gh 2) (>= gw 67))
+        status-h     (if show-status? status-height 0)
+        ;; Drop the log when short so the map keeps a 10-row floor. Base the
+        ;; check on the height left AFTER the top bar and status claim their
+        ;; rows — measuring against gh ignored topbar-h and squeezed the map to
+        ;; 9 at 67-79x14. Under WASM the HTML bar already shows the action set,
+        ;; so dropping the log when narrow costs nothing and buys the map a line.
+        show-log?    (>= (- gh topbar-h status-h) (+ log-height 10))
+        ;; Steal the top row for the bar before any other split. `body` is the
+        ;; game rect minus that row; sidebar/map/log/status lay out inside it.
+        ;; When the bar is off (wide), topbar-h is 0 and body == full.
+        [topbar-area body] (rect-split-v full topbar-h)
+        body-h       (- gh topbar-h)
+        [sidebar main] (if show-sidebar?
+                         (rect-split-h body sidebar-width)
+                         [nil body])
+        log-h    (if show-log?    log-height    0)
+        [map-area bottom]      (rect-split-v main (- body-h log-h status-h))
+        [log-area status-area] (rect-split-v bottom log-h)]
+    {:topbar  (when show-topbar? topbar-area)
+     :map     map-area
      :sidebar sidebar
-     :log log-area
-     :status status}))
+     :log     (when show-log?    log-area)
+     :status  (when show-status? status-area)}))
 
 ;; --- Event Loop (#56) -----------------------------------------------------
 ;; A small, composable, poll-based event loop for terminal UIs. A screen

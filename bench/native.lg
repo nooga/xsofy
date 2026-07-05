@@ -1,0 +1,46 @@
+;; bench/native.lg — native engine benchmark (Tier 1).
+;;
+;; Drives xsofy.perf's shared core against the same lg binary that runs the
+;; game, headlessly: no render, no bridge, no xterm. Measures the engine's
+;; per-turn cost in isolation so later overheads (WASM/JS bridge/xterm canvas)
+;; can be attributed by delta. The in-bundle WASM harness (xsofy/bench.lg)
+;; drives the same core + fixtures so the two numbers diff directly.
+;;
+;; Run:  lg bench/native.lg
+;;
+;; Seed strategy: seed = trial index, so each trial samples a distinct world;
+;; averaging across the spread also smooths timing noise (GC, scheduling).
+;;
+;; No (ns ...) form: lg evaluates a namespaced file twice (script + namespace
+;; load), which would double-run the bench. tests/run.lg uses the same trick;
+;; the bare-symbol require + separate alias below is the non-ns idiom.
+
+(require 'xsofy.perf)
+(alias 'perf 'xsofy.perf)
+
+(def fixtures
+  [;; baseline: entity AI + floor effects tick, player idle — "what does an
+   ;; empty turn cost?"
+   [:wait    (fn [_] ".") 60]
+   ;; autoexplore: BFS pathfinder + render-full cadence as the camera shifts.
+   [:autoex  (fn [n] (if (zero? n) "x" ".")) 60]
+   ;; descend-then-wait: reach deeper floors (more entities/lighting/fire).
+   [:descend (fn [n] (if (zero? n) ">" ".")) 60]
+   ;; busy-explore: long autoexplore across varied terrain — allocator attribution.
+   [:busy    (fn [n] (if (zero? n) "x" ".")) 300]])
+
+(def TRIALS 5)
+(def seeds  (vec (range TRIALS)))   ; distinct seed per trial
+
+(defn -main []
+  (println "=== xsofy native engine benchmark ===")
+  (println (format "trials per fixture: %d (each a distinct seed); turns vary — see n" TRIALS))
+  (println)
+  (println (format "%-12s %6s %6s %6s %6s %6s" "fixture" "n" "avg" "p50" "p95" "max"))
+  (println (format "%-12s %6s %6s %6s %6s %6s" "--------" "------" "------" "------" "------" "------"))
+  (doseq [f fixtures]
+    (let [s (perf/run-fixture f seeds 1)]   ; :per-seed ignored here
+      (println (format "%-12s %6d %5dms %5dms %5dms %5dms"
+                       (str (:name s)) (:n s) (:avg s) (:p50 s) (:p95 s) (:max s))))))
+
+(-main)

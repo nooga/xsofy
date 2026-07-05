@@ -18,7 +18,8 @@
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
             [xsofy.seed :as seed]
-            [xsofy.replay :as replay]))
+            [xsofy.replay :as replay]
+            [xsofy.ui-bridge :as bridge]))
 
 
 (defn init-terminal []
@@ -326,6 +327,13 @@
    gameplay seed chain — so this world replays identically to one made by
    new-game from the same seed."
   [seed title scheme quest]
+  ;; Emit HUD startup from the common construction path, so replay (build-game)
+  ;; populates the browser HUD's title/quest too — not only new-game. No-op on
+  ;; native. Purely a side effect; the returned world is unchanged.
+  (bridge/emit-startup title {:name (:item quest)})
+  ;; Fresh run: drop any prior run's camera so a same-depth/same-viewport
+  ;; restart re-centers on the player instead of inheriting the old offset.
+  (render/reset-camera!)
   (-> (world/make-world 79 30 seed)
       (assoc :title title
              :scheme scheme
@@ -350,6 +358,23 @@
         [quest rng]  (title/generate-quest rng)]
     (assemble-world seed title scheme quest)))
 
+;; The shell nudges a blocked read-key with a lone BEL (0x07) on a browser
+;; resize so the game re-renders at the new size (see xsofy-shell.html
+;; refit()). Any screen that dismisses on a bare (term/read-key) with no key
+;; filtering treats that nudge as a real keypress and closes itself — the
+;; same bug xsofy.title guarded against (a lone BEL, matched exactly: space
+;; also parses to :unknown and must still count as a real dismiss key).
+;; Screens that read a key only to discard it and dismiss unconditionally
+;; (:rune-codex, :help) should block on this instead of a raw
+;; (term/read-key) so a resize during either screen can't silently close it.
+(defn read-dismiss-key!
+  "Block for a real keypress, transparently discarding the shell's lone-BEL
+   resize nudge instead of treating it as the dismiss key."
+  []
+  (loop []
+    (let [k (term/read-key)]
+      (if (= k (str (char 7))) (recur) k))))
+
 (defn play-replay
   "Decode a replay code, reconstruct the run, and step through its actions with
    a short delay so the run plays out on screen. Returns the final world so the
@@ -358,10 +383,13 @@
   (let [{:keys [seed actions]} (replay/decode code)
         w0 (build-game seed)]
     (render/render-full w0)
+    (bridge/emit-stats w0)
     (sfx/pause! 400)
     (reduce (fn [w action]
               (let [w' (dispatch/dispatch w action)]
                 (render/render-full w')
+                ;; Keep the HUD stats tracking the replay as it plays out.
+                (bridge/emit-stats w')
                 (sfx/pause! 90)
                 w'))
             w0 actions)))
@@ -369,6 +397,7 @@
 (defn game-loop
   ([world]
    (render/render-full world)
+   (bridge/emit-stats world)
    (game-loop world world (term/size)))
   ([world prev-world prev-size]
    (if-not (:running world)
@@ -387,14 +416,14 @@
 
          :rune-codex
          (do (render/render-rune-codex world)
-             (term/read-key)
+             (read-dismiss-key!)
              (let [w (dissoc world :screen)]
                (render/render-full w)
                (recur w w (term/size))))
 
          :help
          (do (render/render-help-screen world)
-             (term/read-key)
+             (read-dismiss-key!)
              (let [w (dissoc world :screen)]
                (render/render-full w)
                (recur w w (term/size))))
@@ -428,8 +457,7 @@
 
          :death
          (let [[tw th] (term/size)
-               runes (render/death-runes tw th)  ;; scatter ONCE — stable across frames
-               _ (sfx/clear-screen tw th)  ;; clear ONCE, not per-frame — was the flicker source
+               _ (sfx/clear-screen tw th)  ;; initial clear; the loop re-clears + re-scatters on resize
                ;; Dev repro capture of this organic run's replay code. Trigger is
                ;; per-platform: ?dump-replay= URL param on web (js/url-param),
                ;; XSOFY_DUMP_REPLAY env var natively. Gated so players never see it.
@@ -453,7 +481,14 @@
                step (fn [st ev]
                       (let [[tag payload] ev]
                         (case tag
-                          :tick (assoc st :frame payload)
+                          :tick (let [cur (or (term/size) (:size st))]
+                                  (if (= cur (:size st))
+                                    (assoc st :frame payload)
+                                    ;; resized: re-scatter + clear for the new size
+                                    (let [[nw nh] cur]
+                                      (sfx/clear-screen nw nh)
+                                      (assoc st :frame payload :size cur
+                                             :runes (render/death-runes nw nh)))))
                           :action
                           (let [k payload]
                             (cond
@@ -466,9 +501,9 @@
                           st)))
                result (ui/run-loop
                         {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
-                         :state    {:frame 0 :scroll 0}
+                         :state    {:frame 0 :scroll 0 :size [tw th] :runes (render/death-runes tw th)}
                          :step     step
-                         :render   (fn [st] (render/render-death-screen world runes (:scroll st) (:frame st)))
+                         :render   (fn [st] (render/render-death-screen world (:runes st) (:scroll st) (:frame st)))
                          :frame-ms 120})]
            (cond
              (= result :new-game)
@@ -481,7 +516,7 @@
              (if *in-wasm*
                (do
                  (render/render-hazard-prompt world "Start a new game?")
-                 (if (= (term/read-key) "y")
+                 (if (= (read-dismiss-key!) "y")
                    (let [w (new-game)]
                      (render/render-full w)
                      (recur w w (term/size)))
@@ -496,7 +531,7 @@
            (render/render-full world)
            (let [prompt (or (:hazard-prompt world) "Are you sure?")
                  k (do (render/render-hazard-prompt world prompt)
-                       (term/read-key))
+                       (read-dismiss-key!))
                  w (if (= k "y")
                      (world/confirm-hazard-step world)
                      (world/cancel-hazard-step world))]
@@ -510,7 +545,7 @@
                           "Are you sure you want to restart?"
                           "Are you sure you want to quit?")
                  k (do (render/render-hazard-prompt world prompt)
-                       (term/read-key))
+                       (read-dismiss-key!))
                  w (if (= k "y")
                      (if *in-wasm*
                        (new-game)
@@ -524,6 +559,7 @@
 
          ;; default: game screen — the poll-based turn loop (input +
          ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         ;; (Per-turn bridge/emit-stats lives inside play/play-advance.)
          (let [result (play/run-play-loop world prev-size)]
            (if (:running result)
              (recur result result (term/size))

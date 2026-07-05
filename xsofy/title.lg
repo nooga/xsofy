@@ -107,23 +107,40 @@
         cy (quot th 2)
         tx (max 1 (- cx (quot (count title) 2)))
         sx (max 1 (- cx (quot (count subtitle) 2)))
-        title-fade (min 1.0 (/ (float frame) 20.0))]
-    ;; draw pulsing runes — each rune redraws only its own cell
+        title-fade (min 1.0 (/ (float frame) 20.0))
+        sline (when seed (str "seed " seed))
+        ssx (if sline (max 1 (- cx (quot (count sline) 2))) cx)
+        ;; Text "moat": the pulsing runes scatter to random cells (screenfx/
+        ;; scatter-runes) with no collision check, so some land on the title,
+        ;; "press any key", and seed rows — and because a faded rune redraws its
+        ;; cell as blank every frame, it eats the text under it. Keep runes out
+        ;; of a box covering all three text rows (cy, cy+2, cy+4) plus a 1-cell
+        ;; ring, sized to the widest line.
+        moat-x0 (- (min tx sx ssx) 1)
+        moat-x1 (+ (max (+ tx (count title))
+                        (+ sx (count subtitle))
+                        (+ ssx (count (or sline "")))) 1)
+        moat-y0 (- cy 1)
+        moat-y1 (+ cy 5)]
+    ;; draw pulsing runes — each redraws only its own cell; skip any inside the
+    ;; text moat so they never draw (or blank) over the title / subtitle / seed.
     (doseq [r runes]
-      (let [b (sfx/rune-brightness (:phase r) frame)
-            [cr cg cb] (:color r)
-            fr (int (* cr b))
-            fg (int (* cg b))
-            fb (int (* cb b))]
-        (term/move-cursor (:x r) (:y r))
-        (if (< b 0.05)
-          ;; dim enough to hide — draw blank
-          (do (term/set-fg 10 10 10)
-              (term/set-bg 10 10 10)
-              (term/write " "))
-          (do (term/set-fg fr fg fb)
-              (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
-              (term/write (:glyph r))))))
+      (when-not (and (>= (:x r) moat-x0) (<= (:x r) moat-x1)
+                     (>= (:y r) moat-y0) (<= (:y r) moat-y1))
+        (let [b (sfx/rune-brightness (:phase r) frame)
+              [cr cg cb] (:color r)
+              fr (int (* cr b))
+              fg (int (* cg b))
+              fb (int (* cb b))]
+          (term/move-cursor (:x r) (:y r))
+          (if (< b 0.05)
+            ;; dim enough to hide — draw blank
+            (do (term/set-fg 10 10 10)
+                (term/set-bg 10 10 10)
+                (term/write " "))
+            (do (term/set-fg fr fg fb)
+                (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
+                (term/write (:glyph r)))))))
     ;; title
     (term/move-cursor tx cy)
     (term/set-fg (int (* 255 title-fade)) (int (* 220 title-fade)) (int (* 120 title-fade)))
@@ -139,13 +156,11 @@
         (term/set-bg 10 10 10)
         (term/write subtitle)))
     ;; seed — dim, under the subtitle. Note it to replay this run via ?seed=.
-    (when (and seed (> frame 30))
-      (let [sline (str "seed " seed)
-            ssx (max 1 (- cx (quot (count sline) 2)))]
-        (term/move-cursor ssx (+ cy 4))
-        (term/set-fg 90 85 70)
-        (term/set-bg 10 10 10)
-        (term/write sline)))
+    (when (and sline (> frame 30))
+      (term/move-cursor ssx (+ cy 4))
+      (term/set-fg 90 85 70)
+      (term/set-bg 10 10 10)
+      (term/write sline))
     (term/flush)))
 
 (defn show-title-screen [rng]
@@ -153,22 +168,40 @@
         [tw th] (or (term/size) [100 36])
         [title rng]  (generate-title rng)
         subtitle "Press any key"
-        [scheme rng] (pick-scheme rng)
-        runes (sfx/scatter-runes tw th 40 scheme)]
+        [scheme rng] (pick-scheme rng)]
     (sfx/clear-screen tw th)
     ;; Animate via the poll-based event loop: a cosmetic clock advances the
     ;; particle frame each tick; any key ends the screen. Never blocks while
     ;; idle, so it stays responsive in native + wasm (see xsofy.ui / #56).
+    ;; :size and :runes live in state so a resize / font-size change mid-title
+    ;; re-scatters for the new dims and repaints. Without it the screen stays
+    ;; frozen at the size it opened at — play.lg already re-reads size per
+    ;; tick; the animated wait screens didn't.
     (ui/run-loop
       {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
-       :state    {:frame 0}
+       :state    {:frame 0 :size [tw th] :runes (sfx/scatter-runes tw th 40 scheme)}
        :step     (fn [st ev]
                    (let [[tag payload] ev]
                      (case tag
-                       :tick   (assoc st :frame payload)
-                       :action (reduced st)   ;; any key ends the title
+                       :tick   (let [cur (or (term/size) (:size st))]
+                                 (if (= cur (:size st))
+                                   (assoc st :frame payload)
+                                   ;; resized: re-scatter + clear for the new size
+                                   (let [[nw nh] cur]
+                                     (sfx/clear-screen nw nh)
+                                     (assoc st :frame payload :size cur
+                                            :runes (sfx/scatter-runes nw nh 40 scheme)))))
+                       ;; Any key ends the title — except the shell's resize
+                       ;; nudge (a lone BEL, 0x07), which wakes read-key on a
+                       ;; browser resize but is not a user keypress. Without this
+                       ;; guard the nudge auto-dismisses the title. Match BEL
+                       ;; exactly rather than via parse-key: space also parses to
+                       ;; :unknown and must still start the game.
+                       :action (if (= payload (str (char 7))) st (reduced st))
                        st)))
-       :render   (fn [st] (draw-frame runes title subtitle tw th (:frame st) seed))
+       :render   (fn [st]
+                   (let [[tw th] (:size st)]
+                     (draw-frame (:runes st) title subtitle tw th (:frame st) seed)))
        :frame-ms 120})
     {:title title :scheme scheme :rng rng}))
 
