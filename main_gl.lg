@@ -17,8 +17,10 @@
    [xsofy.gl.mat4 :as mat4]
    [xsofy.gl.vfx :as vfx]
    [xsofy.input :as input]
+   [xsofy.screenfx :as sfx]
    [xsofy.terrain :as terrain]
    [xsofy.title :as title]
+   [xsofy.ui :as ui]
    [xsofy.world :as world]))
 
 ;; ==========================================================
@@ -184,9 +186,11 @@
 ;; ==========================================================
 
 (defn make-pres-state
-  "Create initial presentation state (top-down mode, no animation)."
-  []
-  {:mode :top-down        ; :top-down | :falling | :fp
+  "Create initial presentation state. Starts on the :title screen (pulsing
+   rune particles, any key to begin) unless skip-title? — scripted runs set
+   XSOFY_GL_SKIP_TITLE=1 to land directly in gameplay."
+  [skip-title?]
+  {:mode (if skip-title? :top-down :title) ; :title | :top-down | :falling | :fp
    :facing :north         ; Current facing direction (:north/:south/:east/:west)
    :fall-start nil        ; Wall-clock time fall animation started (if :falling)
    :fall-duration 2.5})   ; Duration in seconds
@@ -467,6 +471,61 @@
       (when (seq glyphs)
         (glplat/SubmitTriangles tex-id glyphs)))))
 
+(defn render-title
+  "Title screen: scattered pulsing runes, title fade-in, 'Press any key'.
+   Mirrors title/draw-frame's pacing — the terminal ticks at 120ms/frame, so
+   frame = elapsed/0.12; animation is pure presentation (never touches game
+   state, same tick-vs-input separation as the terminal's ui/run-loop).
+   Drawn in HUD screen-cell space (79x30, y down)."
+  [world title-runes elapsed tex-id atlas]
+  (let [frame (int (/ elapsed 0.12))
+        opts {:cell-w 0.5 :cell-h 1.0}
+        title-str (or (:title world) "xsofy")
+        subtitle "Press any key"
+        seed-line (str "seed " (:seed-input world))
+        cx 39
+        cy 14
+        title-fade (min 1.0 (/ (float frame) 20.0))
+        scale-rgb (fn [[r g b] f] [(int (* r f)) (int (* g f)) (int (* b f))])
+
+        ;; Pulsing runes (skip near-dark ones, like the terminal blanking them)
+        rune-quads (vec (mapcat
+                          (fn [r]
+                            (let [b (sfx/rune-brightness (:phase r) frame)]
+                              (if (< b 0.05)
+                                []
+                                (hud/char-quad (:glyph r) (:x r) (:y r)
+                                               (scale-rgb (:color r) b)
+                                               atlas opts))))
+                          title-runes))
+
+        title-quads (hud/text-quads title-str
+                                    (max 1 (- cx (quot (count title-str) 2)))
+                                    cy
+                                    (scale-rgb [255 220 120] title-fade)
+                                    atlas opts)
+        sub-quads (if (> frame 30)
+                    (let [sf (min 1.0 (/ (float (- frame 30)) 20.0))
+                          pulse (sfx/rune-brightness 0 frame)
+                          bright (int (+ 50 (* 70 sf pulse)))]
+                      (hud/text-quads subtitle
+                                      (max 1 (- cx (quot (count subtitle) 2)))
+                                      (+ cy 2)
+                                      [bright bright bright]
+                                      atlas opts))
+                    [])
+        seed-quads (if (> frame 30)
+                     (hud/text-quads seed-line
+                                     (max 1 (- cx (quot (count seed-line) 2)))
+                                     (+ cy 4)
+                                     [90 85 70]
+                                     atlas opts)
+                     [])
+        glyphs (vec (concat rune-quads title-quads sub-quads seed-quads))]
+    (glplat/SetMatrix (mat4/ortho 0.0 39.5 30.0 0.0 0.0 1.0))
+    (when (seq glyphs)
+      (glplat/SubmitTriangles tex-id glyphs))))
+
 (defn render-hud
   "Screen-space HUD overlay pass, drawn after the scene each frame.
    hud.lg builds quads in screen-cell space (79×30, y down, z=0); the ortho
@@ -491,8 +550,134 @@
   nil)
 
 ;; ==========================================================
-;; Main Loop
+;; Main Loop — on the unified poll-based event loop (xsofy.ui, #56)
 ;; ==========================================================
+;; Same architecture as the terminal frontend: non-blocking sources feed a
+;; pure step fold ([:key k] = user input, [:tick f] = cosmetic clock); ticks
+;; drive animation/auto-actions but NEVER enter the deterministic
+;; (seed, :action-log) stream directly — auto-steps go through dispatch like
+;; any action. Rendering is a subscriber. glplat replaces term as the edge.
+
+(defn glplat-input-source
+  "Non-blocking source: pump GLFW window events, drain queued input events
+   as [:key event-string]s. The glplat analogue of ui/input-source."
+  []
+  (fn []
+    (glplat/PollEvents)
+    (mapv (fn [ev] [:key ev]) (glplat/PollInputEvents))))
+
+(defn dispatch-game-key
+  "Dispatch a parsed key against the game (FP remap aware). Interrupts any
+   auto-mode first (the explicit-key interrupt, like play.lg's :action arm).
+   Returns [world' pres'] — vfx still on world' for the caller to harvest."
+  [world pres key]
+  (let [action (input/parse-key key)
+        world-int (dissoc world :resting :running-dir :autoexploring :auto-target)]
+    (if (= (:mode pres) :fp)
+      (let [remapped (fpview/remap-fp-input action (:facing pres))
+            final-action (:action remapped)
+            pres' (assoc pres :facing (:facing remapped))]
+        [(if final-action
+           (apply-auto-stops (dispatch/dispatch world-int final-action) world)
+           world-int)
+         pres'])
+      [(apply-auto-stops (dispatch/dispatch world-int action) world) pres])))
+
+(defn harvest-vfx
+  "Move any :vfx the dispatch produced off the world into presentation state."
+  [st world']
+  (-> st
+      (assoc :world (dissoc world' :vfx))
+      (update :vfx (fn [v] (if (seq (:vfx world'))
+                             (vec (concat v (:vfx world')))
+                             v)))))
+
+(defn gl-step
+  "The GL play loop's scan: fold one event into loop state.
+   [:key ev] — title: any key enters gameplay; else dispatch (also watches
+   for a depth increase to start the fall). [:tick f] — exit checks, one
+   auto-step per 60ms, vfx ticking per 30ms, fall-animation advancement.
+   Returns (reduced world) to exit."
+  [st [tag payload] {:keys [start-time auto-exit-secs force-fall-at dump?]}]
+  (let [t (glplat/Time)
+        {:keys [world pres]} st]
+    (case tag
+      :key
+      (if-let [key (parse-glplat-event payload)]
+        (if (= (:mode pres) :title)
+          (assoc st :pres (assoc pres :mode :top-down))
+          (let [prev-depth (:depth world)
+                [w' pres'] (dispatch-game-key world pres key)
+                pres'' (if (and (> (:depth w') prev-depth)
+                                (= (:mode pres') :top-down))
+                         (assoc pres' :mode :falling :fall-start t)
+                         pres')]
+            (-> st (harvest-vfx w') (assoc :pres pres''))))
+        st)
+
+      :tick
+      (let [elapsed (- t start-time)]
+        (cond
+          (or (glplat/ShouldClose)
+              (and auto-exit-secs (>= elapsed auto-exit-secs))
+              (not (:running world)))
+          (do (when dump?
+                (print (str "XSOFY_GL_DUMP: exiting after " (int elapsed)
+                            "s, mode: " (:mode pres) "\n")))
+              (reduced world))
+
+          (= (:mode pres) :title)
+          (assoc st :frame payload)
+
+          :else
+          (let [;; One auto-step (autoexplore/rest/run/travel) per 60ms
+                st' (if (and (not= (:mode pres) :falling)
+                             (>= (- t (:last-auto-t st)) 0.06))
+                      (if-let [ak (auto-key-for world)]
+                        (let [w' (apply-auto-stops (dispatch/dispatch world ak) world)]
+                          (when dump?
+                            (print (str "XSOFY_GL_DUMP: auto-step " ak
+                                        " turn " (:turn w') "\n")))
+                          (-> st (harvest-vfx w') (assoc :last-auto-t t)))
+                        st)
+                      st)
+                ;; Advance projectile/bolt/flash overlays per 30ms
+                st'' (if (and (seq (:vfx st'))
+                              (>= (- t (:last-vfx-t st')) 0.03))
+                       (assoc st' :vfx (vfx/tick-vfx (:vfx st')) :last-vfx-t t)
+                       st')
+                ;; Depth change across the auto-step (auto-travel descend),
+                ;; force-fall window, falling→fp completion
+                pres' (advance-pres-state (:pres st'') (:world st'') world
+                                          t force-fall-at)]
+            (assoc st'' :pres pres' :frame payload))))
+      st)))
+
+(defn gl-render
+  "Paint one frame from loop state (render subscriber — presents itself,
+   the loop core never flushes)."
+  [st {:keys [tex-id atlas dump? title-runes start-time shot-path shot-at shot-done*]}]
+  (let [{:keys [world pres vfx frame]} st
+        t (glplat/Time)
+        elapsed (- t start-time)]
+    (glplat/BeginFrame 0.1 0.1 0.15)
+    (case (:mode pres)
+      :title (render-title world title-runes elapsed tex-id atlas)
+      :top-down (render-top-down world tex-id atlas dump? frame vfx)
+      :falling (render-falling world pres t tex-id atlas dump? vfx)
+      :fp (render-first-person world pres tex-id atlas dump? frame vfx)
+      (render-top-down world tex-id atlas dump? frame vfx))
+    (when (not= (:mode pres) :title)
+      (render-hud world tex-id atlas))
+    ;; Screenshot hook: capture the composed back buffer once, before
+    ;; EndFrame swaps it away. shot-done* is a presentation-side latch.
+    (when (and shot-path (not @shot-done*) (>= elapsed shot-at))
+      (glplat/Screenshot shot-path)
+      (reset! shot-done* true)
+      (when dump?
+        (print (str "XSOFY_GL_DUMP: screenshot " shot-path
+                    " at " (format "%.2f" elapsed) "s\n"))))
+    (glplat/EndFrame)))
 
 (defn -main []
   ;; Mark GL mode BEFORE any worldgen: title/show-descending-screen no-ops on
@@ -511,6 +696,7 @@
         ;; once elapsed >= XSOFY_GL_SHOT_AT seconds (default 1.0).
         shot-path (getenv-str "XSOFY_GL_SHOT")
         shot-at (parse-number (getenv-str "XSOFY_GL_SHOT_AT") 1.0)
+        skip-title? (boolean (getenv-str "XSOFY_GL_SKIP_TITLE"))
         force-fall-str (getenv-str "XSOFY_GL_FORCE_FALL")
         force-fall-secs (when force-fall-str
                           (parse-number force-fall-str -1.0))
@@ -522,6 +708,9 @@
 
         ;; Build initial game state
         world (build-game-direct seed)
+        ;; Title-screen particles (cosmetic, non-deterministic like the
+        ;; terminal's — never touches game state)
+        title-runes (sfx/scatter-runes 79 30 40 (or (:scheme world) [80 120 220]))
         start-time (glplat/Time)
 
         ;; Compute force-fall trigger time (absolute wall-clock, or nil)
@@ -529,122 +718,31 @@
                         (+ start-time force-fall-secs))]
 
     (try
-      ;; Frame loop
-      (loop [w world
-             pres (make-pres-state)
-             frame 0
-             last-auto-t start-time
-             vfx-events []
-             last-vfx-t start-time
-             shot-done false]
-        (let [t (glplat/Time)
-              elapsed (- t start-time)
-              should-close (glplat/ShouldClose)
-              timed-out (and auto-exit-secs (>= elapsed auto-exit-secs))
-              depth-prev (:depth w)]
-
-          (if (or should-close timed-out (not (:running w)))
-            (when dump?
-              (print (str "XSOFY_GL_DUMP: exiting after " (int elapsed) "s, mode: " (:mode pres) "\n")))
-
-            (do
-              ;; Poll and process input events
-              (glplat/PollEvents)
-              (let [events (glplat/PollInputEvents)
-                    ;; Process input: accumulate world changes and presentation facing
-                    ;; Track whether any action was dispatched
-                    [w-after-input pres-with-facing action-dispatched]
-                    (reduce (fn [[world pres-acc action-flag] event-str]
-                              (if-let [key (parse-glplat-event event-str)]
-                                (let [action (input/parse-key key)
-                                      ;; Interrupt auto-mode with real key presses
-                                      world-interrupted (dissoc world :resting :running-dir
-                                                                :autoexploring :auto-target)]
-                                  (if (= (:mode pres-acc) :fp)
-                                    ;; FP input remapping
-                                    (let [remapped (fpview/remap-fp-input action (:facing pres-acc))
-                                          final-action (:action remapped)
-                                          new-facing (:facing remapped)
-                                          pres-updated (assoc pres-acc :facing new-facing)
-                                          world-dispatched (if final-action
-                                                             (apply-auto-stops
-                                                               (dispatch/dispatch
-                                                                 world-interrupted
-                                                                 final-action)
-                                                               world)
-                                                             world-interrupted)]
-                                      [world-dispatched pres-updated true])
-                                    ;; Top-down / falling: normal dispatch
-                                    (let [world-dispatched (apply-auto-stops
-                                                             (dispatch/dispatch
-                                                               world-interrupted
-                                                               action)
-                                                             world)]
-                                      [world-dispatched pres-acc true])))
-                                [world pres-acc action-flag]))
-                            [w pres false] events)
-
-                    ;; Check if we should try auto-action (only if no input action this frame)
-                    [w-final pres-with-facing last-auto-t-next]
-                    (if (and (not action-dispatched)
-                             (not= (:mode pres-with-facing) :falling)
-                             (>= (- t last-auto-t) 0.06))
-                      ;; Try auto-action
-                      (if-let [auto-action (auto-key-for w-after-input)]
-                        (let [w-auto (apply-auto-stops
-                                       (dispatch/dispatch w-after-input auto-action)
-                                       w-after-input)]
-                          (when dump?
-                            (print (str "XSOFY_GL_DUMP: auto-step " auto-action " turn "
-                                     (:turn w-auto) "\n")))
-                          [w-auto pres-with-facing t])
-                        [w-after-input pres-with-facing last-auto-t])
-                      [w-after-input pres-with-facing last-auto-t])
-
-                    ;; Extract and accumulate vfx events from world
-                    new-vfx-events (if-let [world-vfx (:vfx w-final)]
-                                     (vec (concat vfx-events world-vfx))
-                                     vfx-events)
-                    w-no-vfx (dissoc w-final :vfx)
-
-                    ;; Tick vfx if enough time has passed
-                    [vfx-events-ticked last-vfx-t-next]
-                    (if (and (seq new-vfx-events) (>= (- t last-vfx-t) 0.03))
-                      [(vfx/tick-vfx new-vfx-events) t]
-                      [new-vfx-events last-vfx-t])
-
-                    ;; Advance presentation state (check for depth change)
-                    ;; args: pres, NEW world, PREV world — order matters for the
-                    ;; depth-increase check that triggers the fall.
-                    pres' (advance-pres-state pres-with-facing w-no-vfx w t force-fall-at)]
-
-                ;; Render frame
-                (glplat/BeginFrame 0.1 0.1 0.15)
-                (case (:mode pres')
-                  :top-down (render-top-down w-no-vfx tex-id atlas dump? frame
-                              vfx-events-ticked)
-                  :falling (render-falling w-no-vfx pres' t tex-id atlas dump?
-                             vfx-events-ticked)
-                  :fp (render-first-person w-no-vfx pres' tex-id atlas dump? frame
-                        vfx-events-ticked)
-                  (render-top-down w-no-vfx tex-id atlas dump? frame
-                    vfx-events-ticked))
-                (render-hud w-no-vfx tex-id atlas)
-                ;; Screenshot hook: capture the composed back buffer once,
-                ;; before EndFrame swaps it away.
-                (let [take-shot (and shot-path (not shot-done)
-                                     (>= elapsed shot-at))]
-                  (when take-shot
-                    (glplat/Screenshot shot-path)
-                    (when dump?
-                      (print (str "XSOFY_GL_DUMP: screenshot " shot-path
-                                  " at " (format "%.2f" elapsed) "s\n"))))
-                  (glplat/EndFrame)
-
-                  ;; Continue loop
-                  (recur w-no-vfx pres' (inc frame) last-auto-t-next
-                    vfx-events-ticked last-vfx-t-next
-                    (or shot-done (boolean take-shot)))))))))
+      ;; Drive the frame loop on the unified poll-based event loop. Sources
+      ;; are polled in order — input before clock, so a keypress in the same
+      ;; batch cancels auto-mode before the tick's auto-step fires (the same
+      ;; guarantee play.lg documents). frame-ms 0: EndFrame's vsync paces us.
+      (let [ctx {:start-time start-time
+                 :auto-exit-secs auto-exit-secs
+                 :force-fall-at force-fall-at
+                 :dump? dump?
+                 :tex-id tex-id
+                 :atlas atlas
+                 :title-runes title-runes
+                 :shot-path shot-path
+                 :shot-at shot-at
+                 :shot-done* (atom false)}]
+        (ui/run-loop
+          {:sources [(glplat-input-source) (ui/clock-source 0)]
+           :state {:world world
+                   :pres (make-pres-state skip-title?)
+                   :frame 0
+                   :vfx []
+                   :last-auto-t start-time
+                   :last-vfx-t start-time}
+           :step (fn [st ev] (gl-step st ev ctx))
+           :render (fn [st] (gl-render st ctx))
+           :frame-ms 0}))
 
       ;; A silent frame-loop exception looks like an abrupt clean exit
       ;; (finally runs, process exits 0) — always print it.
