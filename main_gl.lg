@@ -217,9 +217,14 @@
   (or (= tile 8) (= tile 9)))  ; wall-stone and wall-torch
 
 (defn build-wall-batch
-  "Collect wall vertices for all wall cells in the visible grid."
-  [world atlas]
+  "Collect wall vertices for all wall cells in the visible grid.
+   `cells` are the bridge/grid-cells for this frame — their :fg already
+   carries the tile's lit style color, so 3D walls match the palette
+   instead of rendering fullbright white."
+  [world atlas cells]
   (let [{:keys [terrain width height fov]} world
+        fg-by-pos (reduce (fn [m c] (assoc m [(:col c) (:row c)] (:fg c)))
+                          {} cells)
         verts (atom [])]
     (dotimes [row height]
       (dotimes [col width]
@@ -227,7 +232,9 @@
           (let [tile (terrain/tget terrain width col row)]
             (when (is-wall-tile tile)
               (let [wall-verts (grid/wall-extrude-verts
-                                 {:col col :row row :glyph (get terrain/tile-chars tile "?")}
+                                 {:col col :row row
+                                  :glyph (get terrain/tile-chars tile "?")
+                                  :fg (get fg-by-pos [col row])}
                                  1.0 atlas {:cell-w 0.5 :cell-h 1.0})]
                 (when (seq wall-verts)
                   (swap! verts concat wall-verts))))))))
@@ -357,7 +364,7 @@
         glyph-count (quot (count glyphs) 9)
 
         ;; Wall batch
-        wall-verts (build-wall-batch world atlas)
+        wall-verts (build-wall-batch world atlas cells)
         wall-count (quot (count wall-verts) 9)]
 
     (glplat/SetMatrix final-mvp)
@@ -410,7 +417,7 @@
         {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
 
         ;; Walls: only render visible wall cells
-        wall-verts (build-wall-batch world atlas)
+        wall-verts (build-wall-batch world atlas cells)
 
         ;; Billboards for entities
         yaw (fpview/facing-to-angle facing)

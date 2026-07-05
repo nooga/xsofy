@@ -156,6 +156,8 @@
    Input map:
      :col, :row — grid position
      :glyph — character
+     :fg — [r g b] 0-255 base color (default white); pass the tile's LIT
+           style color so 3D walls match the palette instead of fullbright
 
    Args:
      wall-h — height of extrusion (z from 0 to wall-h)
@@ -167,9 +169,11 @@
 
    Walls are glyph-textured and wind CCW viewed from outside.
    Face normal points outward (±x or ±z); y is [0, wall-h].
+   Faces are axis-shaded for a depth cue: z-facing sides at 1.0/0.8 of the
+   base color, x-facing sides at 0.65.
    Coordinate convention matches the floor quads: cell (col, row) occupies
    x in [col*cell-w, ..+cell-w], z in [row*cell-h, ..+cell-h]; y is up."
-  [{:keys [col row glyph]} wall-h atlas
+  [{:keys [col row glyph fg]} wall-h atlas
    {:keys [cell-w cell-h fallback] :or {cell-w 0.5 cell-h 1.0 fallback "?"}}]
   (let [glyph-use (or glyph "?")
         uv-bounds (or (get atlas glyph-use)
@@ -177,8 +181,18 @@
     (if-not uv-bounds
       []
       (let [[u0 v0 u1 v1] uv-bounds
-            ;; All wall faces are white/opaque (textured by glyph)
-            r 1.0 g 1.0 b 1.0 a 1.0
+            [fr fg- fb] (or fg [255 255 255])
+            base-r (/ (float fr) 255.0)
+            base-g (/ (float fg-) 255.0)
+            base-b (/ (float fb) 255.0)
+            a 1.0
+            ;; Per-face shading factors (south/north/west/east)
+            shade-s 1.0
+            shade-n 0.8
+            shade-x 0.65
+            rs (* base-r shade-s) gs (* base-g shade-s) bs (* base-b shade-s)
+            rn (* base-r shade-n) gn (* base-g shade-n) bn (* base-b shade-n)
+            rx (* base-r shade-x) gx (* base-g shade-x) bx (* base-b shade-x)
             x0 (float (* col cell-w))
             x1 (float (+ x0 cell-w))
             z0 (float (* row cell-h))
@@ -189,42 +203,42 @@
             ;; Face 1: South side (z = z0), normal -z, x in [x0, x1]
             ;; Verts: (x0,y0,z0) (x1,y0,z0) (x1,y1,z0) (x0,y1,z0)
             ;; CCW from outside (-z): v0 v3 v1, v3 v2 v1
-            f1 [[x0 y0 z0 u0 v1 r g b a]  ;; v0: bottom-left
-                [x0 y1 z0 u0 v0 r g b a]  ;; v3: top-left
-                [x1 y0 z0 u1 v1 r g b a]  ;; v1: bottom-right
-                [x0 y1 z0 u0 v0 r g b a]  ;; v3: top-left
-                [x1 y1 z0 u1 v0 r g b a]  ;; v2: top-right
-                [x1 y0 z0 u1 v1 r g b a]]  ;; v1: bottom-right
+            f1 [[x0 y0 z0 u0 v1 rs gs bs a]  ;; v0: bottom-left
+                [x0 y1 z0 u0 v0 rs gs bs a]  ;; v3: top-left
+                [x1 y0 z0 u1 v1 rs gs bs a]  ;; v1: bottom-right
+                [x0 y1 z0 u0 v0 rs gs bs a]  ;; v3: top-left
+                [x1 y1 z0 u1 v0 rs gs bs a]  ;; v2: top-right
+                [x1 y0 z0 u1 v1 rs gs bs a]]  ;; v1: bottom-right
 
             ;; Face 2: North side (z = z1), normal +z, x in [x1, x0] (reversed for CCW)
             ;; Verts: (x1,y0,z1) (x0,y0,z1) (x0,y1,z1) (x1,y1,z1)
             ;; CCW from outside (+z): v0 v1 v3, v1 v2 v3
-            f2 [[x1 y0 z1 u0 v1 r g b a]  ;; v0: bottom-right of face (x1)
-                [x0 y0 z1 u1 v1 r g b a]  ;; v1: bottom-left of face (x0)
-                [x1 y1 z1 u0 v0 r g b a]  ;; v3: top-right
-                [x0 y0 z1 u1 v1 r g b a]  ;; v1: bottom-left
-                [x0 y1 z1 u1 v0 r g b a]  ;; v2: top-left
-                [x1 y1 z1 u0 v0 r g b a]]  ;; v3: top-right
+            f2 [[x1 y0 z1 u0 v1 rn gn bn a]  ;; v0: bottom-right of face (x1)
+                [x0 y0 z1 u1 v1 rn gn bn a]  ;; v1: bottom-left of face (x0)
+                [x1 y1 z1 u0 v0 rn gn bn a]  ;; v3: top-right
+                [x0 y0 z1 u1 v1 rn gn bn a]  ;; v1: bottom-left
+                [x0 y1 z1 u1 v0 rn gn bn a]  ;; v2: top-left
+                [x1 y1 z1 u0 v0 rn gn bn a]]  ;; v3: top-right
 
             ;; Face 3: West side (x = x0), normal -x, z in [z0, z1]
             ;; Verts: (x0,y0,z1) (x0,y0,z0) (x0,y1,z0) (x0,y1,z1)
             ;; CCW from outside (-x): v0 v3 v1, v3 v2 v1
-            f3 [[x0 y0 z1 u0 v1 r g b a]  ;; v0: bottom-far
-                [x0 y1 z1 u0 v0 r g b a]  ;; v3: top-far
-                [x0 y0 z0 u1 v1 r g b a]  ;; v1: bottom-near
-                [x0 y1 z1 u0 v0 r g b a]  ;; v3: top-far
-                [x0 y1 z0 u1 v0 r g b a]  ;; v2: top-near
-                [x0 y0 z0 u1 v1 r g b a]]  ;; v1: bottom-near
+            f3 [[x0 y0 z1 u0 v1 rx gx bx a]  ;; v0: bottom-far
+                [x0 y1 z1 u0 v0 rx gx bx a]  ;; v3: top-far
+                [x0 y0 z0 u1 v1 rx gx bx a]  ;; v1: bottom-near
+                [x0 y1 z1 u0 v0 rx gx bx a]  ;; v3: top-far
+                [x0 y1 z0 u1 v0 rx gx bx a]  ;; v2: top-near
+                [x0 y0 z0 u1 v1 rx gx bx a]]  ;; v1: bottom-near
 
             ;; Face 4: East side (x = x1), normal +x, z in [z1, z0] (reversed for CCW)
             ;; Verts: (x1,y0,z0) (x1,y0,z1) (x1,y1,z1) (x1,y1,z0)
             ;; CCW from outside (+x): v0 v1 v3, v1 v2 v3
-            f4 [[x1 y0 z0 u0 v1 r g b a]  ;; v0: bottom-near
-                [x1 y0 z1 u1 v1 r g b a]  ;; v1: bottom-far
-                [x1 y1 z0 u0 v0 r g b a]  ;; v3: top-near
-                [x1 y0 z1 u1 v1 r g b a]  ;; v1: bottom-far
-                [x1 y1 z1 u1 v0 r g b a]  ;; v2: top-far
-                [x1 y1 z0 u0 v0 r g b a]]  ;; v3: top-near
+            f4 [[x1 y0 z0 u0 v1 rx gx bx a]  ;; v0: bottom-near
+                [x1 y0 z1 u1 v1 rx gx bx a]  ;; v1: bottom-far
+                [x1 y1 z0 u0 v0 rx gx bx a]  ;; v3: top-near
+                [x1 y0 z1 u1 v1 rx gx bx a]  ;; v1: bottom-far
+                [x1 y1 z1 u1 v0 rx gx bx a]  ;; v2: top-far
+                [x1 y1 z0 u0 v0 rx gx bx a]]  ;; v3: top-near
 
             all-faces [f1 f2 f3 f4]]
         (vec-concat (apply concat all-faces))))))

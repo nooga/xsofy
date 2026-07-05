@@ -205,10 +205,10 @@
       (is (some #(approx= % wall-h) y-coords)))))
 
 (deftest wall-extrude-color-opaque
-  (testing "wall-extrude-verts has opaque white color (1.0 1.0 1.0 1.0)"
+  (testing "wall-extrude-verts defaults to opaque white on the south face"
     (let [cell {:col 0 :row 0 :glyph "x"}
           verts (grid/wall-extrude-verts cell 1.0 test-atlas default-opts)
-          ;; Extract color from first vertex (indices 5-8)
+          ;; Extract color from first vertex (indices 5-8) — south face, shade 1.0
           r0 (nth verts 5)
           g0 (nth verts 6)
           b0 (nth verts 7)
@@ -217,6 +217,28 @@
       (is (approx= g0 1.0))
       (is (approx= b0 1.0))
       (is (approx= a0 1.0)))))
+
+(deftest wall-extrude-tinted-and-face-shaded
+  (testing "walls tint from :fg (0-255) with axis shading:
+            south 1.0, north 0.8, x-faces 0.65 (face order f1 f2 f3 f4,
+            54 floats per face)"
+    (let [cell {:col 0 :row 0 :glyph "x" :fg [200 100 50]}
+          verts (grid/wall-extrude-verts cell 1.0 test-atlas default-opts)
+          face-color (fn [face-idx]
+                       (let [base (+ (* face-idx 54) 5)]
+                         [(nth verts base) (nth verts (+ base 1)) (nth verts (+ base 2))]))
+          [rs gs bs] (face-color 0)
+          [rn gn bn] (face-color 1)
+          [rw gw bw] (face-color 2)
+          [re ge be] (face-color 3)]
+      (is (approx= rs (/ 200.0 255.0)))
+      (is (approx= gs (/ 100.0 255.0)))
+      (is (approx= bs (/ 50.0 255.0)))
+      (is (approx= rn (* 0.8 (/ 200.0 255.0))))
+      (is (approx= rw (* 0.65 (/ 200.0 255.0))))
+      (is (approx= re rw))
+      (is (approx= ge gw))
+      (is (approx= be bw)))))
 
 (deftest wall-extrude-cell-footprint
   (testing "wall-extrude-verts stays within cell footprint"
