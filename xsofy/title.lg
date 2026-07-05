@@ -190,7 +190,8 @@
   ;; No-op headless (balance harness / tests) AND under the GL frontend —
   ;; main_gl sets XSOFY_GL_FRONTEND; drawing to the launching terminal there
   ;; would spew escape codes and stall the GL window mid-descent.
-  (when (and (term/size) (nil? (os/getenv "XSOFY_GL_FRONTEND")))
+  ;; NB: os/getenv returns "" (not nil) for unset vars — test by count.
+  (when (and (term/size) (zero? (count (os/getenv "XSOFY_GL_FRONTEND"))))
     (let [[tw th] (term/size)
           cx (quot tw 2)
           cy (quot th 2)

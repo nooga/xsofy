@@ -48,6 +48,15 @@
           (when (number? n) n)))
       default))
 
+(defn getenv-str
+  "os/getenv that returns nil for unset OR empty vars. let-go's os/getenv
+   returns \"\" when a var is unset, which is truthy — every (when (os/getenv
+   ...)) guard silently fires. This bit us: unset XSOFY_GL_SHOT became
+   Screenshot(\"\"), which threw and killed the frame loop 1s in."
+  [k]
+  (let [v (os/getenv k)]
+    (when (and v (> (count v) 0)) v)))
+
 ;; ==========================================================
 ;; Auto-Action Helpers (pure logic from xsofy.play)
 ;; ==========================================================
@@ -490,19 +499,19 @@
   ;; this var — otherwise descending animates runes into the launching
   ;; terminal (term/size succeeds there) and stalls the GL window.
   (os/setenv "XSOFY_GL_FRONTEND" "1")
-  (let [;; Parse environment / args
-        seed-str (or (os/getenv "XSOFY_SEED") "0")
+  (let [;; Parse environment / args (getenv-str: unset/empty → nil)
+        seed-str (or (getenv-str "XSOFY_SEED") "0")
         seed (parse-number seed-str 0)
-        auto-exit-str (os/getenv "XSOFY_GL_AUTOEXIT")
+        auto-exit-str (getenv-str "XSOFY_GL_AUTOEXIT")
         auto-exit-secs (when auto-exit-str
                          (let [d (parse-number auto-exit-str 0.0)]
                            (when (> d 0.0) d)))
-        dump? (boolean (os/getenv "XSOFY_GL_DUMP"))
+        dump? (boolean (getenv-str "XSOFY_GL_DUMP"))
         ;; XSOFY_GL_SHOT=path.png captures one frame (before EndFrame swaps)
         ;; once elapsed >= XSOFY_GL_SHOT_AT seconds (default 1.0).
-        shot-path (os/getenv "XSOFY_GL_SHOT")
-        shot-at (parse-number (os/getenv "XSOFY_GL_SHOT_AT") 1.0)
-        force-fall-str (os/getenv "XSOFY_GL_FORCE_FALL")
+        shot-path (getenv-str "XSOFY_GL_SHOT")
+        shot-at (parse-number (getenv-str "XSOFY_GL_SHOT_AT") 1.0)
+        force-fall-str (getenv-str "XSOFY_GL_FORCE_FALL")
         force-fall-secs (when force-fall-str
                           (parse-number force-fall-str -1.0))
 
@@ -637,6 +646,10 @@
                     vfx-events-ticked last-vfx-t-next
                     (or shot-done (boolean take-shot)))))))))
 
+      ;; A silent frame-loop exception looks like an abrupt clean exit
+      ;; (finally runs, process exits 0) — always print it.
+      (catch e
+             (println "XSOFY_GL ERROR: frame loop died:" e))
       (finally
         (glplat/Terminate)
         (when dump?
