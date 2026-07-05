@@ -1,8 +1,15 @@
 # let-go version for building xsofy — single source of truth.
 # deploy-pages.yml and the test.yml floor lane both resolve the version from here.
 #
-# v1.11.1 ships what the WASM web build needs:
-#   - `lg -w -w-shell none` client-owned shell (nooga/let-go#245)
-#   - the js/url-param host seam (nooga/let-go#339) that carries ?seed=/?replay=
-#     into the worker, so the URL bridge is native (no glue patch)
-v1.11.1
+# Pinned to a commit (not a v-tag) ahead of the next release: this SHA is the
+# squash of nooga/let-go#377 + #378 on main, which the shell needs:
+#   - #378 renames the host-frame mount #terminal -> #app and ships it visible;
+#     the shell binds #app. (No .xterm height rule needed — FitAddon sizes the
+#     terminal to the #app container; verified fill ~0.99.)
+#   - #377 adds `lg -w -w-shell <template>` native splicing (future: retire the
+#     inject-shell step). Baseline still includes #245 (client-owned shell) and
+#     #339 (js/url-param host seam) from v1.11.1.
+#
+# NOTE: because this is a SHA (not a release tag), the build must checkout+build
+# let-go at this commit — a stale prebuilt `lg` will silently emit the old frame.
+cf195a67fd8aa43286319519c2512363caa96a52
