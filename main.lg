@@ -18,7 +18,8 @@
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
             [xsofy.seed :as seed]
-            [xsofy.replay :as replay]))
+            [xsofy.replay :as replay]
+            [xsofy.ui-bridge :as bridge]))
 
 
 (defn init-terminal []
@@ -326,6 +327,10 @@
    gameplay seed chain — so this world replays identically to one made by
    new-game from the same seed."
   [seed title scheme quest]
+  ;; Emit HUD startup from the common construction path, so replay (build-game)
+  ;; populates the browser HUD's title/quest too — not only new-game. No-op on
+  ;; native. Purely a side effect; the returned world is unchanged.
+  (bridge/emit-startup title {:name (:item quest)})
   ;; Fresh run: drop any prior run's camera so a same-depth/same-viewport
   ;; restart re-centers on the player instead of inheriting the old offset.
   (render/reset-camera!)
@@ -361,10 +366,13 @@
   (let [{:keys [seed actions]} (replay/decode code)
         w0 (build-game seed)]
     (render/render-full w0)
+    (bridge/emit-stats w0)
     (sfx/pause! 400)
     (reduce (fn [w action]
               (let [w' (dispatch/dispatch w action)]
                 (render/render-full w')
+                ;; Keep the HUD stats tracking the replay as it plays out.
+                (bridge/emit-stats w')
                 (sfx/pause! 90)
                 w'))
             w0 actions)))
@@ -372,6 +380,7 @@
 (defn game-loop
   ([world]
    (render/render-full world)
+   (bridge/emit-stats world)
    (game-loop world world (term/size)))
   ([world prev-world prev-size]
    (if-not (:running world)
@@ -533,6 +542,7 @@
 
          ;; default: game screen — the poll-based turn loop (input +
          ;; clock-driven auto-actions / ambient animation); see run-play-loop.
+         ;; (Per-turn bridge/emit-stats lives inside play/play-advance.)
          (let [result (play/run-play-loop world prev-size)]
            (if (:running result)
              (recur result result (term/size))
