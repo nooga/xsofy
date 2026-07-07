@@ -150,3 +150,16 @@
                                :frame-ms 0})]
       (is (= {:exit :go :final-frame 2} result) "returns the reduced result")
       (is (= [-1 0 1 2] @rendered) "each animated frame was rendered before exit"))))
+
+;; --- layout floor (#119 review) -------------------------------------------
+;; When the sidebar folds, the top bar claims a row; the log threshold must
+;; account for it so the map keeps its 10-row floor. Regression: the threshold
+;; measured against total height, ignored topbar-h, and left a 9-row map at
+;; 67-79x14.
+(deftest topbar-keeps-map-floor
+  (testing "map stays >= 10 rows across narrow widths at height 14"
+    (doseq [w [66 67 72 79 80]]
+      (is (>= (:h (:map (ui/layout w 14))) 10) (str "width " w))))
+  (testing "documented reference sizes render a 10-row map"
+    (is (= 10 (:h (:map (ui/layout 66 14)))) "66x14")
+    (is (= 10 (:h (:map (ui/layout 80 14)))) "80x14")))
