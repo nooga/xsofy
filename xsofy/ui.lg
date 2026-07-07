@@ -130,15 +130,30 @@
         ox (inc (quot (- term-w gw) 2))
         oy (inc (quot (- term-h gh) 2))
         full (rect ox oy gw gh)
-        ;; sidebar on left, map on right
-        [sidebar main] (rect-split-h full sidebar-width)
-        ;; main = map + bottom
-        [map-area bottom] (rect-split-v main (- (:h main) log-height status-height))
-        [log-area status] (rect-split-v bottom log-height)]
-    {:map map-area
+        ;; Drop the sidebar when narrow: below gw=80 (sidebar-width + 60),
+        ;; keeping it would squeeze the map to under ~60 cols. The HTML
+        ;; host's info bar carries the same data (HP / depth / quest), so
+        ;; losing the sidebar here costs nothing under the WASM build.
+        show-sidebar? (>= gw (+ sidebar-width 60))
+        ;; Drop the log when short: below gh=14 (log-height + status-height
+        ;; + 10) the log starves the map. Status (1 row) shows the
+        ;; keybinding hint, which only fits at ~67 cols — below that it
+        ;; truncates mid-token to something useless. Under WASM the HTML
+        ;; bar already shows the action set, so dropping the row when
+        ;; narrow costs nothing and buys the map an extra line.
+        show-log?    (>= gh (+ log-height status-height 10))
+        show-status? (and (>= gh 2) (>= gw 67))
+        [sidebar main] (if show-sidebar?
+                         (rect-split-h full sidebar-width)
+                         [nil full])
+        log-h    (if show-log?    log-height    0)
+        status-h (if show-status? status-height 0)
+        [map-area bottom]      (rect-split-v main (- gh log-h status-h))
+        [log-area status-area] (rect-split-v bottom log-h)]
+    {:map     map-area
      :sidebar sidebar
-     :log log-area
-     :status status}))
+     :log     (when show-log?    log-area)
+     :status  (when show-status? status-area)}))
 
 ;; --- Event Loop (#56) -----------------------------------------------------
 ;; A small, composable, poll-based event loop for terminal UIs. A screen
