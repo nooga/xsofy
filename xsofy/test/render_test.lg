@@ -1,6 +1,22 @@
 (ns xsofy.test.render-test
   (:require [test :refer [deftest is testing]]
-            [xsofy.render :as render]))
+            [xsofy.render :as render]
+            [xsofy.screenfx :as screenfx]))
+
+;; --- Synchronized output (DEC 2026), shared in xsofy.screenfx ---
+
+(deftest sync-output-escapes-are-dec-2026
+  ;; Guard the exact begin/end sequences — a typo silently disables atomic
+  ;; present or leaves garbage on the wire. They live in screenfx so render, the
+  ;; title/descent screens, and clear-screen all share one implementation.
+  (testing "begin/end-sync are CSI ?2026 h/l"
+    (is (= (str (char 27) "[?2026h") screenfx/begin-sync))
+    (is (= (str (char 27) "[?2026l") screenfx/end-sync))))
+
+(deftest sync-helpers-emit-the-escapes
+  (testing "sync-begin! writes BSU, flush-frame! writes ESU (default sync-output? on)"
+    (is (= screenfx/begin-sync (with-out-str (screenfx/sync-begin!))))
+    (is (= screenfx/end-sync (with-out-str (screenfx/flush-frame!))))))
 
 (deftest message-log-window-shows-newest-entries-by-default
   (testing "newest entries are visible when scroll is zero"
