@@ -17,6 +17,7 @@
             [xsofy.screenfx :as sfx]
             [xsofy.debug :as dbg]
             [xsofy.dispatch :as dispatch]
+            [xsofy.console :as console]
             [xsofy.seed :as seed]
             [xsofy.replay :as replay]
             [xsofy.ui-bridge :as bridge]))
@@ -556,6 +557,29 @@
                  (render/render-full w)
                  (recur w w (term/size)))
                w)))
+
+         :console
+         ;; Quake-style dev REPL. The game is already on screen (the play loop
+         ;; just drew it and toggling the console doesn't change the world), so
+         ;; we do NOT repaint it here — the panel just draws over the top rows.
+         ;; The only full repaint in the open/close cycle is on close, to erase
+         ;; the panel. Runs on its own poll loop with a RAW-key source (line
+         ;; editing needs literal chars, not parsed game actions). Returns the
+         ;; world unchanged — the console is read-only (Cut 0). See xsofy.console.
+         (let [size (term/size)
+               result (ui/run-loop
+                        ;; frame-ms 30 matches the play loop's input cadence (it
+                        ;; floors to 30ms under wasm anyway) so typing feels the
+                        ;; same as the game. Cheap now that render-console is
+                        ;; dirty-checked — a faster loop won't repaint while idle.
+                        {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+                         :state    (console/init-state world size)
+                         :step     console/handle-key
+                         :render   console/render-console
+                         :frame-ms 30})
+               w (dissoc result :screen)]
+           (render/render-full w)
+           (recur w w (term/size)))
 
          ;; default: game screen — the poll-based turn loop (input +
          ;; clock-driven auto-actions / ambient animation); see run-play-loop.

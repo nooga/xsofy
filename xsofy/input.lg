@@ -1,6 +1,17 @@
-(ns xsofy.input)
+(ns xsofy.input
+  (:require [js]
+            [os]))
 
-(def key-bindings
+(defn dev?
+  "Dev builds unlock the let-go dev console (backtick). Gated so players never
+   see it: ?mode=dev on web (js/url-param), XSOFY_DEV env natively (os/getenv).
+   Both host calls are cross-platform no-ops off their platform (return nil), the
+   same seam xsofy.seed/boot-param rides."
+  []
+  (or (= (js/url-param "mode") "dev")
+      (let [e (os/getenv "XSOFY_DEV")] (and e (> (count e) 0)))))
+
+(def base-key-bindings
   [{:action :up          :category :movement   :label "Move up"          :keys ["\u001b[A" "k" "8"] :help-keys ["k" "8" "Up"]}
    {:action :down        :category :movement   :label "Move down"        :keys ["\u001b[B" "j" "2"] :help-keys ["j" "2" "Down"]}
    {:action :left        :category :movement   :label "Move left"        :keys ["\u001b[D" "h" "4"] :help-keys ["h" "4" "Left"]}
@@ -29,6 +40,15 @@
    {:action :messages    :category :information :label "Open message log" :keys ["m"] :help-keys ["m"]}
    {:action :help        :category :information :label "Open keybindings" :keys ["?"] :help-keys ["?"]}
    {:action :quit        :category :system     :label "Quit"              :keys ["\u001b" (str (char 3))] :help-keys ["Esc" "Ctrl-C"]}])
+
+(def console-binding
+  {:action :toggle-console :category :system :label "Dev console"
+   :keys ["`"] :help-keys ["`"]})
+
+;; The dev console binding is appended only in dev builds, so parse-key (and the
+;; help screen, which reads key-bindings) surface it exclusively when dev? is on.
+(def key-bindings
+  (if (dev?) (conj base-key-bindings console-binding) base-key-bindings))
 
 (defn key-matches? [k binding]
   (some (fn [key] (= k key)) (:keys binding)))

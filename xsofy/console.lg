@@ -1,0 +1,270 @@
+(ns xsofy.console
+  "Quake-style dev console: a read-only command surface over the running game.
+
+   It is a game-side :screen (see xsofy.main game-loop), driven through the same
+   poll-based event loop (xsofy.ui/run-loop) as every other screen, so it works
+   identically in the native TUI and in the browser (wasm) with no shell change
+   and no build flag. Backtick opens it; it is dev-gated (see xsofy.input/dev?).
+
+   READ-ONLY by construction (Cut 0). Input is parsed with the real reader but
+   the head is dispatched against a fixed whitelist (see `commands`) — there is
+   no `eval`, so a typed form can only run a curated, side-effect-free command.
+   The world goes in and comes back out unchanged, so the console can never fold
+   the seed, grow the :action-log, or taint a run. That is the whole safety
+   model: not policed, structural.
+
+   The arbitrary-eval REPL (with staged mutations recorded as commits in the
+   game-state DAG, xsofy.dag — its 'external injection' / checkpoint-hash case)
+   is the follow-up (Cut 1), gated behind a god flag on top of this same surface.
+   Its reference implementation is preserved on the console/dev-repl-cut1 branch."
+  (:require [term]
+            [pprint]
+            [xsofy.render :as render]
+            [xsofy.ui :as ui]))
+
+;; --- Key constants --------------------------------------------------------
+;; Built from (char N) so the source stays plain ASCII (no invisible control
+;; bytes in the file). ESC-prefixed sequences are what term/read-key returns
+;; for the arrow / nav keys.
+
+(def ^:private ESC (str (char 27)))
+(def ^:private DEL (str (char 127)))
+(def ^:private BS  (str (char 8)))
+(def ^:private ETX (str (char 3)))        ;; Ctrl-C
+(def ^:private K-LEFT  (str ESC "[D"))
+(def ^:private K-RIGHT (str ESC "[C"))
+(def ^:private K-UP    (str ESC "[A"))
+(def ^:private K-DOWN  (str ESC "[B"))
+(def ^:private K-HOME  (str ESC "[H"))
+(def ^:private K-END   (str ESC "[F"))
+(def ^:private K-PGUP  (str ESC "[5~"))
+(def ^:private K-PGDN  (str ESC "[6~"))
+
+;; --- Command surface ------------------------------------------------------
+;; The read-only whitelist. Each command is (fn [world args] -> value); the
+;; value is pretty-printed into the scrollback. Commands only READ the world
+;; (or run self-contained diagnostics), so none can perturb the live run.
+
+(defn- help-text []
+  (str "commands (read-only):\n"
+       "  (seed)      seed-input + current rolling seed\n"
+       "  (player)    player hp / position / depth\n"
+       "  (location)  position / depth / turn\n"
+       "  (help)      this list\n"
+       "Esc or ` to close."))
+
+(def ^:private commands
+  {'help     (fn [_ _] (help-text))
+   'seed     (fn [w _] {:seed-input (:seed-input w) :seed (:seed w)})
+   'player   (fn [w _] (let [p (get-in w [:entities :player])]
+                         {:hp     (get-in p [:body :hp])
+                          :max-hp (get-in p [:body :max-hp])
+                          :pos    (:pos p)
+                          :depth  (:depth w)}))
+   'location (fn [w _] (let [p (get-in w [:entities :player])]
+                         {:pos (:pos p) :depth (:depth w) :turn (:turn w)}))})
+
+(defn run-command
+  "Parse `line` with the reader and dispatch its head against the read-only
+   command whitelist. No `eval`: an unknown or non-whitelisted form is reported,
+   never executed, so the console can't mutate the run. Both `(help)` and a bare
+   `help` resolve. Returns {:ok bool :val <value>}."
+  [world line]
+  (let [form (try (read-string line) (catch e ::parse-error))]
+    (if (= form ::parse-error)
+      {:ok false :val "parse error"}
+      (let [head (cond (seq? form)    (first form)
+                       (symbol? form) form
+                       :else          nil)
+            args (when (seq? form) (rest form))]
+        (if-let [cmd (get commands head)]
+          (try {:ok true :val (cmd world args)}
+               (catch e {:ok false :val (str e)}))
+          {:ok false :val (str "unknown command: " (pr-str form) " — try (help)")})))))
+
+;; --- Render bookkeeping ---------------------------------------------------
+;; Split render signatures so we repaint the minimum. last-panel covers the
+;; scrollback/border (redrawn only when output/scroll/size change); last-prompt
+;; covers the input line (redrawn on every keystroke). Typing only rewrites the
+;; ONE prompt row — a single-row overwrite doesn't flicker, so the console stays
+;; smooth without any terminal synchronized-output support. Both reset per open
+;; so the first frame always paints. See render-console.
+(def ^:private last-panel  (atom nil))
+(def ^:private last-prompt (atom nil))
+
+;; --- Console state --------------------------------------------------------
+
+(defn init-state
+  "Seed the run-loop state for the console screen from the live `world`."
+  [world size]
+  (reset! last-panel nil)    ;; force a first full paint; clear any prior session
+  (reset! last-prompt nil)
+  {:world world :size size :frame 0
+   :input "" :cursor 0
+   :history [] :hist-idx nil
+   :output [{:s "let-go dev console — type a command, Enter to run, Esc/` to close.  (help) for commands" :k :note}]
+   :scroll 0})
+
+;; A length-1 key that is NOT one of these control strings is printable input
+;; (covers typed ASCII and rune glyphs); avoids char-code arithmetic. Multi-byte
+;; escape sequences (arrows etc.) are length > 1, so they're excluded already.
+(def ^:private control-keys
+  #{"\r" "\n" "\t" ESC DEL BS ETX})
+
+(defn- printable? [k]
+  (and (string? k) (= 1 (count k)) (not (contains? control-keys k))))
+
+(defn- record
+  "Append a scrollback line and reset scroll to the bottom."
+  [st s k] (-> st (update :output conj {:s s :k k}) (assoc :scroll 0)))
+
+(defn- record-lines
+  "Record a possibly-multi-line string as one scrollback row per line, so
+   pretty-printed (indented) values keep their layout in the panel."
+  [st s k]
+  (reduce (fn [st ln] (record st ln k)) st (split (str s) "\n")))
+
+(defn- submit
+  "Run the current input line as a whitelist command, record echo + result, and
+   push the line to history. The world is never mutated — read-only by design,
+   so there is nothing to adopt back and nothing beneath to repaint."
+  [st]
+  (let [line (:input st)]
+    (if (= 0 (count line))
+      (assoc st :hist-idx nil)
+      (let [{:keys [ok val]} (run-command (:world st) line)
+            ;; strings (help text, the replay code) print raw; everything else
+            ;; goes through pprint so maps/vectors read nicely.
+            text (if (string? val) val (pprint/pprint-str val))]
+        (-> st
+            (record (str "» " line) :in)
+            (record-lines text (if ok :ok :err))
+            (assoc :input "" :cursor 0
+                   :hist-idx nil
+                   :history (conj (:history st) line)))))))
+
+(defn- recall
+  "History up/down. dir -1 = older, +1 = newer."
+  [st dir]
+  (let [h (:history st)
+        n (count h)]
+    (if (= 0 n)
+      st
+      (let [idx (:hist-idx st)
+            idx' (cond
+                   (= dir -1) (if (nil? idx) (dec n) (max 0 (dec idx)))
+                   :else      (if (nil? idx) nil (inc idx)))]
+        (if (or (nil? idx') (>= idx' n))
+          (assoc st :input "" :cursor 0 :hist-idx nil)
+          (let [line (nth h idx')]
+            (assoc st :input line :cursor (count line) :hist-idx idx')))))))
+
+(defn- edit
+  "Apply a raw printable/editing key to the input line."
+  [st k]
+  (let [in (:input st) c (:cursor st)]
+    (cond
+      (printable? k)
+      (assoc st :input (str (subs in 0 c) k (subs in c)) :cursor (inc c))
+
+      (or (= k DEL) (= k BS))                        ;; Backspace / Del
+      (if (> c 0)
+        (assoc st :input (str (subs in 0 (dec c)) (subs in c)) :cursor (dec c))
+        st)
+
+      (= k K-LEFT)  (assoc st :cursor (max 0 (dec c)))
+      (= k K-RIGHT) (assoc st :cursor (min (count in) (inc c)))
+      (= k K-HOME)  (assoc st :cursor 0)
+      (= k K-END)   (assoc st :cursor (count in))
+      (= k K-UP)    (recall st -1)
+      (= k K-DOWN)  (recall st 1)
+      (= k K-PGUP)  (update st :scroll inc)
+      (= k K-PGDN)  (update st :scroll (fn [s] (max 0 (dec s))))
+      :else st)))
+
+(defn handle-key
+  "run-loop :step for the console. [:action k] edits the line / runs / closes;
+   [:tick f] advances the cursor-blink frame (and repaints the game on resize).
+   Returns state, or (reduced world) to close. The world is returned UNCHANGED —
+   the console is read-only, so the game-loop resumes exactly where it left off."
+  [st ev]
+  (let [[tag payload] ev]
+    (case tag
+      :action
+      (let [k payload]
+        (cond
+          (or (= k ESC) (= k "`")) (reduced (:world st))  ;; Esc / ` close
+          (= k :eof)                    (reduced (:world st))
+          (or (= k "\r") (= k "\n"))    (submit st)
+          :else                          (edit st k)))
+      :tick
+      (let [sz (term/size)]
+        (if (= sz (:size st))
+          (assoc st :frame payload)
+          (do (render/render-full (:world st))         ;; resized: repaint beneath
+              (assoc st :frame payload :size sz))))
+      st)))
+
+;; --- Render (the drop-down panel) -----------------------------------------
+;; Opaque panel over the top of the terminal; the game (painted by the caller
+;; on entry, and by handle-key on resize) shows below it — the Quake drop-down
+;; look. We only ever repaint the top rows here.
+
+(def ^:private border [120 180 140])
+(def ^:private fg-in  [150 150 100])
+(def ^:private fg-ok  [180 210 170])
+(def ^:private fg-err [230 130 120])
+(def ^:private fg-txt [210 205 180])
+
+(defn- line-fg [k]
+  (case k :in fg-in :ok fg-ok :err fg-err fg-txt))
+
+(defn- draw-prompt
+  "Write the prompt line (» input) and a steady inverted block cursor into the
+   panel's inner rect. This is the ONLY thing a keystroke repaints — one row."
+  [inner input c]
+  (let [prow (dec (:h inner))
+        col (+ 2 c)
+        ch (if (< c (count input)) (subs input c (inc c)) " ")]
+    (ui/write-line inner prow (str "» " input) fg-txt ui/bg)
+    (ui/write-at inner col prow ch ui/bg fg-txt)))   ;; inverted cell
+
+(defn render-console
+  "Repaint the minimum. When the scrollback / scroll / size changes (run, scroll,
+   resize) redraw the whole panel; otherwise — the common case, typing — rewrite
+   only the prompt row. A single-row overwrite doesn't flash, so typing stays
+   smooth with no synchronized-output dependency. Idle frames change nothing, so
+   both branches no-op."
+  [st]
+  (let [[tw th] (or (:size st) (term/size))
+        ph (min th (max 10 (quot th 2)))
+        ;; matches ui/box's inner rect for r=(rect 1 1 tw ph): (rect 2 2 w-2 h-2)
+        inner (ui/rect 2 2 (- tw 2) (- ph 2))
+        panel-sig  [(:scroll st) (count (:output st)) tw th]
+        prompt-sig [(:input st) (:cursor st)]]
+    (cond
+      (not= panel-sig @last-panel)
+      (do (reset! last-panel panel-sig)
+          (reset! last-prompt prompt-sig)
+          (let [r (ui/rect 1 1 tw ph)
+                title "let-go console"]
+            (ui/clear-rect r)
+            (let [box-inner (ui/box r title border ui/bg)
+                  h (:h box-inner)
+                  vis (max 1 (dec h))              ;; rows for scrollback (last = prompt)
+                  out (:output st)
+                  n (count out)
+                  s (:scroll st)
+                  start (max 0 (- n vis s))
+                  end (min n (+ start vis))
+                  shown (subvec out start end)]
+              (dotimes [i (count shown)]
+                (let [e (nth shown i)]
+                  (ui/write-line box-inner i (str " " (:s e)) (line-fg (:k e)) ui/bg)))
+              (draw-prompt box-inner (:input st) (:cursor st))))
+          (term/flush))
+
+      (not= prompt-sig @last-prompt)
+      (do (reset! last-prompt prompt-sig)
+          (draw-prompt inner (:input st) (:cursor st))
+          (term/flush)))))
