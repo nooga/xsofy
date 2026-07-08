@@ -67,6 +67,40 @@
 ;; the main game thread).
 (def last-camera (atom nil))
 
+;; --- SGR pen (render-perf: lossless set-fg/set-bg elision) ---
+;; let-go's `term` is a raw-emit primitive — every set-fg/set-bg writes an SGR
+;; escape immediately, so the map loop re-sends identical fg/bg for every cell
+;; even across same-color runs (walls, memory, blanked cells). SGR attributes
+;; persist across cursor moves, so re-emitting an unchanged color is pure waste —
+;; bytes on native, and a Go→JS→xterm.js crossing per call on WASM.
+;;
+;; The pen records the last fg/bg we emitted and skips a set-fg/set-bg whose
+;; color already matches. move-cursor and write are untouched, so this is
+;; lossless: identical glyphs, identical colors, just fewer escapes.
+;;
+;; Correctness: the pen mirrors the terminal's current fg/bg, valid only while
+;; every styled write goes through pen-fg!/pen-bg!. Any raw set-fg/set-bg /
+;; reset-style / screen blank (panels, vfx overlays, the full-clear) leaves it
+;; stale, so each contiguous penned batch (render-map, the render-dirty delta
+;; loop, restore-dirty-cells!) calls pen-reset! before its first cell. nil =
+;; "unknown" → always emit. Render-only state; single-threaded like last-camera.
+(def sgr-pen (atom nil))
+
+(defn pen-reset! []
+  (reset! sgr-pen nil))
+
+(defn pen-fg! [r g b]
+  (let [c [r g b]]
+    (when (not= (:fg @sgr-pen) c)
+      (term/set-fg r g b)
+      (swap! sgr-pen assoc :fg c))))
+
+(defn pen-bg! [r g b]
+  (let [c [r g b]]
+    (when (not= (:bg @sgr-pen) c)
+      (term/set-bg r g b)
+      (swap! sgr-pen assoc :bg c))))
+
 ;; Dead-zone as a fraction of the EFFECTIVE viewport, per axis. The camera
 ;; holds while the player roams this central box; crossing it scrolls the
 ;; camera 1 cell/step to keep the player on the boundary (clamped at the
@@ -240,8 +274,8 @@
               bg2 (if gas (fx/gas-tint bg1 gas) bg1)]
           (let [[fr fg fb] (light/apply-light fg1 (or light-val [0 0 0]))
                 [br bgg bb] (light/apply-light bg2 (or light-val [0 0 0]))]
-            (term/set-fg fr fg fb)
-            (term/set-bg br bgg bb)
+            (pen-fg! fr fg fb)
+            (pen-bg! br bgg bb)
             (term/write ch))))
 
       remembered
@@ -249,14 +283,14 @@
             ch (get terrain/tile-chars remembered "?")
             [fr fg fb] (memory-color (:fg style))
             [br bgg bb] (memory-color (:bg style))]
-        (term/set-fg fr fg fb)
-        (term/set-bg br bgg bb)
+        (pen-fg! fr fg fb)
+        (pen-bg! br bgg bb)
         (term/write ch))
 
       :else
       (let [[br bgg bb] ui/bg]
-        (term/set-fg br bgg bb)
-        (term/set-bg br bgg bb)
+        (pen-fg! br bgg bb)
+        (pen-bg! br bgg bb)
         (term/write " ")))))
 
 (defn render-map [world r]
@@ -266,6 +300,7 @@
         gases (or (:gases world) {})
         cx (or (:cx r) 0)
         cy (or (:cy r) 0)]
+    (pen-reset!)   ; start of a contiguous penned batch (see sgr-pen)
     ;; Walk screen cells and translate back to world coords, so we cover the
     ;; visible world window [cx, cx+w) × [cy, cy+h) (clamped to the map). The
     ;; old world-origin range [0, w) × [0, h) missed every on-screen cell once
@@ -341,8 +376,8 @@
               glyph (get-in entity [:visual :glyph] "?")
               [col row] (map-cell r x y)]
           (term/move-cursor col row)
-          (let [[fr fg fb] fg-lit] (term/set-fg fr fg fb))
-          (let [[br bgg bb] bg1] (term/set-bg br bgg bb))
+          (let [[fr fg fb] fg-lit] (pen-fg! fr fg fb))
+          (let [[br bgg bb] bg1] (pen-bg! br bgg bb))
           (term/write glyph))))))
 
 (defn render-map-entities [world r]
@@ -625,6 +660,7 @@
         stains (or (:stains world) {})
         gases (or (:gases world) {})
         pos-ent (dirty-cell-entities (:entities world) dirty)]
+    (pen-reset!)   ; vfx overlays emit raw between restores; start clean (see sgr-pen)
     (doseq [[x y] dirty]
       ;; render-map-tile + render-entity both use map-cell internally,
       ;; which clips correctly in camera coords. Don't add an outer
@@ -1399,6 +1435,13 @@
       (let [lights (or (:lights world) [])
             stains (or (:stains world) {})
             gases (or (:gases world) {})]
+        ;; Iterate in the original FOV-set order (not sorted): several tile types
+        ;; (fire/water/lava) draw their color from the global rand stream in
+        ;; tile-appearance, so reordering iteration would reshuffle which cell
+        ;; consumes which draw — cosmetically harmless (that stream is unseeded,
+        ;; so the shimmer varies run to run regardless) but a needless behavior
+        ;; change. The pen still elides same-color runs where they occur.
+        (pen-reset!)   ; start of the FOV-delta penned batch (see sgr-pen)
         (doseq [[x y] old-fov]
           (when-not (contains? new-fov [x y])
             (render-map-tile mr x y nil false (get (:memory world) [x y]) nil nil nil)))
