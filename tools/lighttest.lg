@@ -19,8 +19,9 @@
    let-go's `term` is a raw-emit primitive with no diff layer, so a naive TUI
    repaints every cell every frame. This tool supplies its own damage buffer +
    SGR elision + optional color posterize, and shows `drawn=<changed>/<total>` +
-   `sgr=<color-changes>` in the HUD. Press `e` to flip to naive mode for a direct
-   A/B — most telling with demo running.
+   `sgr=<color-changes>` in the HUD. Press `e` to cycle delta -> sgr-off (isolates
+   the SGR-elision win) -> naive (all optimizations off) for a direct A/B — most
+   telling with demo running.
 
    Run natively (needs a real TTY):
      lg tools/lighttest.lg              ; seed 1
@@ -29,8 +30,8 @@
 
    Controls (compact legend on-screen; full list here):
      arrows / hjkl / yubn / numpad  move the active light (8-way)
-     p  demo on/off      P  switch path (liss/bounce)    ,/.  demo slower/faster
-     +/- radius   c/C color   d  depth (8/6/5/4-bit posterize)   e  naive-vs-delta A/B
+     p  cycle demo (off/liss/bounce)     ,/.  demo slower/faster
+     +/- radius   c/C color   d  depth (8/6/5/4-bit posterize)   e  cycle render A/B (delta/sgr-off/naive)
      o  occlusion (FOV)   t  terrain lights   m  hide/show the light marker (@/o)
      Tab/]/[  select light   a add   x delete   N  new dungeon   q / Esc  quit
 
@@ -86,10 +87,15 @@
      :terrain-lights? true
      :markers? true       ; show the @/o light markers
      :cdepth 8            ; render-perf probe: bits/channel (8 = off)
-     :naive? false        ; probe A/B: force full-repaint + no SGR elision
+     ;; probe A/B (`e` cycles): :delta = damage buffer + SGR/cursor elision (all on);
+     ;; :sgr-off = buffer on but SGR re-emitted per cell (isolates the SGR-elision win,
+     ;; #145 — drawn count unchanged, sgr count rises); :naive = every optimization off
+     ;; (true repaint-everything baseline).
+     :render-mode :delta
      :sync? true          ; wrap each frame in synchronized-output (DEC 2026) — anti-tearing probe
-     :demo? false         ; screensaver animation on/off
-     :demo-mode :liss     ; :liss (Lissajous) | :bounce (edge bounce)
+     ;; :demo-mode drives the screensaver: :none (hand-steer only) | :liss (Lissajous) |
+     ;; :bounce (edge bounce). `p` cycles through the three.
+     :demo-mode :none
      :vel [1 1]           ; bounce velocity for the active light
      :frame 0             ; animation frame counter (drives the path)
      :frame-ms 40         ; demo pacing (~25 fps); , / . adjust
@@ -108,6 +114,12 @@
     (if (>= n w)
       (subs s 0 w)
       (str s (apply str (repeat (- w n) " "))))))
+
+;; right-align in a fixed width so a changing count/coord doesn't push the rest
+;; of the HUD line sideways frame-to-frame. Never truncates (overflow just widens).
+(defn- lpad [s w]
+  (let [s (str s) n (count s)]
+    (if (>= n w) s (str (apply str (repeat (- w n) " ")) s))))
 
 (defn- all-lights [st]
   ;; light-at only reads :lx :ly :radius :color, so movable lights (which carry
@@ -167,6 +179,9 @@
 (defn- cycle-depth [st]
   (assoc st :cdepth (get {8 6, 6 5, 5 4, 4 8} (:cdepth st) 8)))
 
+(def demo-next   {:none :liss,  :liss :bounce,  :bounce :none})
+(def render-next {:delta :sgr-off, :sgr-off :naive, :naive :delta})
+
 (defn- select-light [st d]
   (assoc st :active (mod (+ (:active st) d) (count (:lights st)))))
 
@@ -192,8 +207,7 @@
 (defn- update-state [st k]
   (cond
     (contains? dir-keys k)    (let [[dx dy] (get dir-keys k)] (move-active st dx dy))
-    (= k "p")                 (update st :demo? not)
-    (= k "P")                 (update st :demo-mode (fn [m] (if (= m :bounce) :liss :bounce)))
+    (= k "p")                 (update st :demo-mode demo-next)
     (= k ",")                 (update st :frame-ms (fn [m] (min 200 (+ m 10))))
     (= k ".")                 (update st :frame-ms (fn [m] (max 10 (- m 10))))
     (or (= k "+") (= k "="))  (bump-radius st 1)
@@ -201,7 +215,7 @@
     (= k "c")                 (cycle-color st 1)
     (= k "C")                 (cycle-color st -1)
     (= k "d")                 (cycle-depth st)
-    (= k "e")                 (update st :naive? not)
+    (= k "e")                 (update st :render-mode render-next)
     (= k "s")                 (update st :sync? not)
     (= k "m")                 (update st :markers? not)
     (= k "?")                 (update st :help? not)
@@ -242,9 +256,11 @@
 ;; it against the previous frame's grid and only re-emit changed cells, eliding
 ;; redundant set-fg/set-bg and skipping move-cursor when the cursor already sits
 ;; where the next changed cell is. Light markers are baked into the appearance
-;; so the damage buffer handles them too. Naive mode (`e`) forces old=nil and
-;; re-emits move/fg/bg per cell. A resize invalidates the buffer (clear + full
-;; repaint) since the terminal wiped what we thought was on screen.
+;; so the damage buffer handles them too. The `e` A/B cycles three modes: :delta
+;; (all elisions on), :sgr-off (buffer + cursor elision on but SGR re-emitted per
+;; cell — isolates #145), :naive (old=nil + move/fg/bg per cell — full repaint).
+;; A resize invalidates the buffer (clear + full repaint) since the terminal wiped
+;; what we thought was on screen.
 
 (defn- light-index-at [lights]
   (loop [i 0 m {}]
@@ -271,22 +287,25 @@
 (defn- render-hud! [st tw]
   ;; three short lines (each <= map width, 79) so the HUD never spills right
   (let [{:keys [w h active lights occlude? terrain-lights? markers? seed cdepth
-                naive? sync? demo? demo-mode frame-ms stats]} st
+                render-mode sync? demo-mode frame-ms stats]} st
         al (nth lights active)
         [cr cg cb] (:color al)
+        ;; every varying field is fixed-width (lpad numbers, pad enums) so the HUD
+        ;; stays column-stable while the light moves / counters tick.
         line1 (str "light " (inc active) "/" (count lights)
-                   "  (" (:lx al) "," (:ly al) ")  r=" (:radius al)
-                   "  rgb[" cr "," cg "," cb "]"
+                   "  (" (lpad (:lx al) 2) "," (lpad (:ly al) 2) ")  r=" (lpad (:radius al) 2)
+                   "  rgb[" (lpad cr 3) "," (lpad cg 3) "," (lpad cb 3) "]"
                    "  occ:" (if occlude? "ON" "off")
                    "  terr:" (if terrain-lights? "on" "off")
                    "  mark:" (if markers? "on" "off"))
-        line2 (str "depth=" cdepth "bit  render=" (if naive? "NAIVE" "delta")
-                   "  sync:" (if sync? "on" "off")
-                   "  demo:" (if demo? (str (name demo-mode) "@" frame-ms "ms") "off")
-                   "  drawn=" (:drawn stats) "/" (* w h)
-                   "  sgr=" (:sgr stats)
+        line2 (str "depth=" cdepth "bit  render=" (pad (name render-mode) 7)
+                   "  sync:" (if sync? "on " "off")
+                   "  demo:" (pad (if (= demo-mode :none) "off"
+                                     (str (name demo-mode) "@" (lpad frame-ms 3) "ms")) 12)
+                   "  drawn=" (lpad (:drawn stats) 4) "/" (* w h)
+                   "  sgr=" (lpad (:sgr stats) 4)
                    "  seed=" seed)
-        line3 "hjkl move  p/P demo  ,/. spd  +/- rad  c/d/e/o/t/m/s  Tab/a/x  N q  ?=help"]
+        line3 "hjkl move  p demo  ,/. spd  +/- rad  c/d/e/o/t/m/s  Tab/a/x  N q  ?=help"]
     (term/reset-style)
     (term/move-cursor 1 (+ h 1)) (term/write (pad line1 tw))
     (term/move-cursor 1 (+ h 2)) (term/write (pad line2 tw))
@@ -299,8 +318,7 @@
    "  y u b n             diagonals   (numpad 1-9 also work)"
    ""
    "Demo / animation:"
-   "  p                   play / pause the screensaver"
-   "  P                   switch path: Lissajous <-> edge-bounce"
+   "  p                   cycle demo: off -> Lissajous -> edge-bounce"
    "  , / .               demo slower / faster"
    ""
    "Light:"
@@ -314,7 +332,7 @@
    "  o                   occlusion: raw radial <-> FOV wall-shadows"
    "  t                   terrain lights (torches / lava) on / off"
    "  d                   color depth 8/6/5/4-bit (posterize)"
-   "  e                   naive vs delta render (the perf A/B)"
+   "  e                   cycle render: delta -> sgr-off -> naive (perf A/B)"
    "  s                   synchronized output on/off (DEC 2026 anti-tearing)"
    ""
    "Dungeon / system:"
@@ -335,7 +353,9 @@
 
 (defn- render! [st]
   (let [{:keys [grid w h lights active occlude? cdepth]} st
-        nv (:naive? st)
+        mode (:render-mode st)
+        full? (= mode :naive)          ; no damage buffer + no cursor/SGR elision
+        sgr-cap? (or full? (= mode :sgr-off))  ; re-emit SGR per drawn cell (isolates #145)
         tsize (term/size)
         resized? (not= tsize (:tsize st))
         ;; on resize the terminal cleared what we drew -> throw away the damage
@@ -359,17 +379,18 @@
             (let [x (mod idx w) y (quot idx w)
                   app (cell-app st x y lset vis lidx step)
                   ;; naive: pretend nothing was drawn before -> repaint all
-                  old (when (and prev (not nv)) (nth prev idx))]
+                  old (when (and prev (not full?)) (nth prev idx))]
               (when (not= app old)
                 (let [[ch fr fg fb br bg bb] app
                       col (inc x) row (inc y)]
                   ;; move only if the cursor isn't already here (naive: always)
-                  (when (or nv (not (and (= @cur-col col) (= @cur-row row))))
+                  (when (or full? (not (and (= @cur-col col) (= @cur-row row))))
                     (term/move-cursor col row))
-                  ;; emit color only on change from the last emitted cell (naive: always)
-                  (when (or nv (not= @last-fg [fr fg fb]))
+                  ;; emit color only on change from the last emitted cell
+                  ;; (sgr-off/naive: always, to expose the SGR-elision cost)
+                  (when (or sgr-cap? (not= @last-fg [fr fg fb]))
                     (term/set-fg fr fg fb) (reset! last-fg [fr fg fb]) (swap! sgr inc))
-                  (when (or nv (not= @last-bg [br bg bb]))
+                  (when (or sgr-cap? (not= @last-bg [br bg bb]))
                     (term/set-bg br bg bb) (reset! last-bg [br bg bb]) (swap! sgr inc))
                   (term/write ch)
                   (reset! cur-col (inc col))   ; glyph advanced the cursor one right
@@ -420,11 +441,15 @@
           (recur (render! (assoc st :help? false :prev nil))))
       ;; demo: advance a frame, poll input, pace. Toggling demo/help mid-frame
       ;; bounces back through the top so those branches handle it next iteration.
-      (:demo? st)
+      (not= (:demo-mode st) :none)
       (let [st1 (drain-input st)]
         (cond
           (not (:running st1)) st1
-          (or (not (:demo? st1)) (:help? st1)) (recur st1)
+          (:help? st1) (recur st1)   ; the :help? branch repaints as an overlay
+          ;; demo just turned off: paint one frame so the HUD shows demo:off now,
+          ;; rather than leaving the last animated frame up until the next keypress
+          ;; (the idle :else branch blocks on read-key before it would repaint).
+          (= (:demo-mode st1) :none) (recur (render! st1))
           :else (let [st2 (render! (demo-step st1))]
                   (sleep (:frame-ms st2))
                   (recur st2))))
