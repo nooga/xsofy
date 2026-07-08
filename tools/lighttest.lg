@@ -30,7 +30,7 @@
 
    Controls (compact legend on-screen; full list here):
      arrows / hjkl / yubn / numpad  move the active light (8-way)
-     p  cycle demo (off/liss/bounce)     ,/.  demo slower/faster
+     p  cycle demo (off/liss/bounce/mapshift)   ,/.  demo slower/faster
      +/- radius   c/C color   d  depth (8/6/5/4-bit posterize)   e  cycle render A/B (delta/sgr-off/naive)
      o  occlusion (FOV)   t  terrain lights   m  hide/show the light marker (@/o)
      Tab/]/[  select light   a add   x delete   N  new dungeon   q / Esc  quit
@@ -94,8 +94,10 @@
      :render-mode :delta
      :sync? true          ; wrap each frame in synchronized-output (DEC 2026) — anti-tearing probe
      ;; :demo-mode drives the screensaver: :none (hand-steer only) | :liss (Lissajous) |
-     ;; :bounce (edge bounce). `p` cycles through the three.
+     ;; :bounce (edge bounce) | :mapshift (scroll the whole map under a fixed light).
+     ;; `p` cycles through them.
      :demo-mode :none
+     :shift [0 0]         ; :mapshift terrain scroll offset (toroidal); [0 0] elsewhere
      :vel [1 1]           ; bounce velocity for the active light
      :frame 0             ; animation frame counter (drives the path)
      :frame-ms 40         ; demo pacing (~25 fps); , / . adjust
@@ -179,7 +181,7 @@
 (defn- cycle-depth [st]
   (assoc st :cdepth (get {8 6, 6 5, 5 4, 4 8} (:cdepth st) 8)))
 
-(def demo-next   {:none :liss,  :liss :bounce,  :bounce :none})
+(def demo-next   {:none :liss,  :liss :bounce,  :bounce :mapshift,  :mapshift :none})
 (def render-next {:delta :sgr-off, :sgr-off :naive, :naive :delta})
 
 (defn- select-light [st d]
@@ -207,7 +209,8 @@
 (defn- update-state [st k]
   (cond
     (contains? dir-keys k)    (let [[dx dy] (get dir-keys k)] (move-active st dx dy))
-    (= k "p")                 (update st :demo-mode demo-next)
+    (= k "p")                 (let [st (update st :demo-mode demo-next)]
+                                (if (= (:demo-mode st) :mapshift) st (assoc st :shift [0 0])))
     (= k ",")                 (update st :frame-ms (fn [m] (min 200 (+ m 10))))
     (= k ".")                 (update st :frame-ms (fn [m] (max 10 (- m 10))))
     (or (= k "+") (= k "="))  (bump-radius st 1)
@@ -234,7 +237,14 @@
 (defn- demo-step [st]
   (let [t (inc (:frame st)) i (:active st) l (nth (:lights st) i)
         w (:w st) h (:h st)]
-    (if (= (:demo-mode st) :bounce)
+    (cond
+      ;; mapshift: scroll the terrain sampling offset one cell/frame diagonally
+      ;; (toroidal wrap). Every cell's glyph changes every frame under a fixed
+      ;; light — coherent full-screen motion, the strongest tearing stressor.
+      (= (:demo-mode st) :mapshift)
+      (let [[sx sy] (:shift st)]
+        (assoc st :frame t :shift [(mod (inc sx) w) (mod (inc sy) h)]))
+      (= (:demo-mode st) :bounce)
       ;; DVD-logo bounce: integrate velocity, flip at the interior walls
       (let [[vx vy] (:vel st)
             rx (+ (:lx l) vx) ry (+ (:ly l) vy)
@@ -244,6 +254,7 @@
             (assoc-in [:lights i :lx] nx)
             (assoc-in [:lights i :ly] ny)))
       ;; Lissajous: smooth looping curve, x/y on incommensurate frequencies
+      :else
       (let [cx (quot w 2) cy (quot h 2) ax (- cx 2) ay (- cy 2)
             x (clamp (+ cx (int (* ax (math/sin (* t 0.060))))) 0 (dec w))
             y (clamp (+ cy (int (* ay (math/sin (+ (* t 0.100) 1.2))))) 0 (dec h))]
@@ -274,8 +285,11 @@
       (let [l (nth (:lights st) li)
             [cr cg cb] (:color l)]
         [(if (= li (:active st)) "@" "o") (pq cr step) (pq cg step) (pq cb step) 0 0 0])
-      (let [grid (:grid st) w (:w st)
-            tile (terrain/tget grid w x y)
+      (let [grid (:grid st) w (:w st) h (:h st)
+            ;; :mapshift scrolls the terrain under a fixed light — sample the tile
+            ;; at the shifted+wrapped coord, but keep lighting/FOV at screen coords.
+            [sx sy] (:shift st)
+            tile (terrain/tget grid w (mod (+ x sx) w) (mod (+ y sy) h))
             ch (get terrain/tile-chars tile " ")
             style (get terrain/tile-styles tile)
             lit? (or (not (:occlude? st)) (contains? vis [x y]))
@@ -318,7 +332,8 @@
    "  y u b n             diagonals   (numpad 1-9 also work)"
    ""
    "Demo / animation:"
-   "  p                   cycle demo: off -> Lissajous -> edge-bounce"
+   "  p                   cycle demo: off -> Lissajous -> edge-bounce -> mapshift"
+   "                      (mapshift scrolls the whole map — the tearing stressor)"
    "  , / .               demo slower / faster"
    ""
    "Light:"
