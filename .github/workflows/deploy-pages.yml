@@ -89,3 +89,9 @@ jobs:
           # keep_files so a root deploy doesn't wipe live /pr-N/ previews
           # (or pinned /vX.Y.Z/ version dirs).
           keep_files: true
+          # Recreate the root CNAME if it's ever missing — e.g. keep_files
+          # gets flipped off (which git-rm's the branch) or gh-pages is
+          # re-derived. peaceiris skips this when a CNAME is already present,
+          # so it won't stomp a domain set via the Pages UI; it's a
+          # restore-if-dropped safety net, not a per-deploy overwrite.
+          cname: xsofy.quest
