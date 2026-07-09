@@ -1,0 +1,232 @@
+(ns xsofy.test.fall-test
+  "Tests for xsofy.gl.fall — playfield fall transition parametrization."
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.gl.fall :as f]))
+
+;; ==========================================================
+;; Float Comparison Helper
+;; ==========================================================
+
+(defn approx=
+  "Approximate equality for floats (epsilon = 1e-4)."
+  [a b]
+  (let [eps 1e-4]
+    (if (and (number? a) (number? b))
+      (< (math/abs (- a b)) eps)
+      (= a b))))
+
+(defn approx-vec=
+  "Approximate equality for vectors of floats."
+  [v1 v2]
+  (and (= (count v1) (count v2))
+       (loop [v1s v1 v2s v2]
+         (if (empty? v1s)
+           true
+           (and (approx= (first v1s) (first v2s))
+                (recur (rest v1s) (rest v2s)))))))
+
+;; ==========================================================
+;; Easing Function
+;; ==========================================================
+
+(deftest ease-at-zero
+  (testing "ease(0) = 0"
+    (is (approx= 0 (f/ease 0)))))
+
+(deftest ease-at-one
+  (testing "ease(1) = 1"
+    (is (approx= 1 (f/ease 1)))))
+
+(deftest ease-at-half
+  (testing "ease(0.5) = 0.5 (smoothstep passes through midpoint)"
+    (is (approx= 0.5 (f/ease 0.5)))))
+
+(deftest ease-monotonic
+  (testing "ease is monotonically increasing"
+    (let [samples [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1]
+          eased (vec (map f/ease samples))]
+      (doseq [i (range (- (count eased) 1))]
+        (is (<= (nth eased i) (nth eased (+ i 1))))))))
+
+(deftest ease-clamps-out-of-range
+  (testing "ease clamps values outside [0,1]"
+    (is (approx= 0 (f/ease -1)))
+    (is (approx= 1 (f/ease 2)))))
+
+;; ==========================================================
+;; Morph at t=0 (Top-Down)
+;; ==========================================================
+
+(deftest morph-t0-no-tilt
+  (testing "At t=0, plane tilt is 0"
+    (let [result (f/morph {:t 0 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (approx= 0 (:plane-tilt-rad result))))))
+
+(deftest morph-t0-no-wall-height
+  (testing "At t=0, walls are flat (height 0)"
+    (let [result (f/morph {:t 0 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (approx= 0 (:wall-height result))))))
+
+(deftest morph-t0-overhead-camera
+  (testing "At t=0, camera is overhead (high Y)"
+    (let [result (f/morph {:t 0 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          eye (get-in result [:camera :eye])]
+      (is (> (nth eye 1) 2)))))
+
+(deftest morph-t0-projection-ortho
+  (testing "At t=0, projection blend is 0 (ortho)"
+    (let [result (f/morph {:t 0 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (approx= 0 (:projection-blend result))))))
+
+;; ==========================================================
+;; Morph at t=1 (First-Person)
+;; ==========================================================
+
+(deftest morph-t1-max-tilt
+  (testing "At t=1, plane tilt is π/2"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (approx= (/ 3.14159265359 2) (:plane-tilt-rad result))))))
+
+(deftest morph-t1-full-wall-height
+  (testing "At t=1, walls are fully extruded (height 1)"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (approx= 1 (:wall-height result))))))
+
+(deftest morph-t1-camera-at-eye-level
+  (testing "At t=1, camera Y is at eye level (~0.5)"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          eye (get-in result [:camera :eye])]
+      (is (approx= 0.5 (nth eye 1))))))
+
+(deftest morph-t1-projection-perspective
+  (testing "At t=1, projection blend is 1 (perspective)"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (approx= 1 (:projection-blend result))))))
+
+(deftest morph-t1-camera-faces-heading-north
+  (testing "At t=1 heading :north, camera is behind (negative Z) facing target"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          eye (get-in result [:camera :eye])
+          target (get-in result [:camera :target])]
+      ;; Camera should be behind player (greater Z)
+      (is (> (nth eye 2) (nth target 2))))))
+
+(deftest morph-t1-camera-faces-heading-south
+  (testing "At t=1 heading :south, camera is behind (positive Z) facing target"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :south})
+          eye (get-in result [:camera :eye])
+          target (get-in result [:camera :target])]
+      ;; Camera should be behind player (smaller Z)
+      (is (< (nth eye 2) (nth target 2))))))
+
+(deftest morph-t1-camera-faces-heading-east
+  (testing "At t=1 heading :east, camera is to the west (negative X) facing target"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :east})
+          eye (get-in result [:camera :eye])
+          target (get-in result [:camera :target])]
+      ;; Camera should be to the west (smaller X)
+      (is (< (nth eye 0) (nth target 0))))))
+
+(deftest morph-t1-camera-faces-heading-west
+  (testing "At t=1 heading :west, camera is to the east (positive X) facing target"
+    (let [result (f/morph {:t 1 :grid-w 10 :grid-h 10 :player [5 5] :heading :west})
+          eye (get-in result [:camera :eye])
+          target (get-in result [:camera :target])]
+      ;; Camera should be to the east (greater X)
+      (is (> (nth eye 0) (nth target 0))))))
+
+;; ==========================================================
+;; Morph Monotonicity
+;; ==========================================================
+
+(deftest morph-tilt-monotonic
+  (testing "Plane tilt increases monotonically with t"
+    (let [ts [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1]
+          tilts (vec
+                  (map (fn [t]
+                         (:plane-tilt-rad
+                           (f/morph {:t t :grid-w 10 :grid-h 10 :player [5 5] :heading :north})))
+                       ts))]
+      (doseq [i (range (- (count tilts) 1))]
+        (is (<= (nth tilts i) (nth tilts (+ i 1))))))))
+
+(deftest morph-wall-height-monotonic
+  (testing "Wall height increases monotonically with t"
+    (let [ts [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1]
+          heights (vec
+                    (map (fn [t]
+                           (:wall-height
+                             (f/morph {:t t :grid-w 10 :grid-h 10 :player [5 5] :heading :north})))
+                         ts))]
+      (doseq [i (range (- (count heights) 1))]
+        (is (<= (nth heights i) (nth heights (+ i 1))))))))
+
+(deftest morph-projection-blend-monotonic
+  (testing "Projection blend increases monotonically with t"
+    (let [ts [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1]
+          blends (vec
+                   (map (fn [t]
+                          (:projection-blend
+                            (f/morph {:t t :grid-w 10 :grid-h 10 :player [5 5] :heading :north})))
+                        ts))]
+      (doseq [i (range (- (count blends) 1))]
+        (is (<= (nth blends i) (nth blends (+ i 1))))))))
+
+;; ==========================================================
+;; Morph Camera Structure
+;; ==========================================================
+
+(deftest morph-camera-has-required-keys
+  (testing "Camera map has :eye, :target, :up"
+    (let [result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          camera (:camera result)]
+      (is (contains? camera :eye))
+      (is (contains? camera :target))
+      (is (contains? camera :up)))))
+
+(deftest morph-camera-eye-is-vec3
+  (testing "Camera eye is a 3-element vector"
+    (let [result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          eye (get-in result [:camera :eye])]
+      (is (= 3 (count eye))))))
+
+(deftest morph-camera-target-is-vec3
+  (testing "Camera target is a 3-element vector"
+    (let [result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          target (get-in result [:camera :target])]
+      (is (= 3 (count target))))))
+
+(deftest morph-camera-up-is-vec3
+  (testing "Camera up vector is a 3-element vector"
+    (let [result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})
+          up (get-in result [:camera :up])]
+      (is (= 3 (count up))))))
+
+(deftest morph-target-follows-player
+  (testing "Camera target stays at the player's cell center in world units
+            (col 3 -> x 3*0.5+0.25, row 7 -> z 7*1.0+0.5)"
+    (let [player [3 7]
+          result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player player :heading :north})
+          target (get-in result [:camera :target])]
+      (is (approx= 1.75 (nth target 0)))
+      (is (approx= 7.5 (nth target 2))))))
+
+;; ==========================================================
+;; Morph Return Structure
+;; ==========================================================
+
+(deftest morph-returns-map-with-required-keys
+  (testing "Morph result has all required keys"
+    (let [result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (contains? result :plane-tilt-rad))
+      (is (contains? result :wall-height))
+      (is (contains? result :camera))
+      (is (contains? result :projection-blend)))))
+
+(deftest morph-values-are-numbers
+  (testing "Morph result numeric values are valid floats"
+    (let [result (f/morph {:t 0.5 :grid-w 10 :grid-h 10 :player [5 5] :heading :north})]
+      (is (number? (:plane-tilt-rad result)))
+      (is (number? (:wall-height result)))
+      (is (number? (:projection-blend result))))))

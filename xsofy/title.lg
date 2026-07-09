@@ -1,8 +1,10 @@
 (ns xsofy.title
-  (:require [term]
-            [xsofy.screenfx :as sfx]
-            [xsofy.ui :as ui]
-            [xsofy.det :as det]))
+  (:require
+   [os]
+   [term]
+   [xsofy.det :as det]
+   [xsofy.screenfx :as sfx]
+   [xsofy.ui :as ui]))
 
 ;; --- Procedural Title Generation ---
 
@@ -218,50 +220,54 @@
 (defn show-descending-screen
   "Display a brief animated descending screen. Runes rise and fade."
   [depth scheme]
-  (when (term/size)            ;; no-op headless (balance harness / tests)
-   (let [[tw th] (term/size)
-         cx (quot tw 2)
-         cy (quot th 2)
-         msg (nth descending-messages (rand-int (count descending-messages)))
-         depth-str (str "Depth " depth)
-         runes (sfx/scatter-runes tw th 25 scheme)]
-    ;; clear
-    (sfx/clear-screen tw th)
-    ;; animate — runes drift upward, erase old position each frame
-    (dotimes [frame 15]
-      (doseq [r runes]
-        (let [;; current y drifts upward (subtract), wrap around
-              cur-y (rem (+ th (:y r) (- (quot frame 2))) th)
-              ;; previous y to erase
-              prev-y (rem (+ th (:y r) (- (quot (dec frame) 2))) th)
-              b (sfx/rune-brightness (:phase r) (* frame 3))
-              [cr cg cb] (:color r)]
-          ;; erase previous position (if it moved)
-          (when (not= cur-y prev-y)
-            (term/move-cursor (:x r) (inc prev-y))
-            (term/set-fg 10 10 10)
-            (term/set-bg 10 10 10)
-            (term/write " "))
-          ;; draw at new position — flicker and fade
-          (term/move-cursor (:x r) (inc cur-y))
-          (if (< b 0.05)
-            (do (term/set-fg 10 10 10) (term/set-bg 10 10 10) (term/write " "))
-            (do (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))
-                (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
-                (term/write (:glyph r))))))
-      ;; depth label
-      (let [dx (max 1 (- cx (quot (count depth-str) 2)))
-            fade (min 1.0 (/ (float frame) 8.0))]
-        (term/move-cursor dx (- cy 1))
-        (term/set-fg (int (* 180 fade)) (int (* 160 fade)) (int (* 100 fade)))
-        (term/set-bg 10 10 10)
-        (term/write depth-str))
-      ;; message
-      (let [mx (max 1 (- cx (quot (count msg) 2)))
-            mfade (min 1.0 (max 0.0 (/ (float (- frame 5)) 8.0)))]
-        (term/move-cursor mx (+ cy 1))
-        (term/set-fg (int (* 120 mfade)) (int (* 110 mfade)) (int (* 90 mfade)))
-        (term/set-bg 10 10 10)
-      (term/write msg))
-      (term/flush)
-      (sfx/pause! 60)))))
+  ;; No-op headless (balance harness / tests) AND under the GL frontend —
+  ;; main_gl sets XSOFY_GL_FRONTEND; drawing to the launching terminal there
+  ;; would spew escape codes and stall the GL window mid-descent.
+  ;; NB: os/getenv returns "" (not nil) for unset vars — test by count.
+  (when (and (term/size) (zero? (count (os/getenv "XSOFY_GL_FRONTEND"))))
+    (let [[tw th] (term/size)
+          cx (quot tw 2)
+          cy (quot th 2)
+          msg (nth descending-messages (rand-int (count descending-messages)))
+          depth-str (str "Depth " depth)
+          runes (sfx/scatter-runes tw th 25 scheme)]
+      ;; clear
+      (sfx/clear-screen tw th)
+      ;; animate — runes drift upward, erase old position each frame
+      (dotimes [frame 15]
+        (doseq [r runes]
+          (let [;; current y drifts upward (subtract), wrap around
+                cur-y (rem (+ th (:y r) (- (quot frame 2))) th)
+                ;; previous y to erase
+                prev-y (rem (+ th (:y r) (- (quot (dec frame) 2))) th)
+                b (sfx/rune-brightness (:phase r) (* frame 3))
+                [cr cg cb] (:color r)]
+            ;; erase previous position (if it moved)
+            (when (not= cur-y prev-y)
+              (term/move-cursor (:x r) (inc prev-y))
+              (term/set-fg 10 10 10)
+              (term/set-bg 10 10 10)
+              (term/write " "))
+            ;; draw at new position — flicker and fade
+            (term/move-cursor (:x r) (inc cur-y))
+            (if (< b 0.05)
+              (do (term/set-fg 10 10 10) (term/set-bg 10 10 10) (term/write " "))
+              (do (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))
+                  (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
+                  (term/write (:glyph r))))))
+        ;; depth label
+        (let [dx (max 1 (- cx (quot (count depth-str) 2)))
+              fade (min 1.0 (/ (float frame) 8.0))]
+          (term/move-cursor dx (- cy 1))
+          (term/set-fg (int (* 180 fade)) (int (* 160 fade)) (int (* 100 fade)))
+          (term/set-bg 10 10 10)
+          (term/write depth-str))
+        ;; message
+        (let [mx (max 1 (- cx (quot (count msg) 2)))
+              mfade (min 1.0 (max 0.0 (/ (float (- frame 5)) 8.0)))]
+          (term/move-cursor mx (+ cy 1))
+          (term/set-fg (int (* 120 mfade)) (int (* 110 mfade)) (int (* 90 mfade)))
+          (term/set-bg 10 10 10)
+          (term/write msg))
+        (term/flush)
+        (sfx/pause! 60)))))

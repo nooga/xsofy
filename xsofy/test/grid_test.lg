@@ -1,0 +1,262 @@
+(ns xsofy.test.grid-test
+  "Tests for xsofy.gl.grid — glyph-grid to vertex-batch adapter."
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.gl.grid :as grid]))
+
+;; ==========================================================
+;; Float Comparison Helper
+;; ==========================================================
+
+(defn approx=
+  "Approximate equality for floats (epsilon = 1e-5)."
+  [a b]
+  (let [eps 1e-5]
+    (if (and (number? a) (number? b))
+      (< (math/abs (- a b)) eps)
+      (= a b))))
+
+(defn approx-vec=
+  "Approximate equality for vectors of floats."
+  [v1 v2]
+  (and (= (count v1) (count v2))
+       (loop [v1s v1 v2s v2]
+         (if (empty? v1s)
+           true
+           (and (approx= (first v1s) (first v2s))
+                (recur (rest v1s) (rest v2s)))))))
+
+;; ==========================================================
+;; Test Data
+;; ==========================================================
+
+(def test-atlas
+  {"x" [0.0 0.0 0.5 1.0]
+   "." [0.5 0.0 1.0 1.0]
+   "?" [0.75 0.0 1.0 1.0]})
+
+(def default-opts {:cell-w 0.5 :cell-h 1.0 :fallback "?"})
+
+;; ==========================================================
+;; cell-quad Tests
+;; ==========================================================
+
+(deftest cell-quad-basic
+  (testing "cell-quad generates 54 floats for a single glyph"
+    (let [cell {:col 0 :row 0 :glyph "x" :fg [255 128 64 255]}
+          quad (grid/cell-quad cell test-atlas default-opts)]
+      (is (= (count quad) 54)))))
+
+(deftest cell-quad-vertex-0-position
+  (testing "cell-quad vertex 0 has correct position for (0,0)"
+    (let [cell {:col 0 :row 0 :glyph "x" :fg [255 128 64]}
+          quad (grid/cell-quad cell test-atlas default-opts)
+          ;; Vertex 0: floats 0-8 [x y z u v r g b a]
+          x0 (nth quad 0)
+          y0 (nth quad 1)
+          z0 (nth quad 2)]
+      (is (approx= x0 0.0))
+      (is (approx= y0 0.0))
+      (is (approx= z0 0.0)))))
+
+(deftest cell-quad-vertex-0-uv-color
+  (testing "cell-quad vertex 0 has correct UV and color"
+    (let [cell {:col 0 :row 0 :glyph "x" :fg [255 128 64]}
+          quad (grid/cell-quad cell test-atlas default-opts)
+          u0 (nth quad 3)
+          v0 (nth quad 4)
+          r0 (nth quad 5)
+          g0 (nth quad 6)
+          b0 (nth quad 7)
+          a0 (nth quad 8)]
+      ;; UV for "x" is [0.0 0.0 0.5 1.0]; v0 (near-left, cell top edge)
+      ;; carries the glyph's top texel row: uv (u0, v0) = (0.0, 0.0)
+      (is (approx= u0 0.0))
+      (is (approx= v0 0.0))
+      ;; Color [255 128 64] → [1.0 0.502 0.251]
+      (is (approx= r0 1.0))
+      (is (approx= g0 (/ 128.0 255.0)))
+      (is (approx= b0 (/ 64.0 255.0)))
+      (is (approx= a0 1.0)))))
+
+(deftest cell-quad-vertex-3-position
+  (testing "cell-quad vertex at offset 27 (second v1) has correct position"
+    (let [cell {:col 1 :row 2 :glyph "." :fg [100 100 100]}
+          quad (grid/cell-quad cell test-atlas default-opts)
+          ;; Vertices in order: v0 v1 v3 v1 v2 v3
+          ;; Vertex at index 27-29 is v1 (bottom-right)
+          x3 (nth quad 27)
+          y3 (nth quad 28)
+          z3 (nth quad 29)]
+      ;; v1 is near-right on the floor plane: x=(col+1)*cell-w=1.0,
+      ;; y=0.0 (floor), z=row*cell-h=2.0
+      (is (approx= x3 1.0))
+      (is (approx= y3 0.0))
+      (is (approx= z3 2.0)))))
+
+(deftest cell-quad-fallback-glyph
+  (testing "cell-quad falls back to default glyph if missing"
+    (let [cell {:col 0 :row 0 :glyph "missing" :fg [255 255 255]}
+          quad (grid/cell-quad cell test-atlas default-opts)]
+      ;; Should fall back to "?" which is in atlas
+      (is (= (count quad) 54)))))
+
+(deftest cell-quad-no-glyph-in-atlas
+  (testing "cell-quad returns empty if glyph and fallback both missing"
+    (let [cell {:col 0 :row 0 :glyph "missing" :fg [255 255 255]}
+          opts (assoc default-opts :fallback "missing")
+          quad (grid/cell-quad cell test-atlas opts)]
+      (is (= (count quad) 0)))))
+
+;; ==========================================================
+;; cell-bg-quad Tests
+;; ==========================================================
+
+(deftest cell-bg-quad-basic
+  (testing "cell-bg-quad generates 54 floats for a background"
+    (let [cell {:col 0 :row 0 :bg [50 50 50 255]}
+          quad (grid/cell-bg-quad cell default-opts)]
+      (is (= (count quad) 54)))))
+
+(deftest cell-bg-quad-no-alpha
+  (testing "cell-bg-quad returns empty if alpha = 0"
+    (let [cell {:col 0 :row 0 :bg [50 50 50 0]}
+          quad (grid/cell-bg-quad cell default-opts)]
+      (is (= (count quad) 0)))))
+
+(deftest cell-bg-quad-uv-zero
+  (testing "cell-bg-quad has UV [0 0] (untextured)"
+    (let [cell {:col 1 :row 1 :bg [100 100 100 255]}
+          quad (grid/cell-bg-quad cell default-opts)
+          u0 (nth quad 3)
+          v0 (nth quad 4)
+          u3 (nth quad 30)  ;; vertex 3
+          v3 (nth quad 31)]
+      (is (approx= u0 0.0))
+      (is (approx= v0 0.0))
+      (is (approx= u3 0.0))
+      (is (approx= v3 0.0)))))
+
+(deftest cell-bg-quad-no-bg
+  (testing "cell-bg-quad returns empty if bg is nil"
+    (let [cell {:col 0 :row 0}
+          quad (grid/cell-bg-quad cell default-opts)]
+      (is (= (count quad) 0)))))
+
+;; ==========================================================
+;; grid-verts Tests
+;; ==========================================================
+
+(deftest grid-verts-2x2
+  (testing "grid-verts batches cells correctly for 2x2 grid"
+    (let [cells [{:col 0 :row 0 :glyph "x" :fg [255 255 255] :bg [50 50 50 255]}
+                 {:col 1 :row 0 :glyph "." :fg [255 255 255] :bg [50 50 50 255]}
+                 {:col 0 :row 1 :glyph "x" :fg [255 255 255] :bg [50 50 50 255]}
+                 {:col 1 :row 1 :glyph "." :fg [255 255 255] :bg [50 50 50 255]}]
+          result (grid/grid-verts cells test-atlas default-opts)]
+      ;; 4 cells × 2 (bg + glyph) × 54 floats = 432
+      (is (= (count (:bg result)) 216))  ;; 4 bg quads
+      (is (= (count (:glyphs result)) 216))  ;; 4 glyph quads
+      (is (map? result)))))
+
+(deftest grid-verts-no-bg-alpha
+  (testing "grid-verts skips bg quads with zero alpha"
+    (let [cells [{:col 0 :row 0 :glyph "x" :fg [255 255 255] :bg [50 50 50 0]}]
+          result (grid/grid-verts cells test-atlas default-opts)]
+      ;; Only glyph quad, no bg
+      (is (= (count (:bg result)) 0))
+      (is (= (count (:glyphs result)) 54)))))
+
+(deftest grid-verts-empty-cells
+  (testing "grid-verts handles empty cell list"
+    (let [result (grid/grid-verts [] test-atlas default-opts)]
+      (is (= (count (:bg result)) 0))
+      (is (= (count (:glyphs result)) 0)))))
+
+;; ==========================================================
+;; wall-extrude-verts Tests
+;; ==========================================================
+
+(deftest wall-extrude-basic-float-count
+  (testing "wall-extrude-verts generates 216 floats (4 quads)"
+    (let [cell {:col 0 :row 0 :glyph "x"}
+          verts (grid/wall-extrude-verts cell 1.0 test-atlas default-opts)]
+      (is (= (count verts) 216)))))
+
+(deftest wall-extrude-no-glyph
+  (testing "wall-extrude-verts returns empty if glyph not in atlas"
+    (let [cell {:col 0 :row 0 :glyph "missing"}
+          opts (assoc default-opts :fallback "missing")
+          verts (grid/wall-extrude-verts cell 1.0 test-atlas opts)]
+      (is (= (count verts) 0)))))
+
+(deftest wall-extrude-height-bounds
+  (testing "wall-extrude-verts y-coordinates (height) are in [0, wall-h] and reach both"
+    (let [cell {:col 0 :row 0 :glyph "x"}
+          wall-h 2.5
+          verts (grid/wall-extrude-verts cell wall-h test-atlas default-opts)
+          ;; Extract all y-coords (every 9th float starting at index 1)
+          y-coords (loop [i 1 ys []]
+                     (if (>= i (count verts))
+                       ys
+                       (recur (+ i 9) (conj ys (nth verts i)))))]
+      (is (every? #(and (>= % 0.0) (<= % wall-h)) y-coords))
+      (is (some #(approx= % 0.0) y-coords))
+      (is (some #(approx= % wall-h) y-coords)))))
+
+(deftest wall-extrude-color-opaque
+  (testing "wall-extrude-verts defaults to opaque white on the south face"
+    (let [cell {:col 0 :row 0 :glyph "x"}
+          verts (grid/wall-extrude-verts cell 1.0 test-atlas default-opts)
+          ;; Extract color from first vertex (indices 5-8) — south face, shade 1.0
+          r0 (nth verts 5)
+          g0 (nth verts 6)
+          b0 (nth verts 7)
+          a0 (nth verts 8)]
+      (is (approx= r0 1.0))
+      (is (approx= g0 1.0))
+      (is (approx= b0 1.0))
+      (is (approx= a0 1.0)))))
+
+(deftest wall-extrude-tinted-and-face-shaded
+  (testing "walls tint from :fg (0-255) with axis shading:
+            south 1.0, north 0.8, x-faces 0.65 (face order f1 f2 f3 f4,
+            54 floats per face)"
+    (let [cell {:col 0 :row 0 :glyph "x" :fg [200 100 50]}
+          verts (grid/wall-extrude-verts cell 1.0 test-atlas default-opts)
+          face-color (fn [face-idx]
+                       (let [base (+ (* face-idx 54) 5)]
+                         [(nth verts base) (nth verts (+ base 1)) (nth verts (+ base 2))]))
+          [rs gs bs] (face-color 0)
+          [rn gn bn] (face-color 1)
+          [rw gw bw] (face-color 2)
+          [re ge be] (face-color 3)]
+      (is (approx= rs (/ 200.0 255.0)))
+      (is (approx= gs (/ 100.0 255.0)))
+      (is (approx= bs (/ 50.0 255.0)))
+      (is (approx= rn (* 0.8 (/ 200.0 255.0))))
+      (is (approx= rw (* 0.65 (/ 200.0 255.0))))
+      (is (approx= re rw))
+      (is (approx= ge gw))
+      (is (approx= be bw)))))
+
+(deftest wall-extrude-cell-footprint
+  (testing "wall-extrude-verts stays within cell footprint"
+    (let [cell {:col 2 :row 3 :glyph "x"}
+          cell-w 0.5
+          cell-h 1.0
+          opts (assoc default-opts :cell-w cell-w :cell-h cell-h)
+          verts (grid/wall-extrude-verts cell 1.0 test-atlas opts)
+          ;; Extract x and z coords
+          x-coords (loop [i 0 xs []]
+                     (if (>= i (count verts))
+                       xs
+                       (recur (+ i 9) (conj xs (nth verts i)))))
+          z-coords (loop [i 2 zs []]
+                     (if (>= i (count verts))
+                       zs
+                       (recur (+ i 9) (conj zs (nth verts i)))))]
+      ;; col=2 → x ∈ [1.0, 1.5]
+      (is (every? #(and (>= % 1.0) (<= % 1.5)) x-coords))
+      ;; row=3 → z ∈ [3.0, 4.0]
+      (is (every? #(and (>= % 3.0) (<= % 4.0)) z-coords)))))

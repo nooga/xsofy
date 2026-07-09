@@ -4,10 +4,11 @@
    and the run-loop driver. The headline property is determinism: cosmetic
    [:tick] events advance :ui only and must NEVER perturb :world or the
    (seed, :action-log) replay stream."
-  (:require [test :refer [deftest is testing]]
-            [xsofy.ui :as ui]
-            [xsofy.world :as world]
-            [xsofy.dispatch :as dispatch]))
+  (:require
+   [test :refer [deftest is testing]]
+   [xsofy.dispatch :as dispatch]
+   [xsofy.ui :as ui]
+   [xsofy.world :as world]))
 
 ;; --- input-source ---------------------------------------------------------
 ;; input-source drains all keys queued this tick (≤16), parsing each to an
@@ -83,6 +84,55 @@
     (is (= [[:action :x] [:tick 1]]
            ((ui/poll-source (fn [] [[:action :x] [:tick 1]]))))
         "seq passed through")))
+
+;; --- chan-source ----------------------------------------------------------
+;; Push-based producers (goroutines) feed a channel; the source drains it
+;; non-blockingly via async/poll!, preserving the never-block contract.
+
+(deftest chan-source-empty-channel-yields-no-events
+  (testing "an empty channel → [] (poll! never blocks)"
+    (let [ch (async/chan 4)
+          src (ui/chan-source ch)]
+      (is (= [] (src))))))
+
+(deftest chan-source-drains-pushed-events
+  (testing "events offered by a producer arrive in order"
+    (let [ch (async/chan 8)
+          src (ui/chan-source ch)]
+      (async/offer! ch [:action :up])
+      (async/offer! ch [:tick 1])
+      (is (= [[:action :up] [:tick 1]] (src)))
+      (is (= [] (src)) "drained"))))
+
+(deftest chan-source-splices-event-seqs
+  (testing "a pushed seq of events is spliced into the batch"
+    (let [ch (async/chan 8)
+          src (ui/chan-source ch)]
+      (async/offer! ch [[:action :x] [:tick 7]])
+      (async/offer! ch [:action :y])
+      (is (= [[:action :x] [:tick 7] [:action :y]] (src))))))
+
+(deftest chan-source-caps-at-16-per-tick
+  (testing "a producer flood is capped at 16/tick; the rest arrive next tick"
+    (let [ch (async/chan 32)
+          src (ui/chan-source ch)]
+      (dotimes [i 20]
+        (async/offer! ch [:tick i]))
+      (is (= 16 (count (src))))
+      (is (= 4 (count (src))) "remainder next tick")
+      (is (= [] (src))))))
+
+(deftest chan-source-real-producer-goroutine
+  (testing "a real (go …) producer feeds the source across the channel —
+            the push half of the adapter, not just offer! from this thread"
+    (let [ch (async/chan 8)
+          src (ui/chan-source ch)
+          done (async/chan 1)]
+      (go  ;; core macro (unqualified) — spawns the producer goroutine
+        (async/>! ch [:action :from-goroutine])
+        (async/>! done :ok))
+      (async/<!! done)  ;; producer parked/ran/finished
+      (is (= [[:action :from-goroutine]] (src))))))
 
 ;; --- apply-events / determinism (the core property) -----------------------
 ;; A step mirroring the real play-loop routing: [:action] drives :world via the

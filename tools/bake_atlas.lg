@@ -1,0 +1,87 @@
+(require (quote [clojure.string :as str]))
+(require (quote glplat))
+
+(defn next-power-of-2 [n]
+  (loop [p 1]
+    (if (>= p n) p (recur (* p 2)))))
+
+(defn bake-atlas []
+  ;; Read configuration
+  (let [config (read-string (slurp "assets/gl/fonts.edn"))
+        font-path (:font config)
+        cell-w (:cell-w config)
+        cell-h (:cell-h config)]
+
+    (println "Loading font from" font-path "with cells" cell-w "x" cell-h)
+
+    ;; Load font
+    (let [font-id (glplat/FontLoad font-path)]
+      (println "Font loaded, ID:" font-id)
+
+      ;; Read runes
+      (let [runes-str (slurp "assets/gl/runes.txt")
+            runes (vec (map str (seq runes-str)))]
+        (println "Loaded" (count runes) "runes")
+
+        ;; Determine grid layout
+        (let [grid-w 16
+              grid-h (loop [h 1]
+                       (if (>= (* grid-w h) (count runes)) h (recur (* h 2))))
+              tex-w (next-power-of-2 (* grid-w cell-w))
+              tex-h (next-power-of-2 (* grid-h cell-h))]
+
+          (println "Grid:" grid-w "x" grid-h "| Texture:" tex-w "x" tex-h)
+
+          ;; Rasterize all glyphs and composite atlas
+          (let [alphas (atom (vec (repeat (* tex-w tex-h) 0.0)))
+                metrics (atom {})]
+
+            ;; For each glyph
+            (doseq [[idx glyph] (map-indexed vector runes)]
+              (let [grid-x (mod idx grid-w)
+                    grid-y (quot idx grid-w)
+                    cell-x (* grid-x cell-w)
+                    cell-y (* grid-y cell-h)]
+
+                ;; Rasterize glyph. Fairfax HD is a bitmap-style face (native
+                ;; 12x24 grid); the rasterizer antialiases every edge anyway,
+                ;; which reads as faint hairline text on screen. Binarize
+                ;; alpha so strokes are solid, terminal-crisp pixels.
+                (let [glyph-alphas (vec (map #(if (>= % 96.0) 255.0 0.0)
+                                             (glplat/FontRasterizeCell font-id glyph cell-w cell-h)))]
+
+                  ;; Blit into atlas
+                  (doseq [[local-idx alpha] (map-indexed vector glyph-alphas)]
+                    (let [local-y (quot local-idx cell-w)
+                          local-x (mod local-idx cell-w)
+                          atlas-x (+ cell-x local-x)
+                          atlas-y (+ cell-y local-y)
+                          atlas-idx (+ (* atlas-y tex-w) atlas-x)]
+                      (when (< atlas-idx (count @alphas))
+                        (swap! alphas assoc atlas-idx alpha))))
+
+                  ;; Record UV coordinates
+                  (let [u0 (/ (float cell-x) tex-w)
+                        v0 (/ (float cell-y) tex-h)
+                        u1 (/ (float (+ cell-x cell-w)) tex-w)
+                        v1 (/ (float (+ cell-y cell-h)) tex-h)]
+                    (swap! metrics assoc glyph [u0 v0 u1 v1])))))
+
+            ;; Save PNG
+            (println "Saving atlas PNG...")
+            (glplat/SaveGlyphAtlasPNG "assets/gl/atlas.png" tex-w tex-h @alphas)
+
+            ;; Save EDN metrics
+            (println "Saving atlas EDN...")
+            (let [edn-str (str "{" (str/join " " (map #(str (pr-str %1) " " (pr-str %2)) (keys @metrics) (vals @metrics))) "}")]
+              (spit "assets/gl/atlas.edn" edn-str))
+
+            ;; Summary
+            (println "Successfully baked" (count @metrics) "glyphs")
+            (println "Atlas:" tex-w "x" tex-h)
+            (when (glplat/FontHasGlyph font-id "─")
+              (println "✓ Box drawing glyphs present"))
+            (when (glplat/FontHasGlyph font-id "ᚠ")
+              (println "✓ Runic glyphs present"))))))))
+
+(bake-atlas)

@@ -1,0 +1,224 @@
+(ns xsofy.gl.mat4
+  "4x4 matrix math for camera transforms. Matrices are flat 16-element
+   vectors in column-major order: [m00 m10 m20 m30 m01 m11 m21 m31 ...].
+   This matches WebGL/OpenGL convention: vec4 v; vec4 transformed = m * v.
+
+   All functions are pure — no mutation, no side effects.")
+
+;; ==========================================================
+;; Vec3 Helpers
+;; ==========================================================
+
+(defn v3-add
+  "Add two vec3s: [x1 y1 z1] + [x2 y2 z2]."
+  [[x1 y1 z1] [x2 y2 z2]]
+  [(+ x1 x2) (+ y1 y2) (+ z1 z2)])
+
+(defn v3-sub
+  "Subtract vec3: [x1 y1 z1] - [x2 y2 z2]."
+  [[x1 y1 z1] [x2 y2 z2]]
+  [(- x1 x2) (- y1 y2) (- z1 z2)])
+
+(defn v3-scale
+  "Scale vec3 by scalar: s * [x y z]."
+  [s [x y z]]
+  [(* s x) (* s y) (* s z)])
+
+(defn v3-dot
+  "Dot product of two vec3s."
+  [[x1 y1 z1] [x2 y2 z2]]
+  (+ (* x1 x2) (* y1 y2) (* z1 z2)))
+
+(defn v3-cross
+  "Cross product: [x1 y1 z1] × [x2 y2 z2]."
+  [[x1 y1 z1] [x2 y2 z2]]
+  [(- (* y1 z2) (* z1 y2))
+   (- (* z1 x2) (* x1 z2))
+   (- (* x1 y2) (* y1 x2))])
+
+(defn v3-length-sq
+  "Squared length of vec3 (avoid sqrt when possible)."
+  [[x y z]]
+  (+ (* x x) (* y y) (* z z)))
+
+(defn v3-length
+  "Length (magnitude) of vec3."
+  [v]
+  (math/sqrt (float (v3-length-sq v))))
+
+(defn v3-normalize
+  "Unit vector in the direction of v. Returns [0 0 1] if v is zero-length."
+  [v]
+  (let [len (v3-length v)]
+    (if (< len 1e-6)
+      [0 0 1]
+      (v3-scale (/ 1.0 len) v))))
+
+;; ==========================================================
+;; Vec4 Helpers
+;; ==========================================================
+
+(defn v4 [[x y z] w]
+  "Construct vec4 from vec3 and w component."
+  [x y z w])
+
+;; ==========================================================
+;; Matrix Construction and Access
+;; ==========================================================
+
+(defn identity-m
+  "4x4 identity matrix (column-major flat vector)."
+  []
+  [1 0 0 0
+   0 1 0 0
+   0 0 1 0
+   0 0 0 1])
+
+(defn- get-col [m col]
+  "Extract column col (0-3) as [m00 m10 m20 m30] etc."
+  [(get m (+ 0 (* col 4)))
+   (get m (+ 1 (* col 4)))
+   (get m (+ 2 (* col 4)))
+   (get m (+ 3 (* col 4)))])
+
+(defn- get-row [m row]
+  "Extract row row (0-3) as [m00 m01 m02 m03] etc."
+  [(get m (+ row 0))
+   (get m (+ row 4))
+   (get m (+ row 8))
+   (get m (+ row 12))])
+
+;; ==========================================================
+;; Matrix Multiplication
+;; ==========================================================
+
+(defn- mat-vec-dot [row vec4]
+  "Dot product of a matrix row (4 elements) with a vec4."
+  (+ (* (nth row 0) (nth vec4 0))
+     (* (nth row 1) (nth vec4 1))
+     (* (nth row 2) (nth vec4 2))
+     (* (nth row 3) (nth vec4 3))))
+
+(defn mul
+  "Multiply two 4x4 matrices: m1 * m2 (m2 is applied first, column-major).
+   Result is in column-major order as a 16-element flat vector."
+  [m1 m2]
+  (let [cols (mapv #(get-col m2 %) (range 4))
+        rows (mapv #(get-row m1 %) (range 4))]
+    (vec
+      (apply
+        concat
+        (mapv (fn [col-idx]
+                (mapv (fn [row-idx]
+                        (mat-vec-dot (nth rows row-idx) (nth cols col-idx)))
+                      (range 4)))
+              (range 4))))))
+
+(defn mul-v
+  "Multiply 4x4 matrix by vec4: m * v. Returns transformed vec4."
+  [m [x y z w]]
+  (let [v [x y z w]]
+    [(mat-vec-dot (get-row m 0) v)
+     (mat-vec-dot (get-row m 1) v)
+     (mat-vec-dot (get-row m 2) v)
+     (mat-vec-dot (get-row m 3) v)]))
+
+;; ==========================================================
+;; Affine Transformations
+;; ==========================================================
+
+(defn translate
+  "Translation matrix: move by [tx ty tz]."
+  [[tx ty tz]]
+  [1 0 0 0
+   0 1 0 0
+   0 0 1 0
+   tx ty tz 1])
+
+(defn scale
+  "Scale matrix: scale by [sx sy sz]."
+  [[sx sy sz]]
+  [sx 0 0 0
+   0 sy 0 0
+   0 0 sz 0
+   0 0 0 1])
+
+;; ==========================================================
+;; Rotation Matrices
+;; ==========================================================
+
+(defn rotate-x
+  "Rotation around X axis by angle (radians, right-hand rule)."
+  [angle]
+  (let [c (math/cos (float angle))
+        s (math/sin (float angle))]
+    [1 0 0 0
+     0 c s 0
+     0 (- s) c 0
+     0 0 0 1]))
+
+(defn rotate-y
+  "Rotation around Y axis by angle (radians, right-hand rule)."
+  [angle]
+  (let [c (math/cos (float angle))
+        s (math/sin (float angle))]
+    [c 0 (- s) 0
+     0 1 0 0
+     s 0 c 0
+     0 0 0 1]))
+
+(defn rotate-z
+  "Rotation around Z axis by angle (radians, right-hand rule)."
+  [angle]
+  (let [c (math/cos (float angle))
+        s (math/sin (float angle))]
+    [c s 0 0
+     (- s) c 0 0
+     0 0 1 0
+     0 0 0 1]))
+
+;; ==========================================================
+;; Projection Matrices
+;; ==========================================================
+
+(defn perspective
+  "Perspective projection: fovy (field of view Y in radians),
+   aspect (width/height), near and far clip planes."
+  [fovy aspect near far]
+  (let [f (/ 1.0 (math/tan (float (/ fovy 2.0))))
+        nf (/ 1.0 (- near far))
+        f-float (float f)]
+    [(/ f-float (float aspect)) 0 0 0
+     0 f-float 0 0
+     0 0 (* (+ near far) nf) -1
+     0 0 (* 2 near far nf) 0]))
+
+(defn ortho
+  "Orthographic projection: left, right, bottom, top, near, far."
+  [l r b t n f]
+  (let [rl (/ 1.0 (- r l))
+        tb (/ 1.0 (- t b))
+        nf (/ 1.0 (- n f))]
+    [(* 2.0 rl) 0 0 0
+     0 (* 2.0 tb) 0 0
+     0 0 (* 2.0 nf) 0
+     (- (* (+ r l) rl)) (- (* (+ t b) tb)) (* (+ f n) nf) 1]))
+
+;; ==========================================================
+;; Camera Matrices
+;; ==========================================================
+
+(defn look-at
+  "Look-at matrix: eye position, target position, up vector (vec3s).
+   Right-hand rule: z points from target toward eye."
+  [eye target up]
+  (let [f (v3-normalize (v3-sub target eye))
+        s (v3-normalize (v3-cross f up))
+        u (v3-cross s f)
+        tx (v3-dot s eye)
+        ty (v3-dot u eye)
+        tz (v3-dot f eye)]
+    [(nth s 0) (nth u 0) (- (nth f 0)) 0
+     (nth s 1) (nth u 1) (- (nth f 1)) 0
+     (nth s 2) (nth u 2) (- (nth f 2)) 0
+     (- tx) (- ty) tz 1]))
