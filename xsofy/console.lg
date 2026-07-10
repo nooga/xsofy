@@ -19,6 +19,10 @@
    Its reference implementation is preserved on the console/dev-repl-cut1 branch."
   (:require [term]
             [pprint]
+            [os]
+            [js]
+            [xsofy.replay :as replay]
+            [xsofy.perf :as perf]
             [xsofy.render :as render]
             [xsofy.ui :as ui]))
 
@@ -47,14 +51,26 @@
 
 (defn- help-text []
   (str "commands (read-only):\n"
+       "  (replay)    replay code for this run\n"
        "  (seed)      seed-input + current rolling seed\n"
        "  (player)    player hp / position / depth\n"
        "  (location)  position / depth / turn\n"
+       "  (bench)     quick engine micro-benchmark (per-turn ms)\n"
        "  (help)      this list\n"
        "Esc or ` to close."))
 
 (def ^:private commands
   {'help     (fn [_ _] (help-text))
+   ;; Show the code in the panel and, on web, also fire the host replay-dump
+   ;; event (the same one the death-dump emits — see main.lg). A shell that
+   ;; wires an onEmit sink can then surface it outside the xterm (console.log,
+   ;; or a copyable element below the game); until such a handler exists the
+   ;; emit is a harmless no-op. The in-panel text is the shell-independent path.
+   'replay   (fn [w _]
+               (let [code (replay/encode-run-safe w)]
+                 (when (and code (= (os/os-name) "js"))
+                   (js/emit "xsofy/replay-dump" {:code code}))
+                 (or code "(unavailable: run has parameterized actions)")))
    'seed     (fn [w _] {:seed-input (:seed-input w) :seed (:seed w)})
    'player   (fn [w _] (let [p (get-in w [:entities :player])]
                          {:hp     (get-in p [:body :hp])
@@ -62,7 +78,12 @@
                           :pos    (:pos p)
                           :depth  (:depth w)}))
    'location (fn [w _] (let [p (get-in w [:entities :player])]
-                         {:pos (:pos p) :depth (:depth w) :turn (:turn w)}))})
+                         {:pos (:pos p) :depth (:depth w) :turn (:turn w)}))
+   ;; Self-contained: run-fixture builds its own throwaway worlds from the seeds,
+   ;; so bench never touches the live run. Kept small (3 seeds x 20 turns) so it
+   ;; returns in well under a second — the full sweep lives in bench/native.lg.
+   'bench    (fn [_ _] (dissoc (perf/run-fixture [:wait (fn [_] ".") 20] [0 1 2] 1)
+                               :per-seed))})
 
 (defn run-command
   "Parse `line` with the reader and dispatch its head against the read-only
