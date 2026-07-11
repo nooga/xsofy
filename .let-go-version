@@ -1,8 +1,14 @@
 # let-go version for building xsofy — single source of truth.
 # deploy-pages.yml and the test.yml floor lane both resolve the version from here.
 #
-# v1.11.1 ships what the WASM web build needs:
-#   - `lg -w -w-shell none` client-owned shell (nooga/let-go#245)
-#   - the js/url-param host seam (nooga/let-go#339) that carries ?seed=/?replay=
-#     into the worker, so the URL bridge is native (no glue patch)
-v1.11.1
+# Pinned to a commit (not a v-tag) because the shell now binds the #app host
+# mount from nooga/let-go#378, which no release carries yet:
+#   - #378 renames the -w-shell none host mount #terminal -> #app and ships it
+#     visible; the shell (tools/xsofy-shell.html) binds #app.
+# Still includes #245 (client-owned shell) and #339 (js/url-param host seam)
+# from v1.11.1.
+#
+# NOTE: this is a SHA, not a release tag, so the build must check out + build
+# let-go at this commit — a stale prebuilt `lg` silently emits the old #terminal
+# frame. Re-pin to a release tag once let-go ships #378.
+cf195a67fd8aa43286319519c2512363caa96a52
