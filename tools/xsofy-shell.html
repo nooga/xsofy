@@ -34,11 +34,15 @@
 /* Portrait aspect cap. The minimal -w-shell none frame lets its terminal mount
    (#terminal on v1.11.1; renamed #app on newer let-go) fill the viewport; on a
    phone in portrait that stretches the grid full-height and crowds out the
-   on-screen keyboard. Cap the mount to 55vh so the grid stays legible and leaves
-   room below. min-height:0 lets the flex item shrink under a larger font on
+   on-screen keyboard. Cap the mount to 55dvh so the grid stays legible and
+   leaves room below. dvh (dynamic viewport height), not vh: vh is the LARGE
+   viewport (as if the URL bar were retracted), so on iOS at rest it over-counts
+   by the URL bar's height and the grid's bottom slips behind the bar; dvh tracks
+   the currently-visible area, so the cap self-corrects as the URL bar shows and
+   hides. min-height:0 lets the flex item shrink under a larger font on
    landscape/desktop, where no cap applies. */
 #terminal { min-height: 0; }
-@media (orientation: portrait) { body #terminal { flex: 0 0 auto; height: 55vh; } }
+@media (orientation: portrait) { body #terminal { flex: 0 0 auto; height: 55dvh; } }
 </style>
 <script>
 (function () {
