@@ -575,14 +575,14 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // pick a full drop menu). ESC + NAV sit in consistent spots across both panes.
   const PANES = [
     { label: 'MOVE', cols: 6, tiles: [
-      // 5 rows (constant with the a-z pane). Actions across the top two rows; the
-      // D-pad sits bottom-right (rows 3-5, cols 4-6) in the thumb zone with y/n/·
-      // beside its top row. Bottom-left stays empty (lowest-value corner).
-      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'g', glyph: 'g', label: 'GET' },  { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'm', glyph: 'm', label: 'MSG' },  { key: 'r', glyph: 'r', label: 'RUNES' }, { key: '<', glyph: '<', label: 'ASCN' },
-      { key: '>', glyph: '>', label: 'DESC' },   { key: 'a', glyph: 'a', label: 'USE' },  { key: 'i', glyph: 'i', label: 'INV' },   { key: 'd', glyph: 'd', label: 'DROP' }, { key: 'e', glyph: 'e', label: 'EQUIP' }, NAV,
-      { key: 'y', glyph: 'y', label: 'YES' },    { key: 'n', glyph: 'n', label: 'NO' },   { key: '.', glyph: '·', label: 'WAIT', repeat: true }, mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      null, null, null,                          mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      // 5 rows (constant with the a-z pane). D-pad centered on the right (rows
+      // 2-4, cols 4-6) with y/n/wait below it (row 5); actions on the left and
+      // above the pad. Bottom-left 2x3 stays empty (lowest-value corner).
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'g', glyph: 'g', label: 'GET' },   { key: '>', glyph: '>', label: 'DESC' }, { key: 'm', glyph: 'm', label: 'MSG' },  { key: 'r', glyph: 'r', label: 'RUNES' }, NAV,
+      { key: 'f', glyph: 'f', label: 'FIRE' },   { key: 'a', glyph: 'a', label: 'USE' },   { key: 'i', glyph: 'i', label: 'INV' },  mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      { key: 'd', glyph: 'd', label: 'DROP' },   { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: '<', glyph: '<', label: 'ASCN' }, mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
       null, null, null,                          mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+      null, null, null,                          { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
     ]},
     { label: 'a–z', cols: 6, tiles: [
       ...'abcdefghijklmnopqrstuvwxyz'.split('').map((c) => ({ key: c, glyph: c })),
