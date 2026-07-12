@@ -232,7 +232,14 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
 #xsofy-shell button.nav .glyph { font-size: 13px; letter-spacing: 0.15em; color: var(--bar-fg); }
 #xsofy-shell button.nav .label { color: var(--bar-accent); }
 /* Empty slot in a pane — holds grid alignment without a tappable target. */
-#xsofy-shell .touch .filler { visibility: hidden; }
+/* Empty grid slots: a disabled button-shaped ghost (fills the cell like a real
+   tile, but muted and non-tappable) so the grid structure reads clearly. */
+#xsofy-shell button.filler {
+  background: rgba(245, 176, 65, 0.012);
+  border-color: rgba(245, 176, 65, 0.06);
+  cursor: default;
+  pointer-events: none;
+}
 /* Font-size cycle lives in the info row: compact, intrinsic height so the row
    stays one line. */
 /* Info-bar chips (font size, repeat, force-touch, options tile). Lay glyph +
@@ -576,13 +583,13 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const PANES = [
     { label: 'MOVE', cols: 6, tiles: [
       // 5 rows (constant with the a-z pane). D-pad centered on the right (rows
-      // 2-4, cols 4-6) with y/n/wait below it (row 5); actions on the left and
-      // above the pad. Bottom-left 2x3 stays empty (lowest-value corner).
-      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'g', glyph: 'g', label: 'GET' },   { key: '>', glyph: '>', label: 'DESC' }, { key: 'm', glyph: 'm', label: 'MSG' },  { key: 'r', glyph: 'r', label: 'RUNES' }, NAV,
-      { key: 'f', glyph: 'f', label: 'FIRE' },   { key: 'a', glyph: 'a', label: 'USE' },   { key: 'i', glyph: 'i', label: 'INV' },  mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      { key: 'd', glyph: 'd', label: 'DROP' },   { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: '<', glyph: '<', label: 'ASCN' }, mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
-      null, null, null,                          mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-      null, null, null,                          { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+      // 2-4, cols 4-6) with y/n/wait below it (row 5). Left three cols step down
+      // toward col 3 (nearest the pad); the freed cells are muted placeholders.
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: '<', glyph: '<', label: 'ASC' },   { key: '>', glyph: '>', label: 'DESC' }, { key: 'm', glyph: 'm', label: 'MSG' },  { key: 'r', glyph: 'r', label: 'RUNES' }, NAV,
+      null,                                      { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'e', glyph: 'e', label: 'EQUIP' }, mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      null,                                      null,                                     { key: 'i', glyph: 'i', label: 'INV' },  mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      null,                                      null,                                     { key: 'd', glyph: 'd', label: 'DROP' }, mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+      null,                                      null,                                     { key: 'a', glyph: 'a', label: 'USE' },  { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
     ]},
     { label: 'a–z', cols: 6, tiles: [
       ...'abcdefghijklmnopqrstuvwxyz'.split('').map((c) => ({ key: c, glyph: c })),
@@ -592,7 +599,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   let currentPane = 0;
 
   function tileFor(spec) {
-    if (spec === null) { const f = document.createElement('div'); f.className = 'filler'; return f; }
+    if (spec === null) { const f = document.createElement('button'); f.className = 'filler'; f.disabled = true; return f; }
     const btn = document.createElement('button');
     btn.dataset.key = spec.key;
     // Per-instance (not per-key): the same key repeats on one pane and not
