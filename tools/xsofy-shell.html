@@ -214,6 +214,17 @@ body.force-touch #xsofy-shell .touch { display: grid; }
 }
 #xsofy-shell button:active,
 #xsofy-shell button.pressed { background: rgba(245, 176, 65, 0.22); border-color: var(--bar-accent); }
+
+/* D-pad color-treatment variants (?dpad=). The movement tiles carry .dpad; these
+   distinguish the pad from the amber action cluster for at-a-glance ID.
+   - fill (default): same amber hue, more filled — the 3x3 reads as one solid pad.
+   - cool: a subtle slate hue shift — movement as its own navigational zone.
+   - off: no treatment (baseline). */
+body.dpad-fill #xsofy-shell button.dpad { background: rgba(245, 176, 65, 0.13); border-color: rgba(245, 176, 65, 0.30); }
+body.dpad-cool #xsofy-shell button.dpad { background: rgba(126, 166, 208, 0.09); border-color: rgba(126, 166, 208, 0.28); }
+body.dpad-cool #xsofy-shell button.dpad .glyph { color: #a8c6e0; }
+body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55); }
+
 #xsofy-shell button .glyph { font-size: 16px; color: var(--bar-accent); }
 #xsofy-shell button .label { font-size: 10px; color: var(--bar-dim); letter-spacing: 0.05em; margin-top: 2px; }
 /* Pane-cycle tile — dashed so the swap affordance reads as chrome, not an action. */
@@ -556,7 +567,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   const ESC = '\u001b';
   // PROTOTYPE: 'NAV' = the pane-switcher tile; mv() = a repeating movement arrow.
   const NAV = 'NAV';
-  const mv = (key, glyph, label) => ({ key, glyph, label, repeat: true });
+  const mv = (key, glyph, label) => ({ key, glyph, label, repeat: true, cls: 'dpad' });
   // Each pane is a FLAT, row-major tile list (6 per row): a spec, `null` (empty),
   // or NAV. 24+ slots means MOVE holds movement + all common actions + y/n, so we
   // only need two panes — MOVE and a full a–z keyboard for menu selection (xsofy
@@ -564,10 +575,14 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   // pick a full drop menu). ESC + NAV sit in consistent spots across both panes.
   const PANES = [
     { label: 'MOVE', cols: 6, tiles: [
-      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'g', glyph: 'g', label: 'GET' },  { key: '>', glyph: '>', label: 'DESC' },  mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      { key: 'f', glyph: 'f', label: 'FIRE' },   { key: 'a', glyph: 'a', label: 'USE' },  { key: 'i', glyph: 'i', label: 'INV' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
-      { key: 'm', glyph: 'm', label: 'MSG' },    { key: 'd', glyph: 'd', label: 'DROP' }, { key: 'e', glyph: 'e', label: 'EQUIP' }, mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-      { key: 'r', glyph: 'r', label: 'RUNES' },  { key: '<', glyph: '<', label: 'ASCN' }, NAV,                                       { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+      // 5 rows (constant with the a-z pane). Actions across the top two rows; the
+      // D-pad sits bottom-right (rows 3-5, cols 4-6) in the thumb zone with y/n/·
+      // beside its top row. Bottom-left stays empty (lowest-value corner).
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'g', glyph: 'g', label: 'GET' },  { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'm', glyph: 'm', label: 'MSG' },  { key: 'r', glyph: 'r', label: 'RUNES' }, { key: '<', glyph: '<', label: 'ASCN' },
+      { key: '>', glyph: '>', label: 'DESC' },   { key: 'a', glyph: 'a', label: 'USE' },  { key: 'i', glyph: 'i', label: 'INV' },   { key: 'd', glyph: 'd', label: 'DROP' }, { key: 'e', glyph: 'e', label: 'EQUIP' }, NAV,
+      { key: 'y', glyph: 'y', label: 'YES' },    { key: 'n', glyph: 'n', label: 'NO' },   { key: '.', glyph: '·', label: 'WAIT', repeat: true }, mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      null, null, null,                          mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      null, null, null,                          mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
     ]},
     { label: 'a–z', cols: 6, tiles: [
       ...'abcdefghijklmnopqrstuvwxyz'.split('').map((c) => ({ key: c, glyph: c })),
@@ -583,6 +598,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     // Per-instance (not per-key): the same key repeats on one pane and not
     // another (e.g. "y" is NW movement on Pane 1, YES on Pane 2).
     if (spec.repeat) btn.dataset.repeat = '1';
+    if (spec.cls) btn.classList.add(spec.cls);
     const labelHtml = spec.label ? `<span class="label">${spec.label}</span>` : '';
     btn.innerHTML = `<span class="glyph">${spec.glyph}</span>${labelHtml}`;
     bindButton(btn);
@@ -635,6 +651,11 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     cancelHoldRepeat = () => { clearTimeout(initialId); if (intervalId) clearInterval(intervalId); };
   }
   function stopHoldRepeat() { if (cancelHoldRepeat) { cancelHoldRepeat(); cancelHoldRepeat = null; } }
+
+  // D-pad color treatment variant (prototype): ?dpad=fill|cool|off distinguishes
+  // the movement pad from the action cluster. Defaults to 'fill'.
+  const dpadVariant = new URLSearchParams(location.search).get('dpad') || 'fill';
+  document.body.classList.add('dpad-' + dpadVariant);
 
   renderTouch();  // initial render; tiles bind via tileFor on every pane swap
   // Static info-row buttons (repeat/font/touch/OPTIONS) — bound once, not rebuilt.
