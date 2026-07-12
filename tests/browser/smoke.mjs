@@ -1,7 +1,7 @@
 // Pre-deploy browser smoke gate.
 //
 // Boots the built WASM bundle in headless Chromium and asserts:
-//   1. #terminal becomes visible within --timeout
+//   1. #app becomes visible within --timeout
 //   2. The deterministic title-screen sentinel "Press any key" appears in
 //      the rendered terminal text within --title-timeout
 //   3. Zero console.error / no uncaught exceptions during the window
@@ -68,7 +68,7 @@ let bootMs = -1, sentinelMs = -1, waitErr = null;
 
 try {
   await page.goto(`http://127.0.0.1:${port}/`, { timeout });
-  await page.waitForSelector('#terminal', { state: 'visible', timeout });
+  await page.waitForSelector('#app', { state: 'visible', timeout });
   bootMs = Date.now() - start;
 
   await page.waitForFunction(
@@ -90,7 +90,7 @@ if (exceptions.length) failures.push(`${exceptions.length} uncaught exception(s)
 if (consoleErrs.length) failures.push(`${consoleErrs.length} console error(s)`);
 
 if (failures.length === 0) {
-  console.log(`OK: #terminal at ${bootMs}ms, "${args.sentinel}" at ${sentinelMs}ms`);
+  console.log(`OK: #app at ${bootMs}ms, "${args.sentinel}" at ${sentinelMs}ms`);
   await browser.close();
   server.close();
   process.exit(0);
