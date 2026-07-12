@@ -89,46 +89,26 @@ body.force-touch #xsofy-shell { flex: 1 1 auto; overflow: auto; }
    layout applies unconditionally (harmless while display:none); only the
    none↔grid switch is conditional. .pad/.actions are populated by the
    controls slice. */
+/* PROTOTYPE: unified 6-col grid (3 action | 3 D-pad ~= 50/50 for thumb reach,
+   vs the old 2|3 = 60% D-pad). Each pane lays its own tiles straight into this
+   grid via renderTouch — no separate action/pad blocks — so a pane can own any
+   slot (e.g. the a-z pane spans the full width). Rows auto-size equally. */
 #xsofy-shell .touch {
   display: none;
-  /* Mirrored layout: action column on the LEFT (2fr), D-pad on the RIGHT (3fr).
-     Puts Esc/BACK at the far top-left (see ACTION_COLUMN order) where it sits on a
-     QWERTY keyboard. The DOM is ordered actions-then-pad to match these tracks so
-     both stay in grid row 1 (a grid-column swap without the DOM reorder bumps
-     .actions to row 2 under sparse auto-flow — the source of the old top gap). */
-  grid-template-columns: 2fr 3fr;
-  grid-template-rows: 1fr;
-  /* Top-align both blocks (override .row's align-items:center) so the D-pad's top
-     row and the action block's top row start at the same height. */
-  align-items: start;
+  grid-template-columns: repeat(6, 1fr);
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+  min-width: 0;
   flex: 1;
   min-height: 0;
 }
 @media (orientation: portrait) { #xsofy-shell .touch { display: grid; } }
 body.force-touch #xsofy-shell .touch { display: grid; }
-/* Landscape force-touch — constrain the D-pad to a usable width instead of
-   letting it span a 1024+px viewport, and center it. */
 @media (orientation: landscape) {
   body.force-touch #xsofy-shell .touch {
-    max-width: 560px;
-    width: 100%;
-    margin-left: auto;
-    margin-right: auto;
-    flex: 0 0 auto;
+    max-width: 720px; width: 100%; margin-left: auto; margin-right: auto; flex: 0 0 auto;
   }
 }
-#xsofy-shell .pad,
-#xsofy-shell .actions {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  /* Explicit 100% breaks the circular sizing: without it, 1fr rows resolve
-     against content size, which the rows themselves determine — so they
-     collapse. */
-  height: 100%;
-}
-#xsofy-shell .actions { grid-template-columns: 1fr 1fr; grid-template-rows: repeat(4, 1fr); }
-#xsofy-shell .pad { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, 1fr); }
 
 /* Dev-tier visibility contract. Two axes: the OPTIONS tile reveals player
    options at runtime (mode-debug), while diagnostics (mode-urldiag) and dev
@@ -160,12 +140,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   border-top: 1px solid var(--bar-rule);
 }
 #xsofy-shell .row { align-items: center; gap: 0.6rem; padding: 0.45rem 0.75rem; }
-#xsofy-shell .touch { gap: 0.5rem; padding: 0.5rem 0.6rem 0.7rem; }
-#xsofy-shell .pad, #xsofy-shell .actions { gap: 0.3rem; }
-@media (orientation: landscape) {
-  body.force-touch #xsofy-shell .pad,
-  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(4, 60px); height: auto; }
-}
+#xsofy-shell .touch { gap: 0.3rem; padding: 0.5rem 0.6rem 0.7rem; }
 
 /* Two-row info bar. Single-row crammed title/quest/stats/chips into ~375px and
    lost the right half of both proper-noun strings on every phone:
@@ -246,7 +221,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
 #xsofy-shell button.nav .glyph { font-size: 13px; letter-spacing: 0.15em; color: var(--bar-fg); }
 #xsofy-shell button.nav .label { color: var(--bar-accent); }
 /* Empty slot in a pane — holds grid alignment without a tappable target. */
-#xsofy-shell .actions .filler { visibility: hidden; }
+#xsofy-shell .touch .filler { visibility: hidden; }
 /* Font-size cycle lives in the info row: compact, intrinsic height so the row
    stays one line. */
 /* Info-bar chips (font size, repeat, force-touch, options tile). Lay glyph +
@@ -277,12 +252,9 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     border-top: none;
     border-left: 1px solid var(--bar-rule);
   }
-  /* Keep portrait's touch grid verbatim (base .touch = 3fr/2fr D-pad|actions,
-     panes intact). Only undo the 560px strip-centering from the landscape block
-     above and restore fill sizing (that block pins 60px rows). */
+  /* Undo the strip-centering; the 6-col grid fills the rail (landscape polish
+     is deferred in this prototype — portrait is the focus). */
   body.force-touch #xsofy-shell .touch { max-width: none; width: auto; margin: 0; }
-  body.force-touch #xsofy-shell .pad,
-  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(4, 1fr); height: 100%; }
   /* Narrow rail: collapse the info bar to a single column so title/quest don't
      fight the fixed-width chips for space. */
   body.force-touch #xsofy-shell .info { grid-template-columns: minmax(0, 1fr); }
@@ -334,16 +306,8 @@ body.force-touch #xsofy-shell .touch { display: grid; }
       </button>
     </div>
   </div>
-  <div class="row touch">
-    <!-- Mirrored layout: .actions is the LEFT column, .pad (D-pad) the RIGHT.
-         DOM order matches column order (actions then pad) so the grid keeps both
-         in row 1 — don't reorder without also swapping the grid tracks. Both are
-         populated by the script below from PANES. The action column is identical
-         on every pane (persistent muscle memory for BACK/GET/DESC/FIRE/INV + the
-         pane nav); the D-pad swaps content per pane. -->
-    <div class="actions" id="xs-actions"></div>
-    <div class="pad" id="xs-pad"></div>
-  </div>
+  <!-- One 6-col grid, filled per-pane by renderTouch (prototype). -->
+  <div class="row touch" id="xs-touch"></div>
 </div>
 
 <script>
@@ -590,56 +554,25 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   // only the left 3x3 swaps content. Turn-based, so giving up the D-pad on a
   // non-movement pane is fine — one nav tap restores it. ---
   const ESC = '\u001b';
-  // The persistent action column (left side, same on every pane), 2 cols x 4
-  // rows. Esc/BACK leads so it lands top-left — with the mirrored layout that's
-  // the far top-left of the touch UI (QWERTY Esc). YES/NO and the keyset selector
-  // live in the D-pad's persistent top row now (see renderTouch); this block
-  // carries the common commands. Row-major fill (2 cols):
-  //   BACK  DESC
-  //   GET   FIRE
-  //   USE   INV
-  //   WAIT  MSG
-  const ACTION_COLUMN = [
-    { key: ESC, glyph: 'esc', label: 'BACK' },
-    { key: '>', glyph: '>', label: 'DESC' },
-    { key: 'g', glyph: 'g', label: 'GET' },
-    { key: 'f', glyph: 'f', label: 'FIRE' },
-    { key: 'a', glyph: 'a', label: 'USE' },
-    { key: 'i', glyph: 'i', label: 'INV' },
-    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
-    { key: 'm', glyph: 'm', label: 'MSG' },
-  ];
+  // PROTOTYPE: 'NAV' = the pane-switcher tile; mv() = a repeating movement arrow.
+  const NAV = 'NAV';
+  const mv = (key, glyph, label) => ({ key, glyph, label, repeat: true });
+  // Each pane is a FLAT, row-major tile list (6 per row): a spec, `null` (empty),
+  // or NAV. 24+ slots means MOVE holds movement + all common actions + y/n, so we
+  // only need two panes — MOVE and a full a–z keyboard for menu selection (xsofy
+  // menus label items a..z up to max-inventory 26, so a smaller letter set can't
+  // pick a full drop menu). ESC + NAV sit in consistent spots across both panes.
   const PANES = [
-    { // Pane 1 — movement D-pad with auto-explore at center. Directions
-      // hold-repeat; AUTO does not (one tap starts the run). Fills the 3-row body
-      // below the persistent YES/NO/keyset top row.
-      label: 'MOVE',
-      pad: [
-        { key: 'y', glyph: '↖', label: 'y', repeat: true }, { key: 'k', glyph: '↑', label: 'k', repeat: true }, { key: 'u', glyph: '↗', label: 'u', repeat: true },
-        { key: 'h', glyph: '←', label: 'h', repeat: true }, { key: 'x', glyph: 'x', label: 'AUTO' }, { key: 'l', glyph: '→', label: 'l', repeat: true },
-        { key: 'b', glyph: '↙', label: 'b', repeat: true }, { key: 'j', glyph: '↓', label: 'j', repeat: true }, { key: 'n', glyph: '↘', label: 'n', repeat: true },
-      ],
-    },
-    { // Pane 2 — item & meta actions; bottom row is yes/no for game prompts.
-      // WAIT hold-repeats for resting between turns.
-      label: 'ITEMS',
-      pad: [
-        { key: 'a', glyph: 'a', label: 'USE' }, { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'd', glyph: 'd', label: 'DROP' },
-        { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
-        { key: '<', glyph: '<', label: 'ASCN' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' },
-      ],
-    },
-    { // Pane 3 — straight letter keys for menu selection (inventory, rune
-      // inscription, item slots). No hold-repeat: held letters would spam picks.
-      // a–i fills the 3-row body under the persistent top row (j–l dropped when
-      // the top row went persistent; revisit if menus need past i).
-      label: 'KEYS',
-      pad: [
-        { key: 'a', glyph: 'a' }, { key: 'b', glyph: 'b' }, { key: 'c', glyph: 'c' },
-        { key: 'd', glyph: 'd' }, { key: 'e', glyph: 'e' }, { key: 'f', glyph: 'f' },
-        { key: 'g', glyph: 'g' }, { key: 'h', glyph: 'h' }, { key: 'i', glyph: 'i' },
-      ],
-    },
+    { label: 'MOVE', cols: 6, tiles: [
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'g', glyph: 'g', label: 'GET' },  { key: '>', glyph: '>', label: 'DESC' },  mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      { key: 'f', glyph: 'f', label: 'FIRE' },   { key: 'a', glyph: 'a', label: 'USE' },  { key: 'i', glyph: 'i', label: 'INV' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      { key: 'm', glyph: 'm', label: 'MSG' },    { key: 'd', glyph: 'd', label: 'DROP' }, { key: 'e', glyph: 'e', label: 'EQUIP' }, mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+      { key: 'r', glyph: 'r', label: 'RUNES' },  { key: '<', glyph: '<', label: 'ASCN' }, NAV,                                       { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    ]},
+    { label: 'a–z', cols: 6, tiles: [
+      ...'abcdefghijklmnopqrstuvwxyz'.split('').map((c) => ({ key: c, glyph: c })),
+      { key: ESC, glyph: 'esc', label: 'BACK' }, NAV, null, null,
+    ]},
   ];
   let currentPane = 0;
 
@@ -673,22 +606,14 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   }
 
   function renderTouch() {
-    const padEl = $('xs-pad'), actEl = $('xs-actions');
+    const touchEl = $('xs-touch');
     const pane = PANES[currentPane];
-    padEl.innerHTML = ''; actEl.innerHTML = '';
-    // Per-pane grid override (KEYS is denser); clearing lets the CSS default win.
-    padEl.style.gridTemplateColumns = pane.padCols ? `repeat(${pane.padCols}, 1fr)` : '';
-    padEl.style.gridTemplateRows = pane.padRows ? `repeat(${pane.padRows}, 1fr)` : '';
-    // Persistent top row above the D-pad: YES / NO / keyset-selector. Same on
-    // every pane, so game prompts and pane-switching stay one tap away no matter
-    // which pane's body is showing below.
-    padEl.appendChild(tileFor({ key: 'y', glyph: 'y', label: 'YES' }));
-    padEl.appendChild(tileFor({ key: 'n', glyph: 'n', label: 'NO' }));
-    padEl.appendChild(makeNav());
-    // Swappable body (rows 2-4): the current pane's tiles.
-    for (const spec of pane.pad) padEl.appendChild(tileFor(spec));
-    // Left action column — all key tiles now (NAV lives in the pad top row).
-    for (const spec of ACTION_COLUMN) actEl.appendChild(tileFor(spec));
+    touchEl.innerHTML = '';
+    touchEl.style.gridTemplateColumns = `repeat(${pane.cols || 6}, 1fr)`;
+    for (const spec of pane.tiles) {
+      if (spec === NAV) { touchEl.appendChild(makeNav()); continue; }
+      touchEl.appendChild(tileFor(spec));  // tileFor turns null into a filler
+    }
   }
 
   // Hold-to-repeat for opted-in tiles: after REPEAT_INITIAL ms, re-fire every
