@@ -128,6 +128,112 @@ body.force-touch #xsofy-shell .touch { display: grid; }
 #xsofy-shell:not(.mode-urldiag) .diag-only  { display: none; }
 #xsofy-shell:not(.mode-dev)     .dev-only   { display: none; }
 #xsofy-shell.mode-debug .play-only          { display: none; }
+
+/* ============================================================
+   controls + style — opinionated chrome layered onto the scaffold above.
+   Theming, the info-bar grid, and the button/tile look. These rules only add
+   appearance to the structure already established; they don't restructure it.
+   ============================================================ */
+#xsofy-shell {
+  --bar-bg: #110d08;
+  --bar-fg: #ede1c4;
+  --bar-dim: #7a6d52;
+  --bar-accent: #f5b041;
+  --bar-rule: rgba(245, 176, 65, 0.18);
+  background: var(--bar-bg);
+  color: var(--bar-fg);
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  user-select: none;
+  -webkit-user-select: none;
+  border-top: 1px solid var(--bar-rule);
+}
+#xsofy-shell .row { align-items: center; gap: 0.6rem; padding: 0.45rem 0.75rem; }
+#xsofy-shell .touch { gap: 0.5rem; padding: 0.5rem 0.6rem 0.7rem; }
+#xsofy-shell .pad, #xsofy-shell .actions { gap: 0.3rem; }
+@media (orientation: landscape) {
+  body.force-touch #xsofy-shell .pad,
+  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(3, 60px); height: auto; }
+}
+
+/* Two-row info bar. Single-row crammed title/quest/stats/chips into ~375px and
+   lost the right half of both proper-noun strings on every phone:
+     row 1:  [ title ]   [ OPTIONS tile ]
+     row 2:  [ quest ]   [ stats + option chips ]
+   The left column carries the proper-noun strings; minmax(0,1fr) lets it shrink
+   below content width so text-overflow:ellipsis fires. */
+#xsofy-shell .info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.6rem;
+  row-gap: 0.35rem;
+  align-items: start;
+  padding-top: 0.5rem;
+  border-bottom: 1px solid var(--bar-rule);
+  /* Fixed tall height so opening/closing options never resizes the bar — the
+     tile stays anchored top-right and the options fill the space below it,
+     which is empty in play. */
+  min-height: 88px;
+}
+#xsofy-shell .info .title { grid-area: 1 / 1; color: var(--bar-fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#xsofy-shell .info .chips { grid-area: 1 / 2; justify-self: end; display: flex; }
+#xsofy-shell .info .debug-row { grid-area: 2 / 2; justify-self: end; display: flex; flex-direction: row; align-items: center; gap: 0.5rem; }
+/* Options/back tile — compact icon button (⚙ / ←) pinned top-right, dashed like
+   the action grid's nav tile so it reads as chrome, not content. */
+#xsofy-shell .shell-cycle { background: rgba(245, 176, 65, 0.02); border-style: dashed; width: 2.1rem; min-height: 1.9rem; display: flex; align-items: center; justify-content: center; }
+#xsofy-shell .shell-cycle .label { color: var(--bar-accent); font-size: 1.05rem; line-height: 1; }
+/* Hold-to-repeat is a touch affordance — desktop keyboards repeat at the OS
+   level, so hide the toggle on a fine pointer (still shown under force-touch). */
+@media (hover: hover) and (pointer: fine) {
+  body:not(.force-touch) #xsofy-shell .touch-only { display: none; }
+}
+/* Self-revealing perf cells: hidden until their datum is emitted, so the bar
+   shows only live numbers, not dead middots. */
+#xsofy-shell .stat-hidden { display: none; }
+/* Ellipsize the quest from the LEFT so the meaningful suffix (the item name)
+   survives truncation — "…of Borrowed Confidence", not "seeking C…". */
+#xsofy-shell .info .quest { grid-area: 2 / 1; color: var(--bar-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; direction: rtl; text-align: left; }
+/* Build-provenance chip (debug only) — shares the title's cell (title is
+   play-only, so they never collide). SHA stays drag-selectable for bug reports. */
+#xsofy-shell .info .build { grid-area: 1 / 1; color: var(--bar-dim); font-size: 10px; white-space: normal; line-height: 1.2; overflow-wrap: anywhere; min-width: 0; font-variant-numeric: tabular-nums; user-select: text; -webkit-user-select: text; }
+#xsofy-shell .info .stats { display: flex; align-items: center; gap: 0.6rem; color: var(--bar-accent); font-variant-numeric: tabular-nums; }
+#xsofy-shell .info .stats .k { color: var(--bar-dim); }
+
+#xsofy-shell button {
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--bar-fg);
+  background: rgba(245, 176, 65, 0.06);
+  border: 1px solid var(--bar-rule);
+  border-radius: 8px;
+  padding: 0.55rem 0.5rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(245, 176, 65, 0.25);
+  transition: background 0.08s ease, border-color 0.08s ease;
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  line-height: 1.1;
+}
+#xsofy-shell button:active,
+#xsofy-shell button.pressed { background: rgba(245, 176, 65, 0.22); border-color: var(--bar-accent); }
+#xsofy-shell button .glyph { font-size: 16px; color: var(--bar-accent); }
+#xsofy-shell button .label { font-size: 10px; color: var(--bar-dim); letter-spacing: 0.05em; margin-top: 2px; }
+/* Pane-cycle tile — dashed so the swap affordance reads as chrome, not an action. */
+#xsofy-shell button.nav { background: rgba(245, 176, 65, 0.02); border-style: dashed; }
+#xsofy-shell button.nav .glyph { font-size: 13px; letter-spacing: 0.15em; color: var(--bar-fg); }
+#xsofy-shell button.nav .label { color: var(--bar-accent); }
+/* Empty slot in a pane — holds grid alignment without a tappable target. */
+#xsofy-shell .actions .filler { visibility: hidden; }
+/* Font-size cycle lives in the info row: compact, intrinsic height so the row
+   stays one line. */
+#xsofy-shell .font-cycle { flex: 0 0 auto; min-height: 0; min-width: 0; padding: 0.15rem 0.45rem; border-radius: 5px; font-size: 11px; line-height: 1.2; color: var(--bar-dim); }
+#xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
 </style>
 
 <!-- Blank scaffold: empty info + touch rows, mounted as #app's sibling. The
@@ -135,8 +241,50 @@ body.force-touch #xsofy-shell .touch { display: grid; }
      D-pad/action tiles into .pad/.actions — the structure and IDs are here so
      that slice is purely additive. -->
 <div id="xsofy-shell" class="mode-play">
-  <div class="row info"></div>
+  <div class="row info">
+    <span class="title play-only" id="xs-title">—</span>
+    <span class="quest play-only" id="xs-quest"></span>
+    <span class="build debug-only" id="xs-build" title="Build provenance — written by local-scripts/deploy.sh"></span>
+    <div class="chips">
+      <!-- Row 1 / col 2: the OPTIONS/back tile, pinned top-right and alone.
+           Icon toggles ⚙ (open options) ↔ ← (back to play); dev tier is URL-only. -->
+      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
+        <span class="label" id="xs-shell-cycle-label">⚙</span>
+      </button>
+    </div>
+    <div class="debug-row">
+      <!-- Row 2 / col 2: URL-gated perf stats, then the player-option chips —
+           one horizontal row, right-aligned, under the tile. Tier classes gate
+           each item, so this row is empty in play. -->
+      <span class="stats">
+        <span class="diag-only stat-hidden"><span class="k">t</span><span id="xs-turn">·</span></span>
+        <span class="diag-only stat-hidden" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
+        <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
+        <span class="diag-only stat-hidden" id="xs-dims"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
+      </span>
+      <!-- Player options: font size = accessibility; hold-to-repeat is a touch
+           affordance (.touch-only) — hidden on desktop, where the OS handles it. -->
+      <button class="font-cycle debug-only touch-only" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
+        <span class="glyph">↻</span><span id="xs-repeat-state">on</span>
+      </button>
+      <button class="font-cycle debug-only" id="xs-font-cycle" title="Cycle char size">
+        <span class="glyph">Aa</span><span id="xs-font-px">22</span>
+      </button>
+      <!-- Dev tooling (?mode=dev only): force the phone touch UI visible on
+           desktop/tablet-landscape for testing — not a player pref. -->
+      <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
+        <span class="glyph">▦</span><span id="xs-touch-state">off</span>
+      </button>
+    </div>
+  </div>
   <div class="row touch">
+    <!-- Both grids are populated by the script below from PANES. The right
+         column (.actions) is identical on every pane — persistent muscle memory
+         for GET/INV/DESC/FIRE/BACK + the pane nav. The left grid (.pad) swaps
+         content per pane: movement on Pane 1, item/meta actions on Pane 2. -->
     <div class="pad" id="xs-pad"></div>
     <div class="actions" id="xs-actions"></div>
   </div>
@@ -166,7 +314,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   // ?font=system bypasses the bundled rune face and renders in the platform
   // mono — a debug/preference escape hatch. Runes (U+16A0–16FF) then fall back
   // to the viewer's system fonts, which may tofu where none cover them.
-  const MONO = '"DejaVu Sans Mono", "Menlo", monospace';
+  const MONO = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace';
   const sysFont = new URLSearchParams(location.search).get('font') === 'system';
   const term = new Terminal({
     fontFamily: sysFont ? MONO : '"Fairfax HD", ' + MONO,
@@ -255,30 +403,334 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     window.visualViewport.addEventListener('scroll', refit);
   }
 
-  // --- Force-touch detection (plumbing; the toggle UI is a later slice). A
-  // coarse primary pointer (phone/tablet) needs the on-screen controls in every
-  // orientation, so drive body.force-touch from capability OR a persisted dev
-  // override. The class lives on <body> because it also retargets #app (the
-  // terminal), which is #xsofy-shell's sibling, not a descendant. ---
-  const coarsePointer = !!window.matchMedia?.('(pointer: coarse)')?.matches;
-  const forceTouchEnabled = localStorage.getItem('xsofy/force-touch') === '1';
-  document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
+  // ============================================================
+  // controls + style — info-bar wiring, the D-pad/action tiles, and the player
+  // options. All of it hangs off the scaffold's containers and mode classes.
+  // ============================================================
 
-  // --- Dev-tier gating (plumbing; the runtime OPTIONS toggle is a later slice).
-  // Seed the tier from ?mode= (debug|dev → diagnostics/dev tooling) or the last
-  // persisted state, and stamp the mode classes onto #xsofy-shell so the tier-
-  // gated CSS above has its contract. mode-play is the permanent base; dev is a
-  // strict superset of debug. Nothing is tier-classed yet, so this is inert
-  // until the controls slice adds gated elements. ---
+  // Shell-owned font sizing (replaces the fork's host-side _lgSetFontSize). Safe
+  // before term.open: it sets the option (the boot-time fit picks it up) and the
+  // pre-open fit inside refit is caught.
+  function setTermFontSize(n) {
+    if (typeof n !== 'number' || n < 6 || n > 64) return;
+    term.options.fontSize = n;
+    refit();
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const titleEl = $('xs-title');
+  const questEl = $('xs-quest');
+  const turnEl = $('xs-turn');
+
+  // Capitalize a quest-item name for the bar. Keep it terse.
+  function nameOf(q) {
+    if (!q) return '';
+    if (typeof q === 'string') return q;
+    const n = q.name || q[':name'] || q[':item']?.name;
+    return n ? `seeking ${n}` : '';
+  }
+
+  // Build provenance chip: fetch the JSON dropped in by deploy.sh, render it dim
+  // in the debug info bar. Silently no-ops in local dev (no file).
+  const buildEl = $('xs-build');
+  if (buildEl) {
+    fetch('build-info.json', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        const xs = (d.xsofy || '').slice(0, 7);
+        const lg = (d['let-go'] || '');
+        const dt = d.date || '';
+        buildEl.innerHTML = `xsofy ${xs}${dt ? ' ·' + dt : ''}<br>lg ${lg}`;
+      })
+      .catch(() => {});
+  }
+
+  window.addEventListener('xsofy/startup', (e) => {
+    const d = e.detail || {};
+    titleEl.textContent = d.title || '—';
+    questEl.textContent = nameOf(d.quest);
+    // Reset + re-hide the turn counter on a new run; it self-reveals after the
+    // first real tick, so the bar never shows a dead "t·"/"t0".
+    turnEl.textContent = '0';
+    turnEl.parentElement.classList.add('stat-hidden');
+  });
+
+  // @t reports the turn the perf measurements were taken for; by design it lags
+  // t (current turn) by exactly 1. Showing both when they're +1 apart is noise —
+  // hide @t in that case, reveal it only on real drift (perf pipeline stuck).
+  let lastTurn = null, lastPerfTurn = null;
+  const perfTurnWrap = $('xs-perf-turn-wrap');
+  function paintPerfTurnDrift() {
+    if (!perfTurnWrap) return;
+    const inSync = lastTurn != null && lastPerfTurn != null
+      && Number(lastTurn) - Number(lastPerfTurn) === 1;
+    perfTurnWrap.classList.toggle('stat-hidden', lastPerfTurn == null || inSync);
+  }
+
+  window.addEventListener('xsofy/stats', (e) => {
+    const d = e.detail || {};
+    // hp/max-hp/depth are still emitted but shown by the in-grid HUD now; only
+    // the debug turn counter reads here.
+    if (d.turn != null) {
+      turnEl.textContent = d.turn;
+      turnEl.parentElement.classList.remove('stat-hidden');  // self-reveal
+      lastTurn = d.turn;
+      paintPerfTurnDrift();
+    }
+  });
+
+  // Terminal size — the debug bar shows current cols×rows so dimension-specific
+  // layout bugs are reproducible without guesswork.
+  const colsEl = $('xs-cols'), rowsEl = $('xs-rows'), dimsEl = $('xs-dims');
+  window.addEventListener('xsofy/term-size', (e) => {
+    const d = e.detail || {};
+    if (d.cols != null && colsEl) colsEl.textContent = d.cols;
+    if (d.rows != null && rowsEl) rowsEl.textContent = d.rows;
+    if (d.cols != null && d.rows != null) dimsEl?.classList.remove('stat-hidden');
+  });
+
+  // Per-turn engine vs render split. Display lags one turn to match the map's
+  // top-right gauge (which can't show the current turn's number without
+  // rendering twice): on turn N's event we paint turn N-1's held values, then
+  // stash N for N+1.
+  const updateEl = $('xs-update'), renderEl = $('xs-render'), inputLagEl = $('xs-input-lag');
+  const perfTurnEl = $('xs-perf-turn'), cellsEl = $('xs-cells');
+  let pendingPerf = null;
+  window.addEventListener('xsofy/perf', (e) => {
+    if (pendingPerf) {
+      if (pendingPerf.update != null) { updateEl.textContent = pendingPerf.update; updateEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf.render != null) { renderEl.textContent = pendingPerf.render; renderEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf['input-lag'] != null) { inputLagEl.textContent = pendingPerf['input-lag']; inputLagEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf.cells != null) { cellsEl.textContent = pendingPerf.cells; cellsEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf.turn != null) { perfTurnEl.textContent = pendingPerf.turn; lastPerfTurn = pendingPerf.turn; paintPerfTurnDrift(); }
+    }
+    pendingPerf = e.detail || null;
+  });
+
+  // Pointer-driven key injection. pointerdown so taps register the instant the
+  // finger lands. sendInput accepts raw bytes — they go through the same path as
+  // xterm keystrokes, so no game-side code knows the difference.
+  function press(btn) {
+    const k = btn.dataset.key;
+    if (!k || !window.LetGoHost) return;
+    // Data attributes can't carry literal control bytes — decode JS-escapes.
+    const decoded = k.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    window.LetGoHost.sendInput(decoded);
+    btn.classList.add('pressed');
+    setTimeout(() => btn.classList.remove('pressed'), 90);
+  }
+
+  function bindButton(btn) {
+    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); press(btn); startHoldRepeat(btn); });
+    btn.addEventListener('pointerup', stopHoldRepeat);
+    btn.addEventListener('pointerleave', stopHoldRepeat);
+    btn.addEventListener('pointercancel', stopHoldRepeat);
+    btn.addEventListener('mousedown', (e) => e.preventDefault());  // don't steal terminal focus
+  }
+
+  // --- Touch panes. Two+ panes share the same physical layout (3x3 left + 2x3
+  // right). The right column is identical on every pane so muscle memory works;
+  // only the left 3x3 swaps content. Turn-based, so giving up the D-pad on a
+  // non-movement pane is fine — one nav tap restores it. ---
+  const ESC = '\u001b';
+  const RIGHT_COLUMN = [
+    { key: 'g', glyph: 'g', label: 'GET' },
+    { key: ESC, glyph: 'esc', label: 'BACK' },
+    { key: '>', glyph: '>', label: 'DESC' },
+    { key: 'f', glyph: 'f', label: 'FIRE' },
+    { key: 'i', glyph: 'i', label: 'INV' },
+  ];
+  const PANES = [
+    { // Pane 1 — movement D-pad with auto-explore at center. Directions
+      // hold-repeat; AUTO does not (one tap starts the run).
+      label: 'MOVE',
+      pad: [
+        { key: 'y', glyph: '↖', repeat: true }, { key: 'k', glyph: '↑', repeat: true }, { key: 'u', glyph: '↗', repeat: true },
+        { key: 'h', glyph: '←', repeat: true }, { key: 'x', glyph: 'x', label: 'AUTO' }, { key: 'l', glyph: '→', repeat: true },
+        { key: 'b', glyph: '↙', repeat: true }, { key: 'j', glyph: '↓', repeat: true }, { key: 'n', glyph: '↘', repeat: true },
+      ],
+    },
+    { // Pane 2 — item & meta actions; bottom row is yes/no for game prompts.
+      // WAIT hold-repeats for resting between turns.
+      label: 'ITEMS',
+      pad: [
+        { key: 'a', glyph: 'a', label: 'USE' }, { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'd', glyph: 'd', label: 'DROP' },
+        { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+        { key: '<', glyph: '<', label: 'ASCN' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' },
+      ],
+    },
+    { // Pane 3 — straight letter keys for menu selection (inventory, rune
+      // inscription, item slots). No hold-repeat: held letters would spam picks.
+      label: 'KEYS', padCols: 4, padRows: 3,
+      pad: [
+        { key: 'a', glyph: 'a' }, { key: 'b', glyph: 'b' }, { key: 'c', glyph: 'c' }, { key: 'd', glyph: 'd' },
+        { key: 'e', glyph: 'e' }, { key: 'f', glyph: 'f' }, { key: 'g', glyph: 'g' }, { key: 'h', glyph: 'h' },
+        { key: 'i', glyph: 'i' }, { key: 'j', glyph: 'j' }, { key: 'k', glyph: 'k' }, { key: 'l', glyph: 'l' },
+      ],
+    },
+  ];
+  let currentPane = 0;
+
+  function tileFor(spec) {
+    if (spec === null) { const f = document.createElement('div'); f.className = 'filler'; return f; }
+    const btn = document.createElement('button');
+    btn.dataset.key = spec.key;
+    // Per-instance (not per-key): the same key repeats on one pane and not
+    // another (e.g. "y" is NW movement on Pane 1, YES on Pane 2).
+    if (spec.repeat) btn.dataset.repeat = '1';
+    const labelHtml = spec.label ? `<span class="label">${spec.label}</span>` : '';
+    btn.innerHTML = `<span class="glyph">${spec.glyph}</span>${labelHtml}`;
+    bindButton(btn);
+    return btn;
+  }
+
+  function renderTouch() {
+    const padEl = $('xs-pad'), actEl = $('xs-actions');
+    const pane = PANES[currentPane];
+    padEl.innerHTML = ''; actEl.innerHTML = '';
+    // Per-pane grid override (KEYS is denser); clearing lets the CSS default win.
+    padEl.style.gridTemplateColumns = pane.padCols ? `repeat(${pane.padCols}, 1fr)` : '';
+    padEl.style.gridTemplateRows = pane.padRows ? `repeat(${pane.padRows}, 1fr)` : '';
+    for (const spec of pane.pad) padEl.appendChild(tileFor(spec));
+    for (const spec of RIGHT_COLUMN) actEl.appendChild(tileFor(spec));
+    // Nav tile at slot 6 — swaps panes, doesn't send a key, so it's not routed
+    // through bindButton (no hold-repeat). Label names the destination.
+    const nav = document.createElement('button');
+    nav.className = 'nav';
+    nav.innerHTML = `<span class="label">${PANES[(currentPane + 1) % PANES.length].label + ' →'}</span>`;
+    nav.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      stopHoldRepeat();  // kill any in-flight repeat from a tile we're replacing
+      currentPane = (currentPane + 1) % PANES.length;
+      renderTouch();
+    });
+    nav.addEventListener('mousedown', (e) => e.preventDefault());
+    actEl.appendChild(nav);
+  }
+
+  // Hold-to-repeat for opted-in tiles: after REPEAT_INITIAL ms, re-fire every
+  // REPEAT_INTERVAL ms until pointerup/cancel/leave.
+  const REPEAT_INITIAL = 150, REPEAT_INTERVAL = 83, REPEAT_LS_KEY = 'xsofy/auto-repeat';
+  const repeatToggleEl = $('xs-repeat-toggle'), repeatStateEl = $('xs-repeat-state');
+  let repeatEnabled = (localStorage.getItem(REPEAT_LS_KEY) ?? '1') === '1';
+  function paintRepeatState() {
+    if (repeatStateEl) repeatStateEl.textContent = repeatEnabled ? 'on' : 'off';
+    if (repeatToggleEl) repeatToggleEl.style.opacity = repeatEnabled ? '' : '0.5';
+  }
+  paintRepeatState();
+  let cancelHoldRepeat = null;
+  function startHoldRepeat(btn) {
+    if (cancelHoldRepeat) { cancelHoldRepeat(); cancelHoldRepeat = null; }
+    if (!repeatEnabled || btn.dataset.repeat !== '1') return;
+    let intervalId = null;
+    const initialId = setTimeout(() => { intervalId = setInterval(() => press(btn), REPEAT_INTERVAL); }, REPEAT_INITIAL);
+    cancelHoldRepeat = () => { clearTimeout(initialId); if (intervalId) clearInterval(intervalId); };
+  }
+  function stopHoldRepeat() { if (cancelHoldRepeat) { cancelHoldRepeat(); cancelHoldRepeat = null; } }
+
+  renderTouch();  // initial render; tiles bind via tileFor on every pane swap
+  // Static info-row buttons (repeat/font/touch/OPTIONS) — bound once, not rebuilt.
+  document.querySelectorAll('#xsofy-shell .info button').forEach(bindButton);
+  // Safety net: pointer released anywhere (dragged off a button) kills repeat.
+  window.addEventListener('pointerup', stopHoldRepeat);
+  window.addEventListener('pointercancel', stopHoldRepeat);
+
+  repeatToggleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();  // don't also start a repeat on the chip itself
+    repeatEnabled = !repeatEnabled;
+    localStorage.setItem(REPEAT_LS_KEY, repeatEnabled ? '1' : '0');
+    paintRepeatState();
+    stopHoldRepeat();
+  });
+  repeatToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // Font-size cycle. xterm's default 14 is unreadable on a 375px viewport; the
+  // chip cycles a short predictable set. First-ever load picks by orientation.
+  const FONT_SIZES = [12, 14, 18, 22, 28], LS_KEY = 'xsofy/font-size';
+  const cycleEl = $('xs-font-cycle'), fontPxEl = $('xs-font-px');
+  function applyFontSize(n) { setTermFontSize(n); if (fontPxEl) fontPxEl.textContent = n; }
+  function initFontSize() {
+    let n = parseInt(localStorage.getItem(LS_KEY) || '', 10);
+    if (!FONT_SIZES.includes(n)) n = matchMedia('(orientation: portrait)').matches ? 22 : 14;
+    applyFontSize(n);
+  }
+  cycleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const cur = parseInt(fontPxEl?.textContent || '14', 10);
+    const next = FONT_SIZES[(FONT_SIZES.indexOf(cur) + 1) % FONT_SIZES.length];
+    localStorage.setItem(LS_KEY, String(next));
+    applyFontSize(next);
+  });
+  cycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  initFontSize();
+
+  // --- Force-touch: capability OR the persisted dev override sets
+  // body.force-touch (reveals the touch UI in every orientation). The class
+  // lives on <body> because it also retargets #app (the terminal), which is
+  // #xsofy-shell's sibling, not a descendant. The ▦ toggle (dev tier) is an
+  // override for keyboardless fine-pointer sessions (desktop/tablet testing). ---
+  const FORCE_TOUCH_LS_KEY = 'xsofy/force-touch';
+  const touchToggleEl = $('xs-touch-toggle'), touchStateEl = $('xs-touch-state');
+  const coarsePointer = !!window.matchMedia?.('(pointer: coarse)')?.matches;
+  let forceTouchEnabled = localStorage.getItem(FORCE_TOUCH_LS_KEY) === '1';
+  function paintForceTouchState() {
+    // Capability forces it on (a touch device can't turn off its only input
+    // method); the toggle only matters on fine-pointer devices.
+    document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
+    if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? 'on' : 'off';
+    if (touchToggleEl) touchToggleEl.style.opacity = forceTouchEnabled ? '' : '0.5';
+  }
+  paintForceTouchState();
+  touchToggleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    forceTouchEnabled = !forceTouchEnabled;
+    localStorage.setItem(FORCE_TOUCH_LS_KEY, forceTouchEnabled ? '1' : '0');
+    paintForceTouchState();
+    // The class toggle changes #app's height via CSS, but FitAddon only
+    // recomputes on a resize/explicit fit. rAF defers the dispatch so the new
+    // layout is in place when fit runs.
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  });
+  touchToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // --- OPTIONS tile — runtime toggle of the debug tier, plus the URL-seeded dev
+  // tier. Tiers are additive: mode-play is the permanent base; the tile toggles
+  // mode-debug (player-visible diagnostics); ?mode=dev adds mode-dev (dev
+  // tooling) on top. The tile cycles play↔debug only — dev is URL-gated, so dev
+  // tooling never appears just from tapping. Diagnostics (turn/perf) are
+  // mode-urldiag, URL-only, so a runtime tap never surfaces dev noise. ---
+  const SHELL_LS_KEY = 'xsofy/shell-state', SHELL_STATES = ['play', 'debug'];
+  const STATE_LABEL = { play: '←', debug: '⚙' };  // shown for the destination tier
   const shellRoot = document.getElementById('xsofy-shell');
+  const shellCycleEl = $('xs-shell-cycle'), shellCycleLabelEl = $('xs-shell-cycle-label');
   const urlMode = new URLSearchParams(location.search).get('mode');
   const devMode = urlMode === 'dev';
-  let shellState = localStorage.getItem('xsofy/shell-state');
-  if (urlMode === 'dev' || urlMode === 'debug') shellState = 'debug';
-  else if (urlMode === 'play') shellState = 'play';
-  else if (shellState !== 'debug') shellState = 'play';
-  shellRoot.classList.toggle('mode-debug', shellState === 'debug' || devMode);
-  shellRoot.classList.toggle('mode-dev', devMode);
-  shellRoot.classList.toggle('mode-urldiag', urlMode === 'debug' || urlMode === 'dev');
+  let currentShellState = localStorage.getItem(SHELL_LS_KEY);
+  if (urlMode === 'dev' || urlMode === 'debug') currentShellState = 'debug';
+  else if (urlMode === 'play') currentShellState = 'play';
+  else if (!SHELL_STATES.includes(currentShellState)) currentShellState = 'play';
+  function applyShellState() {
+    // dev is a strict superset of debug — ?mode=dev pins mode-debug on
+    // regardless of the play↔debug cycle.
+    shellRoot.classList.toggle('mode-debug', currentShellState === 'debug' || devMode);
+    shellRoot.classList.toggle('mode-dev', devMode);
+    shellRoot.classList.toggle('mode-urldiag', urlMode === 'debug' || urlMode === 'dev');
+    if (shellCycleLabelEl) {
+      const next = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
+      shellCycleLabelEl.textContent = STATE_LABEL[next];
+    }
+  }
+  applyShellState();
+  shellCycleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();  // don't also fire the bindButton press path
+    currentShellState = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
+    localStorage.setItem(SHELL_LS_KEY, currentShellState);
+    applyShellState();
+  });
+  shellCycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
 })();
 </script>
