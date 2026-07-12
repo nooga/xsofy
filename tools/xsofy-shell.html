@@ -56,7 +56,10 @@
    #app, which is #xsofy-shell's sibling, not a descendant. */
 body.force-touch #app { flex: 0 0 auto; height: 55dvh; }
 @media (orientation: landscape) {
-  body.force-touch #app { flex: 0 0 auto; height: calc(100vh - 260px); }
+  /* Reserve the touch UI's height so the terminal doesn't overflow it. Budget:
+     info bar (52) + 4 pad rows @60px (240) + gaps/padding (~35) ~= 330. Bumped
+     from 260 when the pad went 3->4 rows (a fixed-60px row landscape path). */
+  body.force-touch #app { flex: 0 0 auto; height: calc(100vh - 330px); }
 }
 
 /* Client shell scaffold. Blank structural host mounted as #app's flex sibling
@@ -88,8 +91,16 @@ body.force-touch #xsofy-shell { flex: 1 1 auto; overflow: auto; }
    controls slice. */
 #xsofy-shell .touch {
   display: none;
-  grid-template-columns: 3fr 2fr;
+  /* Mirrored layout: action column on the LEFT (2fr), D-pad on the RIGHT (3fr).
+     Puts Esc/BACK at the far top-left (see ACTION_COLUMN order) where it sits on a
+     QWERTY keyboard. The DOM is ordered actions-then-pad to match these tracks so
+     both stay in grid row 1 (a grid-column swap without the DOM reorder bumps
+     .actions to row 2 under sparse auto-flow — the source of the old top gap). */
+  grid-template-columns: 2fr 3fr;
   grid-template-rows: 1fr;
+  /* Top-align both blocks (override .row's align-items:center) so the D-pad's top
+     row and the action block's top row start at the same height. */
+  align-items: start;
   flex: 1;
   min-height: 0;
 }
@@ -116,8 +127,8 @@ body.force-touch #xsofy-shell .touch { display: grid; }
      collapse. */
   height: 100%;
 }
-#xsofy-shell .pad { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
-#xsofy-shell .actions { grid-template-columns: 1fr 1fr; grid-template-rows: repeat(3, 1fr); }
+#xsofy-shell .actions { grid-template-columns: 1fr 1fr; grid-template-rows: repeat(4, 1fr); }
+#xsofy-shell .pad { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, 1fr); }
 
 /* Dev-tier visibility contract. Two axes: the OPTIONS tile reveals player
    options at runtime (mode-debug), while diagnostics (mode-urldiag) and dev
@@ -153,7 +164,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
 #xsofy-shell .pad, #xsofy-shell .actions { gap: 0.3rem; }
 @media (orientation: landscape) {
   body.force-touch #xsofy-shell .pad,
-  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(3, 60px); height: auto; }
+  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(4, 60px); height: auto; }
 }
 
 /* Two-row info bar. Single-row crammed title/quest/stats/chips into ~375px and
@@ -167,21 +178,27 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
   column-gap: 0.6rem;
-  row-gap: 0.35rem;
+  row-gap: 0.15rem;
   align-items: start;
-  padding-top: 0.5rem;
+  padding-top: 0.3rem;
   border-bottom: 1px solid var(--bar-rule);
-  /* Fixed tall height so opening/closing options never resizes the bar — the
-     tile stays anchored top-right and the options fill the space below it,
-     which is empty in play. */
-  min-height: 88px;
+  /* Hard height so opening/closing options never resizes the bar. min-height was
+     only a floor — the debug row's chips could still grow it past 56 and make the
+     bar flip; a fixed height + border-box keeps it constant (the single-line
+     chips below are sized to fit). Options fill the space below the tile, empty
+     in play. */
+  box-sizing: border-box;
+  height: 52px;
+  overflow: hidden;
 }
 #xsofy-shell .info .title { grid-area: 1 / 1; color: var(--bar-fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-#xsofy-shell .info .chips { grid-area: 1 / 2; justify-self: end; display: flex; }
-#xsofy-shell .info .debug-row { grid-area: 2 / 2; justify-self: end; display: flex; flex-direction: row; align-items: center; gap: 0.5rem; }
+/* Right controls row: spans BOTH text rows (grid-row 1/3), vertically centered,
+   right-aligned — one row of full-height chips instead of two half-height stacks
+   (the left column keeps its two text rows). */
+#xsofy-shell .info .debug-row { grid-area: 1 / 2 / 3 / 3; justify-self: end; align-self: center; display: flex; flex-direction: row; align-items: center; gap: 0.4rem; }
 /* Options/back tile — compact icon button (⚙ / ←) pinned top-right, dashed like
    the action grid's nav tile so it reads as chrome, not content. */
-#xsofy-shell .shell-cycle { background: rgba(245, 176, 65, 0.02); border-style: dashed; width: 2.1rem; min-height: 1.9rem; display: flex; align-items: center; justify-content: center; }
+#xsofy-shell .shell-cycle { background: rgba(245, 176, 65, 0.02); border-style: dashed; width: 2.2rem; min-height: 2.2rem; display: flex; align-items: center; justify-content: center; }
 #xsofy-shell .shell-cycle .label { color: var(--bar-accent); font-size: 1.05rem; line-height: 1; }
 /* Hold-to-repeat is a touch affordance — desktop keyboards repeat at the OS
    level, so hide the toggle on a fine pointer (still shown under force-touch). */
@@ -232,7 +249,11 @@ body.force-touch #xsofy-shell .touch { display: grid; }
 #xsofy-shell .actions .filler { visibility: hidden; }
 /* Font-size cycle lives in the info row: compact, intrinsic height so the row
    stays one line. */
-#xsofy-shell .font-cycle { flex: 0 0 auto; min-height: 0; min-width: 0; padding: 0.15rem 0.45rem; border-radius: 5px; font-size: 11px; line-height: 1.2; color: var(--bar-dim); }
+/* Info-bar chips (font size, repeat, force-touch, options tile). Lay glyph +
+   value on ONE line (flex-direction:row overrides the button column) so the chip
+   height is constant as the value changes — that height jitter was flipping the
+   shrunk info bar. */
+#xsofy-shell .font-cycle { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 0.25rem; min-height: 2.2rem; min-width: 0; padding: 0.15rem 0.6rem; border-radius: 5px; font-size: 11px; line-height: 1.2; color: var(--bar-dim); }
 #xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
 
 /* Phone landscape (short viewport) — split the shell to the RIGHT instead of
@@ -261,7 +282,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
      above and restore fill sizing (that block pins 60px rows). */
   body.force-touch #xsofy-shell .touch { max-width: none; width: auto; margin: 0; }
   body.force-touch #xsofy-shell .pad,
-  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(3, 1fr); height: 100%; }
+  body.force-touch #xsofy-shell .actions { grid-template-rows: repeat(4, 1fr); height: 100%; }
   /* Narrow rail: collapse the info bar to a single column so title/quest don't
      fight the fixed-width chips for space. */
   body.force-touch #xsofy-shell .info { grid-template-columns: minmax(0, 1fr); }
@@ -277,17 +298,12 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     <span class="title play-only" id="xs-title">—</span>
     <span class="quest play-only" id="xs-quest"></span>
     <span class="build debug-only" id="xs-build" title="Build provenance — written by local-scripts/deploy.sh"></span>
-    <div class="chips">
-      <!-- Row 1 / col 2: the OPTIONS/back tile, pinned top-right and alone.
-           Icon toggles ⚙ (open options) ↔ ← (back to play); dev tier is URL-only. -->
-      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
-        <span class="label" id="xs-shell-cycle-label">⚙</span>
-      </button>
-    </div>
+    <!-- Right controls: ONE horizontal row spanning both text rows (grid-row
+         1/3), vertically centered, so the buttons get the bar's full height
+         instead of two half-height stacks. Play shows just the ⚙ tile; debug
+         adds the perf stats + option chips to its left. Tier classes gate each
+         item, so it's just ⚙ in play. -->
     <div class="debug-row">
-      <!-- Row 2 / col 2: URL-gated perf stats, then the player-option chips —
-           one horizontal row, right-aligned, under the tile. Tier classes gate
-           each item, so this row is empty in play. -->
       <span class="stats">
         <span class="diag-only stat-hidden"><span class="k">t</span><span id="xs-turn">·</span></span>
         <span class="diag-only stat-hidden" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
@@ -308,17 +324,25 @@ body.force-touch #xsofy-shell .touch { display: grid; }
       <!-- Dev tooling (?mode=dev only): force the phone touch UI visible on
            desktop/tablet-landscape for testing — not a player pref. -->
       <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
-        <span class="glyph">▦</span><span id="xs-touch-state">off</span>
+        <span class="glyph">▦</span><span id="xs-touch-state">auto</span>
+      </button>
+      <!-- OPTIONS/back tile — always visible; toggles ⚙ (open) ↔ ← (back). Last
+           in the row so it anchors the right edge in both play (alone) and debug
+           (chips fill in to its left). -->
+      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
+        <span class="label" id="xs-shell-cycle-label">⚙</span>
       </button>
     </div>
   </div>
   <div class="row touch">
-    <!-- Both grids are populated by the script below from PANES. The right
-         column (.actions) is identical on every pane — persistent muscle memory
-         for GET/INV/DESC/FIRE/BACK + the pane nav. The left grid (.pad) swaps
-         content per pane: movement on Pane 1, item/meta actions on Pane 2. -->
-    <div class="pad" id="xs-pad"></div>
+    <!-- Mirrored layout: .actions is the LEFT column, .pad (D-pad) the RIGHT.
+         DOM order matches column order (actions then pad) so the grid keeps both
+         in row 1 — don't reorder without also swapping the grid tracks. Both are
+         populated by the script below from PANES. The action column is identical
+         on every pane (persistent muscle memory for BACK/GET/DESC/FIRE/INV + the
+         pane nav); the D-pad swaps content per pane. -->
     <div class="actions" id="xs-actions"></div>
+    <div class="pad" id="xs-pad"></div>
   </div>
 </div>
 
@@ -566,21 +590,34 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   // only the left 3x3 swaps content. Turn-based, so giving up the D-pad on a
   // non-movement pane is fine — one nav tap restores it. ---
   const ESC = '\u001b';
-  const RIGHT_COLUMN = [
-    { key: 'g', glyph: 'g', label: 'GET' },
+  // The persistent action column (left side, same on every pane), 2 cols x 4
+  // rows. Esc/BACK leads so it lands top-left — with the mirrored layout that's
+  // the far top-left of the touch UI (QWERTY Esc). YES/NO and the keyset selector
+  // live in the D-pad's persistent top row now (see renderTouch); this block
+  // carries the common commands. Row-major fill (2 cols):
+  //   BACK  DESC
+  //   GET   FIRE
+  //   USE   INV
+  //   WAIT  MSG
+  const ACTION_COLUMN = [
     { key: ESC, glyph: 'esc', label: 'BACK' },
     { key: '>', glyph: '>', label: 'DESC' },
+    { key: 'g', glyph: 'g', label: 'GET' },
     { key: 'f', glyph: 'f', label: 'FIRE' },
+    { key: 'a', glyph: 'a', label: 'USE' },
     { key: 'i', glyph: 'i', label: 'INV' },
+    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    { key: 'm', glyph: 'm', label: 'MSG' },
   ];
   const PANES = [
     { // Pane 1 — movement D-pad with auto-explore at center. Directions
-      // hold-repeat; AUTO does not (one tap starts the run).
+      // hold-repeat; AUTO does not (one tap starts the run). Fills the 3-row body
+      // below the persistent YES/NO/keyset top row.
       label: 'MOVE',
       pad: [
-        { key: 'y', glyph: '↖', repeat: true }, { key: 'k', glyph: '↑', repeat: true }, { key: 'u', glyph: '↗', repeat: true },
-        { key: 'h', glyph: '←', repeat: true }, { key: 'x', glyph: 'x', label: 'AUTO' }, { key: 'l', glyph: '→', repeat: true },
-        { key: 'b', glyph: '↙', repeat: true }, { key: 'j', glyph: '↓', repeat: true }, { key: 'n', glyph: '↘', repeat: true },
+        { key: 'y', glyph: '↖', label: 'y', repeat: true }, { key: 'k', glyph: '↑', label: 'k', repeat: true }, { key: 'u', glyph: '↗', label: 'u', repeat: true },
+        { key: 'h', glyph: '←', label: 'h', repeat: true }, { key: 'x', glyph: 'x', label: 'AUTO' }, { key: 'l', glyph: '→', label: 'l', repeat: true },
+        { key: 'b', glyph: '↙', label: 'b', repeat: true }, { key: 'j', glyph: '↓', label: 'j', repeat: true }, { key: 'n', glyph: '↘', label: 'n', repeat: true },
       ],
     },
     { // Pane 2 — item & meta actions; bottom row is yes/no for game prompts.
@@ -594,11 +631,13 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     },
     { // Pane 3 — straight letter keys for menu selection (inventory, rune
       // inscription, item slots). No hold-repeat: held letters would spam picks.
-      label: 'KEYS', padCols: 4, padRows: 3,
+      // a–i fills the 3-row body under the persistent top row (j–l dropped when
+      // the top row went persistent; revisit if menus need past i).
+      label: 'KEYS',
       pad: [
-        { key: 'a', glyph: 'a' }, { key: 'b', glyph: 'b' }, { key: 'c', glyph: 'c' }, { key: 'd', glyph: 'd' },
-        { key: 'e', glyph: 'e' }, { key: 'f', glyph: 'f' }, { key: 'g', glyph: 'g' }, { key: 'h', glyph: 'h' },
-        { key: 'i', glyph: 'i' }, { key: 'j', glyph: 'j' }, { key: 'k', glyph: 'k' }, { key: 'l', glyph: 'l' },
+        { key: 'a', glyph: 'a' }, { key: 'b', glyph: 'b' }, { key: 'c', glyph: 'c' },
+        { key: 'd', glyph: 'd' }, { key: 'e', glyph: 'e' }, { key: 'f', glyph: 'f' },
+        { key: 'g', glyph: 'g' }, { key: 'h', glyph: 'h' }, { key: 'i', glyph: 'i' },
       ],
     },
   ];
@@ -617,17 +656,9 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     return btn;
   }
 
-  function renderTouch() {
-    const padEl = $('xs-pad'), actEl = $('xs-actions');
-    const pane = PANES[currentPane];
-    padEl.innerHTML = ''; actEl.innerHTML = '';
-    // Per-pane grid override (KEYS is denser); clearing lets the CSS default win.
-    padEl.style.gridTemplateColumns = pane.padCols ? `repeat(${pane.padCols}, 1fr)` : '';
-    padEl.style.gridTemplateRows = pane.padRows ? `repeat(${pane.padRows}, 1fr)` : '';
-    for (const spec of pane.pad) padEl.appendChild(tileFor(spec));
-    for (const spec of RIGHT_COLUMN) actEl.appendChild(tileFor(spec));
-    // Nav tile at slot 6 — swaps panes, doesn't send a key, so it's not routed
-    // through bindButton (no hold-repeat). Label names the destination.
+  // Keyset selector (pane switcher) — swaps panes, sends no key, so it's not
+  // routed through bindButton (no hold-repeat). Label names the target pane.
+  function makeNav() {
     const nav = document.createElement('button');
     nav.className = 'nav';
     nav.innerHTML = `<span class="label">${PANES[(currentPane + 1) % PANES.length].label + ' →'}</span>`;
@@ -638,7 +669,26 @@ body.force-touch #xsofy-shell .touch { display: grid; }
       renderTouch();
     });
     nav.addEventListener('mousedown', (e) => e.preventDefault());
-    actEl.appendChild(nav);
+    return nav;
+  }
+
+  function renderTouch() {
+    const padEl = $('xs-pad'), actEl = $('xs-actions');
+    const pane = PANES[currentPane];
+    padEl.innerHTML = ''; actEl.innerHTML = '';
+    // Per-pane grid override (KEYS is denser); clearing lets the CSS default win.
+    padEl.style.gridTemplateColumns = pane.padCols ? `repeat(${pane.padCols}, 1fr)` : '';
+    padEl.style.gridTemplateRows = pane.padRows ? `repeat(${pane.padRows}, 1fr)` : '';
+    // Persistent top row above the D-pad: YES / NO / keyset-selector. Same on
+    // every pane, so game prompts and pane-switching stay one tap away no matter
+    // which pane's body is showing below.
+    padEl.appendChild(tileFor({ key: 'y', glyph: 'y', label: 'YES' }));
+    padEl.appendChild(tileFor({ key: 'n', glyph: 'n', label: 'NO' }));
+    padEl.appendChild(makeNav());
+    // Swappable body (rows 2-4): the current pane's tiles.
+    for (const spec of pane.pad) padEl.appendChild(tileFor(spec));
+    // Left action column — all key tiles now (NAV lives in the pad top row).
+    for (const spec of ACTION_COLUMN) actEl.appendChild(tileFor(spec));
   }
 
   // Hold-to-repeat for opted-in tiles: after REPEAT_INITIAL ms, re-fire every
@@ -711,7 +761,9 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     // Capability forces it on (a touch device can't turn off its only input
     // method); the toggle only matters on fine-pointer devices.
     document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
-    if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? 'on' : 'off';
+    // "force" vs "auto": forced pins the touch UI on; unforced ("auto") falls
+    // back to pointer-capability detection (coarse => shown), not truly off.
+    if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? 'force' : 'auto';
     if (touchToggleEl) touchToggleEl.style.opacity = forceTouchEnabled ? '' : '0.5';
   }
   paintForceTouchState();
