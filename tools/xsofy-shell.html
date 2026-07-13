@@ -203,6 +203,20 @@ body.force-touch #xsofy-shell .seg-switch { display: inline-flex; }
 #xsofy-shell.show-settings .touch { display: none !important; }
 #xsofy-shell .settings .font-cycle { flex: 0 0 auto; }
 #xsofy-shell .settings .seg-label { color: var(--bar-dim); font-size: 10px; }
+/* Landscape a·z bottom sheet — in the landscape rail a 10-wide keyboard
+   compresses into ~25px slivers, so the a·z segment opens it FULL-WIDTH across
+   the bottom instead. position:fixed escapes the rail while the element stays
+   inside #xsofy-shell, so the button/theme rules still apply. The rail keeps
+   the PLAY grid while the sheet is up — movement stays under the thumb during
+   menus. Close = tap the play/config segment. */
+#xsofy-shell .kbd-sheet { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; grid-template-columns: repeat(20, 1fr); gap: 0.15rem; grid-auto-rows: 44px; padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom)); background: var(--bar-bg); border-top: 1px solid var(--bar-rule); }
+#xsofy-shell .kbd-sheet.open { display: grid; }
+/* Landscape status strip — the diag chips (t/perf/dims) don't work crammed next
+   to the switcher in the rail, so landscape reserves a thin band under the
+   terminal and the chips reparent into it (placeStats). The a·z sheet may
+   cover it (z 30 > 20). Hidden outside the landscape-rail mode; the future
+   title/quest wiring can share it. */
+#xsofy-shell .status-strip { display: none; }
 /* Hold-to-repeat is a touch affordance — desktop keyboards repeat at the OS
    level, so hide the toggle on a fine pointer (still shown under force-touch). */
 @media (hover: hover) and (pointer: fine) {
@@ -287,7 +301,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
    media queries match). */
 @media (orientation: landscape) and (max-height: 500px) {
   body.force-touch              { flex-direction: row; }
-  body.force-touch #app         { height: 100dvh; flex: 1 1 auto; min-width: 0; }
+  /* 22px shaved off the terminal for the status strip below it. */
+  body.force-touch #app         { height: calc(100dvh - 22px); flex: 1 1 auto; min-width: 0; }
+  body.force-touch #xsofy-shell .status-strip { display: flex; position: fixed; left: 0; right: 30%; bottom: 0; height: 22px; z-index: 20; align-items: center; gap: 0.6rem; padding: 0 0.5rem; background: var(--bar-bg); border-top: 1px solid var(--bar-rule); font-size: 10px; }
+  /* Stats hug the right edge; the left side is reserved for informational
+     content (title/quest wiring, later). */
+  body.force-touch #xsofy-shell .status-strip .stats { margin-left: auto; }
   body.force-touch #xsofy-shell {
     flex: 0 0 30%;
     height: 100dvh;
@@ -319,7 +338,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
          adds the perf stats + option chips to its left. Tier classes gate each
          item, so it's just ⚙ in play. -->
     <div class="debug-row">
-      <span class="stats">
+      <span class="stats" id="xs-stats">
         <span class="diag-only stat-hidden"><span class="k">t</span><span id="xs-turn">·</span></span>
         <span class="diag-only stat-hidden" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
         <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
@@ -355,6 +374,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
       <span class="glyph">▦</span><span class="seg-label">touch</span><span id="xs-touch-state">auto</span>
     </button>
   </div>
+  <!-- Landscape-only a·z bottom sheet; renderTouch fills it when the a·z
+       segment is active in the landscape rail mode. Empty otherwise. -->
+  <div class="kbd-sheet" id="xs-kbd-sheet"></div>
+  <!-- Landscape-only status strip under the terminal; placeStats reparents the
+       diag chips (#xs-stats) here in landscape-rail mode. -->
+  <div class="status-strip" id="xs-status-strip"></div>
 </div>
 
 <script>
@@ -624,6 +649,40 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // offset that produces the iPhone home/bottom-row stagger.
   const kbd = (k) => ({ key: k, glyph: k, span: 2, cls: 'kbd' });
   const spacer = (n) => ({ spacer: n });
+  // Landscape PLAY variants (?pland=a|b) — the ~30% landscape rail fits 4 key
+  // columns, not 6, so the pane carries a landscape-specific 6-row tile list.
+  // The grid is an 8-UNIT fine grid: a regular key spans 2 (s2 defaults that),
+  // so a row holds 4 full keys — or trades one for two thin span-1 companions,
+  // which is how row 1 packs esc/m/i + thin ⏎ and ? into four slots. Both
+  // variants cut the same 2 of portrait's 26 keys: b/c, the only tiles with no
+  // game action (they stay reachable on the a-z pane). 'a': pad right-middle,
+  // action column left, y/n/wait beneath the pad. 'b': pad in the BOTTOM-RIGHT
+  // corner (the zero-reach thumb home), YES/NO/WAIT beside it, actions
+  // clustered on top.
+  const s2 = (t) => (t.span ? t : { ...t, span: 2 });
+  const LAND_ROW1 = [
+    { key: ESC, glyph: 'esc', label: 'BACK' },  { key: 'm', glyph: 'm', label: 'MSG' },   { key: 'i', glyph: 'i', label: 'INV' },   { key: '\r', glyph: '⏎', span: 1, cls: 'kbd' }, { key: '?', glyph: '?', span: 1, cls: 'kbd' },
+  ];
+  const LAND_PLAY_TILES = {
+    a: [
+      ...LAND_ROW1,
+      { key: 'a', glyph: 'a', label: 'USE' },     { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'g', glyph: 'g', label: 'GET' },
+      { key: 'd', glyph: 'd', label: 'DROP' },    mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      { key: '<', glyph: '<', label: 'ASC' },     mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      { key: '>', glyph: '>', label: 'DESC' },    mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+      { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'y', glyph: 'y', label: 'YES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    ],
+    b: [
+      ...LAND_ROW1,
+      { key: 'a', glyph: 'a', label: 'USE' },     { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: '<', glyph: '<', label: 'ASC' },   { key: '>', glyph: '>', label: 'DESC' },
+      { key: 'd', glyph: 'd', label: 'DROP' },    { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'g', glyph: 'g', label: 'GET' },   { key: 'r', glyph: 'r', label: 'RUNES' },
+      { key: 'y', glyph: 'y', label: 'YES' },     mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      { key: 'n', glyph: 'n', label: 'NO' },      mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      { key: '.', glyph: '·', label: 'WAIT', repeat: true }, mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+    ],
+  };
+  const plandVariant = new URLSearchParams(location.search).get('pland') || 'a';
+  const LAND_PLAY = { cols: 8, tiles: (LAND_PLAY_TILES[plandVariant] || LAND_PLAY_TILES.a).map(s2) };
   // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
   // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
   // a-z is a 20-col QWERTY keyboard for menu selection (xsofy menus label items
@@ -631,19 +690,30 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // menu). Both are 5 rows, so button HEIGHT matches on a swap — only the key
   // widths differ (the keyboard is deliberately its own shape).
   const PANES = [
-    { label: 'PLAY', cols: 6, tiles: [
+    { label: 'PLAY', cols: 6, land: LAND_PLAY, tiles: [
       // 5 rows (same height as the a-z keyboard pane). D-pad centered on the
       // right (rows 2-4, cols 4-6) with y/n/wait below it (row 5). esc anchors
       // top-left; col 2 runs the menu letters a-e in order (a/d/e double as
       // their game actions, b/c are pure menu picks); col 3 stacks fire/get,
       // then the stair pair, then runes. Remaining cells are muted placeholders.
       { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '\r', glyph: '⏎', label: 'ENTER' }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
-      null,                                      { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      { key: '?', glyph: '?', label: 'HELP' },   { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
       null,                                      { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
       null,                                      { key: 'd', glyph: 'd', label: 'DROP' },  { key: '>', glyph: '>', label: 'DESC' },  mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
       null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
     ]},
-    { label: 'a–z', cols: 20, tiles: [
+    { label: 'a–z', cols: 20,
+      // Landscape sheet variant: 4 rows to give the game back a strip — the
+      // SPACE row is dropped (menus confirm on enter/letters), esc moves up
+      // into the bottom row's leading stagger slot (mirroring ⌫), and ⏎ rides
+      // as a thin span-1 companion right of 'l'.
+      land: { cols: 20, tiles: [
+        ...'1234567890'.split('').map(kbd),
+        ...'qwertyuiop'.split('').map(kbd),
+        { key: '?', glyph: '?', span: 1, cls: 'kbd' }, ...'asdfghjkl'.split('').map(kbd), { key: '\r', glyph: '⏎', span: 1, cls: 'kbd' },
+        { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+      ]},
+      tiles: [
       // iPhone-ish QWERTY on a fine 20-col grid (each key spans 2 units = 10 per
       // row). 5 rows to match the MOVE pane's height (no vertical jump on swap).
       // Numbers row on top; home + bottom rows stagger via leading/trailing
@@ -655,7 +725,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
       ...'qwertyuiop'.split('').map(kbd),
       spacer(1), ...'asdfghjkl'.split('').map(kbd), spacer(1),
       spacer(3), ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
-      { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, { key: ' ', glyph: '␣', label: 'SPACE', span: 14 }, { key: '\r', glyph: '⏎', label: 'ENTER', span: 3 },
+      { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, { key: ' ', glyph: '␣', label: 'SPACE', span: 11 }, { key: '?', glyph: '?', label: 'HELP', span: 3 }, { key: '\r', glyph: '⏎', label: 'ENTER', span: 3 },
     ]},
   ];
   let currentPane = 0;
@@ -685,37 +755,76 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     segSetEl?.classList.toggle('active', currentPane === 2);
   }
   // Pane 2 = the settings surface (not a tile grid): show it in the key-pane
-  // area via .show-settings and skip renderTouch (PANES has no [2]).
+  // area via .show-settings; renderTouch still runs to close a lingering sheet.
   function setPane(idx) {
     if (idx === currentPane) return;
     stopHoldRepeat();  // kill any in-flight repeat from a tile we're leaving
     currentPane = idx;
     document.getElementById('xsofy-shell').classList.toggle('show-settings', idx === 2);
-    if (idx !== 2) renderTouch();
+    renderTouch();
     updateSwitcher();
   }
   segMoveEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(0); });
-  segAzEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(1); });
+  // In the landscape rail the a·z segment fronts a modal overlay (the bottom
+  // sheet), so a second tap dismisses it back to play — unlike portrait, where
+  // a·z is a regular pane and the segment keeps plain segmented behavior.
+  segAzEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (currentPane === 1 && isLandRail()) setPane(0); else setPane(1);
+  });
   segSetEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(2); });
   segMoveEl?.addEventListener('mousedown', (e) => e.preventDefault());
   segAzEl?.addEventListener('mousedown', (e) => e.preventDefault());
   segSetEl?.addEventListener('mousedown', (e) => e.preventDefault());
 
-  function renderTouch() {
-    const touchEl = $('xs-touch');
-    const pane = PANES[currentPane];
-    touchEl.innerHTML = '';
-    touchEl.style.gridTemplateColumns = `repeat(${pane.cols || 6}, 1fr)`;
-    for (const spec of pane.tiles) {
+  // Landscape rail mode: the phone-landscape split (terminal left, ~30% rail
+  // right) from the max-height CSS block below, active only while the touch UI
+  // is (body.force-touch — set for any coarse pointer). Panes render their
+  // `land` variant there; the a-z pane escapes the rail into the bottom sheet.
+  const landRailMq = matchMedia('(orientation: landscape) and (max-height: 500px)');
+  const isLandRail = () => landRailMq.matches && document.body.classList.contains('force-touch');
+  const layoutFor = (pane) => (isLandRail() && pane.land) ? pane.land : pane;
+
+  function renderInto(el, layout) {
+    el.innerHTML = '';
+    el.style.gridTemplateColumns = `repeat(${layout.cols || 6}, 1fr)`;
+    for (const spec of layout.tiles) {
       if (spec && spec.spacer) {  // invisible offset for the keyboard stagger
         const s = document.createElement('div');
         s.style.gridColumn = 'span ' + spec.spacer;
-        touchEl.appendChild(s);
+        el.appendChild(s);
         continue;
       }
-      touchEl.appendChild(tileFor(spec));  // tileFor turns null into a filler
+      el.appendChild(tileFor(spec));  // tileFor turns null into a filler
     }
   }
+
+  // The diag chips live in the rail's info row in portrait but in the
+  // status strip under the terminal in landscape (they don't fit beside the
+  // switcher there). appendChild MOVES the node, so this is idempotent.
+  function placeStats() {
+    const stats = $('xs-stats');
+    if (!stats) return;
+    if (isLandRail()) $('xs-status-strip').appendChild(stats);
+    else document.querySelector('#xsofy-shell .debug-row')?.insertBefore(stats, $('xs-layer-switch'));
+  }
+
+  function renderTouch() {
+    const touchEl = $('xs-touch'), sheetEl = $('xs-kbd-sheet');
+    const azSheet = isLandRail() && currentPane === 1;
+    sheetEl.classList.toggle('open', azSheet);
+    if (azSheet) {
+      renderInto(sheetEl, layoutFor(PANES[1]));
+      renderInto(touchEl, layoutFor(PANES[0]));  // rail keeps movement under the thumb
+    } else {
+      sheetEl.innerHTML = '';
+      if (currentPane !== 2) renderInto(touchEl, layoutFor(PANES[currentPane]));
+    }
+    placeStats();
+  }
+  // Rotate/split-mode flips re-render the grid (a rotate used to only refit the
+  // terminal, leaving the portrait tile list overflowing the landscape rail).
+  landRailMq.addEventListener('change', () => { renderTouch(); updateSwitcher(); });
 
   // Hold-to-repeat for opted-in tiles: after REPEAT_INITIAL ms, re-fire every
   // REPEAT_INTERVAL ms until pointerup/cancel/leave.
@@ -797,6 +906,11 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     // back to pointer-capability detection (coarse => shown), not truly off.
     if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? 'force' : 'auto';
     if (touchToggleEl) touchToggleEl.style.opacity = forceTouchEnabled ? '' : '0.5';
+    // The class feeds isLandRail (rail vs portrait tile lists) and lands after
+    // the first renderTouch on boot — re-render so a landscape boot picks the
+    // rail variant (and the desktop toggle swaps layouts live).
+    renderTouch();
+    updateSwitcher();
   }
   paintForceTouchState();
   touchToggleEl?.addEventListener('pointerdown', (e) => {
