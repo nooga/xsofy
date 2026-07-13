@@ -14,8 +14,14 @@ if [ -f .let-go-version ]; then
   letgo="$(awk '!/^[[:space:]]*(#|$)/ {print $1; exit}' .let-go-version)"
 fi
 
+# Release version for bug reports (#44): nearest v* tag. Exactly the tag on a
+# tagged Pages build (v0.0.2), tag-distance-sha on dev builds. --always keeps
+# shallow/tagless clones (CI fetch-depth) from failing the build.
+version="$(git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo unknown)"
+
 cat > "$dist/build-info.json" <<JSON
 {
+  "version": "$version",
   "xsofy": "$(git rev-parse HEAD)",
   "let-go": "$letgo",
   "date": "$(date -u +%Y-%m-%d)"
