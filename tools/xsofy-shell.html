@@ -23,6 +23,12 @@
      Fairfax HD has no Reserved Font Name, so the subset keeps the family name.
      License: tools/fonts/LICENSE-FairfaxHD-OFL.txt. -->
 <style>
+/* Own the color scheme so iOS Safari doesn't dark-mode-transform our fixed dark
+   terminal (title runes + lighting tints render wrong under Dark Mode + the
+   @font-face below — a documented Safari combination, #135 finding F3). The
+   shell is always dark, so declare it; mirrored as a <meta> at boot (below) for
+   the earliest race-free signal. */
+:root { color-scheme: dark; }
 @font-face {
   font-family: 'Fairfax HD';
   font-style: normal;
@@ -43,9 +49,119 @@
    font on landscape/desktop, where no cap applies. */
 #app { min-height: 0; }
 @media (orientation: portrait) { body #app { flex: 0 0 auto; height: 55dvh; } }
+/* force-touch caps: a coarse-pointer device (or the dev toggle) reveals the
+   touch UI in every orientation, so the terminal has to yield room the same way
+   portrait does. Landscape gets a taller slice than portrait's 55dvh. The
+   .force-touch class is set on <body> by the plumbing below; it also retargets
+   #app, which is #xsofy-shell's sibling, not a descendant. */
+body.force-touch #app { flex: 0 0 auto; height: 55dvh; }
+@media (orientation: landscape) {
+  body.force-touch #app { flex: 0 0 auto; height: calc(100vh - 260px); }
+}
+
+/* Client shell scaffold. Blank structural host mounted as #app's flex sibling
+   (the same stacking the slot-model #shell-bottom had): the containers, the
+   orientation/force-touch layout hooks, and the dev-tier class contract — but
+   NO chrome. The info/touch rows are empty and the theming, buttons, and
+   game-event wiring are a follow-up slice that appends into this structure
+   without restructuring it. */
+#xsofy-shell {
+  display: flex;
+  flex-direction: column;
+  /* Landscape: size to content (an empty row → zero height, invisible).
+     Portrait/force-touch override to flex:1 so the shell absorbs the space
+     under the capped terminal — what #shell-bottom did under the slot model. */
+  flex: 0 0 auto;
+  min-height: 0;
+}
+@media (orientation: portrait) {
+  #xsofy-shell { flex: 1 1 auto; overflow: auto; }
+}
+body.force-touch #xsofy-shell { flex: 1 1 auto; overflow: auto; }
+
+#xsofy-shell .row { display: flex; flex-shrink: 0; }
+
+/* Touch container — structural grid (D-pad left, action column right) plus the
+   orientation/force-touch display switch that IS the touch-visibility hook. The
+   layout applies unconditionally (harmless while display:none); only the
+   none↔grid switch is conditional. .pad/.actions are populated by the
+   controls slice. */
+#xsofy-shell .touch {
+  display: none;
+  grid-template-columns: 3fr 2fr;
+  grid-template-rows: 1fr;
+  flex: 1;
+  min-height: 0;
+}
+@media (orientation: portrait) { #xsofy-shell .touch { display: grid; } }
+body.force-touch #xsofy-shell .touch { display: grid; }
+/* Landscape force-touch — constrain the D-pad to a usable width instead of
+   letting it span a 1024+px viewport, and center it. */
+@media (orientation: landscape) {
+  body.force-touch #xsofy-shell .touch {
+    max-width: 560px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    flex: 0 0 auto;
+  }
+}
+#xsofy-shell .pad,
+#xsofy-shell .actions {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* Explicit 100% breaks the circular sizing: without it, 1fr rows resolve
+     against content size, which the rows themselves determine — so they
+     collapse. */
+  height: 100%;
+}
+#xsofy-shell .pad { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
+#xsofy-shell .actions { grid-template-columns: 1fr 1fr; grid-template-rows: repeat(3, 1fr); }
+
+/* Dev-tier visibility contract. Two axes: the OPTIONS tile reveals player
+   options at runtime (mode-debug), while diagnostics (mode-urldiag) and dev
+   tooling (mode-dev) are URL-gated only — set here now so the controls slice
+   only has to add tier-classed elements, not re-plumb the gating. Nothing
+   carries these classes yet, so every rule is inert until then. */
+#xsofy-shell:not(.mode-debug)   .debug-only { display: none; }
+#xsofy-shell:not(.mode-urldiag) .diag-only  { display: none; }
+#xsofy-shell:not(.mode-dev)     .dev-only   { display: none; }
+#xsofy-shell.mode-debug .play-only          { display: none; }
 </style>
+
+<!-- Blank scaffold: empty info + touch rows, mounted as #app's sibling. The
+     controls slice appends the title/quest/diagnostics chips into .info and the
+     D-pad/action tiles into .pad/.actions — the structure and IDs are here so
+     that slice is purely additive. -->
+<div id="xsofy-shell" class="mode-play">
+  <div class="row info"></div>
+  <div class="row touch">
+    <div class="pad" id="xs-pad"></div>
+    <div class="actions" id="xs-actions"></div>
+  </div>
+</div>
+
 <script>
 (function () {
+  // --- Mobile viewport + color scheme. The -w-shell none frame's <head> omits
+  // both (let-go's host.html carried them under the slot model); inject them so
+  // mobile Safari scales correctly and owns its (fixed dark) appearance rather
+  // than dark-mode-transforming our colors. Guarded so a frame that already
+  // sets them wins. ---
+  if (!document.querySelector('meta[name="viewport"]')) {
+    const m = document.createElement('meta');
+    m.name = 'viewport';
+    m.content = 'width=device-width, initial-scale=1, viewport-fit=cover';
+    document.head.appendChild(m);
+  }
+  if (!document.querySelector('meta[name="color-scheme"]')) {
+    const cs = document.createElement('meta');
+    cs.name = 'color-scheme';
+    cs.content = 'dark';
+    document.head.appendChild(cs);
+  }
+
   const termEl = document.getElementById('app');
   // ?font=system bypasses the bundled rune face and renders in the platform
   // mono — a debug/preference escape hatch. Runes (U+16A0–16FF) then fall back
@@ -132,6 +248,37 @@
   }
   window.addEventListener('resize', refit);
   window.addEventListener('orientationchange', refit);
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', refit);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', refit);
+    // The URL bar can slide without a resize event — its show/hide arrives as a
+    // visualViewport scroll. Re-letterbox on it so the grid tracks the bar.
+    window.visualViewport.addEventListener('scroll', refit);
+  }
+
+  // --- Force-touch detection (plumbing; the toggle UI is a later slice). A
+  // coarse primary pointer (phone/tablet) needs the on-screen controls in every
+  // orientation, so drive body.force-touch from capability OR a persisted dev
+  // override. The class lives on <body> because it also retargets #app (the
+  // terminal), which is #xsofy-shell's sibling, not a descendant. ---
+  const coarsePointer = !!window.matchMedia?.('(pointer: coarse)')?.matches;
+  const forceTouchEnabled = localStorage.getItem('xsofy/force-touch') === '1';
+  document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
+
+  // --- Dev-tier gating (plumbing; the runtime OPTIONS toggle is a later slice).
+  // Seed the tier from ?mode= (debug|dev → diagnostics/dev tooling) or the last
+  // persisted state, and stamp the mode classes onto #xsofy-shell so the tier-
+  // gated CSS above has its contract. mode-play is the permanent base; dev is a
+  // strict superset of debug. Nothing is tier-classed yet, so this is inert
+  // until the controls slice adds gated elements. ---
+  const shellRoot = document.getElementById('xsofy-shell');
+  const urlMode = new URLSearchParams(location.search).get('mode');
+  const devMode = urlMode === 'dev';
+  let shellState = localStorage.getItem('xsofy/shell-state');
+  if (urlMode === 'dev' || urlMode === 'debug') shellState = 'debug';
+  else if (urlMode === 'play') shellState = 'play';
+  else if (shellState !== 'debug') shellState = 'play';
+  shellRoot.classList.toggle('mode-debug', shellState === 'debug' || devMode);
+  shellRoot.classList.toggle('mode-dev', devMode);
+  shellRoot.classList.toggle('mode-urldiag', urlMode === 'debug' || urlMode === 'dev');
 })();
 </script>
