@@ -29,6 +29,11 @@ wasm: ## Build the WASM web app into $(DIST): client-owned shell + COI bridge
 	# and the js/url-param host seam (#339) that carries ?seed=/?replay= into the
 	# worker natively.
 	$(LG) -w $(DIST) -w-shell none main.lg
+	# Guard: a stale PATH `lg` (pre let-go#378) emits the old #terminal host
+	# mount; the injected shell then dereferences a missing #app and the bundle
+	# never boots. Fail here instead of shipping it (see the .let-go-version
+	# NOTE — CI checks out the pin, local builds use whatever `lg` is on PATH).
+	@grep -q 'id="app"' $(DIST)/index.html || { echo 'wasm: $(DIST)/index.html has no #app mount — stale lg builder? (.let-go-version)'; exit 1; }
 	XSOFY_WASM_INDEX=$(DIST)/index.html $(LG) tools/inject_shell.lg
 	# COI bounded-retry still patches the core glue: it drives the crossOriginIsolated
 	# lifecycle, which the shell contract (window.LetGoHost) and a static host (e.g.
