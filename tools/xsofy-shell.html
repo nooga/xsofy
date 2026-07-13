@@ -197,14 +197,27 @@ body.force-touch #xsofy-shell .touch { display: grid; }
 #xsofy-shell .seg-switch { display: none; flex: 0 0 auto; align-items: stretch; min-height: 2.2rem; border: 1px solid var(--bar-rule); border-radius: 5px; overflow: hidden; }
 @media (orientation: portrait) { #xsofy-shell .seg-switch { display: inline-flex; } }
 body.force-touch #xsofy-shell .seg-switch { display: inline-flex; }
+/* Dev tier gets the switcher even without touch: config (build chip, ▦ force-
+   touch) must stay reachable on a plain desktop — and ▦ must stay recoverable
+   after toggling the touch layout off. */
+#xsofy-shell.mode-dev .seg-switch { display: inline-flex; }
 #xsofy-shell .seg-switch .seg { min-height: 0; min-width: 0; margin: 0; padding: 0 0.6rem; border: 0; border-radius: 0; background: transparent; color: var(--bar-dim); font-size: 11px; letter-spacing: 0.04em; }
 #xsofy-shell .seg-switch .seg + .seg { border-left: 1px solid var(--bar-rule); }
 #xsofy-shell .seg-switch .seg.active { background: rgba(245, 176, 65, 0.18); color: var(--bar-accent); }
 #xsofy-shell .seg-switch .seg-icon { font-size: 13px; padding: 0 0.5rem; }
 /* Settings pane — shares the key-pane area; shown only when the ⚙ segment is
    active (body toggles .show-settings). Chips wrap from the top-left. */
-#xsofy-shell .settings { display: none; position: relative; flex-wrap: wrap; align-content: flex-start; justify-content: flex-end; gap: 0.5rem; padding: 0.7rem 0.6rem; flex: 1; min-height: 0; }
-#xsofy-shell.show-settings .settings { display: flex; }
+/* Bottom padding reserves the two build-chip lines: the chip is absolutely
+   positioned at the pane's bottom edge, and in a content-sized pane (desktop
+   dev) it would otherwise overlap the chips. */
+#xsofy-shell .settings { display: none; position: relative; flex-wrap: wrap; align-content: flex-start; justify-content: flex-end; gap: 0.5rem; padding: 0.7rem 0.6rem calc(0.7rem + 30px); flex: 1; min-height: 0; }
+/* Same visibility gate as the switcher (portrait | force-touch | dev) — an
+   unconditional show left the pane rendering into a collapsed desktop bar
+   after ▦ toggled the touch layout off (chips + build chip piled up bottom-
+   right as residue). */
+@media (orientation: portrait) { #xsofy-shell.show-settings .settings { display: flex; } }
+body.force-touch #xsofy-shell.show-settings .settings { display: flex; }
+#xsofy-shell.mode-dev.show-settings .settings { display: flex; }
 #xsofy-shell.show-settings .touch { display: none !important; }
 #xsofy-shell .settings .font-cycle { flex: 0 0 auto; }
 #xsofy-shell .settings .seg-label { color: var(--bar-dim); font-size: 10px; }
@@ -349,8 +362,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
      that slice is purely additive. -->
 <div id="xsofy-shell" class="mode-play">
   <div class="row info">
-    <span class="title play-only" id="xs-title">—</span>
-    <span class="quest play-only" id="xs-quest"></span>
+    <!-- Title/quest are tier-independent: the debug tier used to hide them in
+         favor of the build chip sharing this cell, but the chip lives in the
+         config pane now — dev/debug sessions kept losing the title (and the
+         version placeholder) for no benefit. -->
+    <span class="title" id="xs-title">—</span>
+    <span class="quest" id="xs-quest"></span>
     <!-- Right controls: ONE horizontal row spanning both text rows (grid-row
          1/3), vertically centered, so the buttons get the bar's full height
          instead of two half-height stacks. Play shows just the ⚙ tile; debug
