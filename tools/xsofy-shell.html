@@ -96,6 +96,11 @@ body.force-touch #xsofy-shell { flex: 1 1 auto; overflow: auto; }
 #xsofy-shell .touch {
   display: none;
   grid-template-columns: repeat(6, 1fr);
+  /* The keyboard area is a fixed slice (terminal capped at 55dvh); 1fr rows
+     pack the buttons into whatever height that slice provides rather than
+     growing the slice to fit them. Both panes are exactly 5 rows (30 cells /
+     6 cols), so the rows fill identically on each: uniform button height, no
+     size jump on swap, and the grid can never overflow into a scrollbar. */
   grid-auto-rows: 1fr;
   align-items: stretch;
   min-width: 0;
@@ -110,11 +115,9 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   }
 }
 
-/* Dev-tier visibility contract. Two axes: the OPTIONS tile reveals player
-   options at runtime (mode-debug), while diagnostics (mode-urldiag) and dev
-   tooling (mode-dev) are URL-gated only — set here now so the controls slice
-   only has to add tier-classed elements, not re-plumb the gating. Nothing
-   carries these classes yet, so every rule is inert until then. */
+/* Dev-tier visibility contract. mode-debug reveals player-visible diagnostics;
+   diagnostics (mode-urldiag) and dev tooling (mode-dev) are URL-gated only
+   (?mode=debug|dev). The mode classes are painted by applyShellState below. */
 #xsofy-shell:not(.mode-debug)   .debug-only { display: none; }
 #xsofy-shell:not(.mode-urldiag) .diag-only  { display: none; }
 #xsofy-shell:not(.mode-dev)     .dev-only   { display: none; }
@@ -140,7 +143,17 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   border-top: 1px solid var(--bar-rule);
 }
 #xsofy-shell .row { align-items: center; gap: 0.6rem; padding: 0.45rem 0.75rem; }
-#xsofy-shell .touch { gap: 0.3rem; padding: 0.5rem 0.6rem 0.7rem; }
+#xsofy-shell .touch { gap: 0.15rem; padding: 0.5rem 0.6rem 0.7rem; }
+/* Touch tiles fill their fixed grid row exactly, so a glyph-only key (a–z pane)
+   is the same height as a glyph+label key (gameplay pane) — no size jump when
+   swapping panes. Content is centered by the button's own flexbox. */
+#xsofy-shell .touch button { height: 100%; min-height: 0; }
+/* Keyboard keys (a-z pane): 10 per row won't fit a 390px phone at the 44px
+   tap-target floor (10 x 44 = 440 > 390), so relax min-width and let the fine
+   grid size them (~37px). Below the guideline, but that's what OS keyboards do
+   — the visible key is small; a finger still lands it. */
+#xsofy-shell .touch button.kbd { min-width: 0; padding-left: 0; padding-right: 0; }
+#xsofy-shell .touch button.kbd .glyph { font-size: 15px; }
 
 /* Two-row info bar. Single-row crammed title/quest/stats/chips into ~375px and
    lost the right half of both proper-noun strings on every phone:
@@ -171,10 +184,25 @@ body.force-touch #xsofy-shell .touch { display: grid; }
    right-aligned — one row of full-height chips instead of two half-height stacks
    (the left column keeps its two text rows). */
 #xsofy-shell .info .debug-row { grid-area: 1 / 2 / 3 / 3; justify-self: end; align-self: center; display: flex; flex-direction: row; align-items: center; gap: 0.4rem; }
-/* Options/back tile — compact icon button (⚙ / ←) pinned top-right, dashed like
-   the action grid's nav tile so it reads as chrome, not content. */
-#xsofy-shell .shell-cycle { background: rgba(245, 176, 65, 0.02); border-style: dashed; width: 2.2rem; min-height: 2.2rem; display: flex; align-items: center; justify-content: center; }
-#xsofy-shell .shell-cycle .label { color: var(--bar-accent); font-size: 1.05rem; line-height: 1; }
+/* Layer switcher — a compact segmented MOVE | a·z toggle. The active half is
+   filled amber; tapping the other half swaps the touch pane. */
+/* The switcher only makes sense when the touch UI is active — same condition as
+   .touch (portrait OR force-touch). Hidden on desktop-no-touch so there's no
+   switcher leading into panes that don't belong there (and no config trap). */
+#xsofy-shell .seg-switch { display: none; flex: 0 0 auto; align-items: stretch; min-height: 2.2rem; border: 1px solid var(--bar-rule); border-radius: 5px; overflow: hidden; }
+@media (orientation: portrait) { #xsofy-shell .seg-switch { display: inline-flex; } }
+body.force-touch #xsofy-shell .seg-switch { display: inline-flex; }
+#xsofy-shell .seg-switch .seg { min-height: 0; min-width: 0; margin: 0; padding: 0 0.6rem; border: 0; border-radius: 0; background: transparent; color: var(--bar-dim); font-size: 11px; letter-spacing: 0.04em; }
+#xsofy-shell .seg-switch .seg + .seg { border-left: 1px solid var(--bar-rule); }
+#xsofy-shell .seg-switch .seg.active { background: rgba(245, 176, 65, 0.18); color: var(--bar-accent); }
+#xsofy-shell .seg-switch .seg-icon { font-size: 13px; padding: 0 0.5rem; }
+/* Settings pane — shares the key-pane area; shown only when the ⚙ segment is
+   active (body toggles .show-settings). Chips wrap from the top-left. */
+#xsofy-shell .settings { display: none; flex-wrap: wrap; align-content: flex-start; justify-content: flex-end; gap: 0.5rem; padding: 0.7rem 0.6rem; flex: 1; min-height: 0; }
+#xsofy-shell.show-settings .settings { display: flex; }
+#xsofy-shell.show-settings .touch { display: none !important; }
+#xsofy-shell .settings .font-cycle { flex: 0 0 auto; }
+#xsofy-shell .settings .seg-label { color: var(--bar-dim); font-size: 10px; }
 /* Hold-to-repeat is a touch affordance — desktop keyboards repeat at the OS
    level, so hide the toggle on a fine pointer (still shown under force-touch). */
 @media (hover: hover) and (pointer: fine) {
@@ -220,17 +248,14 @@ body.force-touch #xsofy-shell .touch { display: grid; }
    - fill (default): same amber hue, more filled — the 3x3 reads as one solid pad.
    - cool: a subtle slate hue shift — movement as its own navigational zone.
    - off: no treatment (baseline). */
-body.dpad-fill #xsofy-shell button.dpad { background: rgba(245, 176, 65, 0.13); border-color: rgba(245, 176, 65, 0.30); }
+body.dpad-fill #xsofy-shell button.dpad { background: rgba(245, 176, 65, 0.22); border-color: rgba(245, 176, 65, 0.50); }
+body.dpad-fill #xsofy-shell button.dpad .glyph { color: #ffcf7a; }
 body.dpad-cool #xsofy-shell button.dpad { background: rgba(126, 166, 208, 0.09); border-color: rgba(126, 166, 208, 0.28); }
 body.dpad-cool #xsofy-shell button.dpad .glyph { color: #a8c6e0; }
 body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55); }
 
 #xsofy-shell button .glyph { font-size: 16px; color: var(--bar-accent); }
 #xsofy-shell button .label { font-size: 10px; color: var(--bar-dim); letter-spacing: 0.05em; margin-top: 2px; }
-/* Pane-cycle tile — dashed so the swap affordance reads as chrome, not an action. */
-#xsofy-shell button.nav { background: rgba(245, 176, 65, 0.02); border-style: dashed; }
-#xsofy-shell button.nav .glyph { font-size: 13px; letter-spacing: 0.15em; color: var(--bar-fg); }
-#xsofy-shell button.nav .label { color: var(--bar-accent); }
 /* Empty slot in a pane — holds grid alignment without a tappable target. */
 /* Empty grid slots: a disabled button-shaped ghost (fills the cell like a real
    tile, but muted and non-tappable) so the grid structure reads clearly. */
@@ -262,10 +287,10 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
    media queries match). */
 @media (orientation: landscape) and (max-height: 500px) {
   body.force-touch              { flex-direction: row; }
-  body.force-touch #app         { height: 100vh; flex: 1 1 auto; min-width: 0; }
+  body.force-touch #app         { height: 100dvh; flex: 1 1 auto; min-width: 0; }
   body.force-touch #xsofy-shell {
     flex: 0 0 30%;
-    height: 100vh;
+    height: 100dvh;
     overflow: auto;
     border-top: none;
     border-left: 1px solid var(--bar-rule);
@@ -303,29 +328,33 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
         <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
         <span class="diag-only stat-hidden" id="xs-dims"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
       </span>
-      <!-- Player options: font size = accessibility; hold-to-repeat is a touch
-           affordance (.touch-only) — hidden on desktop, where the OS handles it. -->
-      <button class="font-cycle debug-only touch-only" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
-        <span class="glyph">↻</span><span id="xs-repeat-state">on</span>
-      </button>
-      <button class="font-cycle debug-only" id="xs-font-cycle" title="Cycle char size">
-        <span class="glyph">Aa</span><span id="xs-font-px">22</span>
-      </button>
-      <!-- Dev tooling (?mode=dev only): force the phone touch UI visible on
-           desktop/tablet-landscape for testing — not a player pref. -->
-      <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
-        <span class="glyph">▦</span><span id="xs-touch-state">auto</span>
-      </button>
-      <!-- OPTIONS/back tile — always visible; toggles ⚙ (open) ↔ ← (back). Last
-           in the row so it anchors the right edge in both play (alone) and debug
-           (chips fill in to its left). -->
-      <button class="font-cycle shell-cycle" id="xs-shell-cycle" title="Options">
-        <span class="label" id="xs-shell-cycle-label">⚙</span>
-      </button>
+      <!-- Layer switcher — 3-segment MOVE | a·z | ⚙, anchored far right. MOVE/a·z
+           swap the touch pane; ⚙ opens the settings pane (below) where the dev/
+           player toggles now live, freeing the top bar. Always visible; one
+           control in a fixed spot across panes and orientations. -->
+      <div class="seg-switch" id="xs-layer-switch" role="group" aria-label="Touch layer">
+        <button class="seg" id="xs-seg-set" title="Settings" aria-label="Settings">config</button>
+        <button class="seg" id="xs-seg-az" title="a–z keyboard">a·z</button>
+        <button class="seg active" id="xs-seg-move" title="Movement + action controls">play</button>
+      </div>
     </div>
   </div>
   <!-- One 6-col grid, filled per-pane by renderTouch (prototype). -->
   <div class="row touch" id="xs-touch"></div>
+  <!-- Settings pane — occupies the key-pane area when ⚙ is selected. Holds the
+       dev/player toggles that used to sit in the top bar; room to grow. Font +
+       repeat are player settings (always available); force-touch is dev-only. -->
+  <div class="row settings" id="xs-settings">
+    <button class="font-cycle" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
+      <span class="glyph">↻</span><span class="seg-label">repeat</span><span id="xs-repeat-state">on</span>
+    </button>
+    <button class="font-cycle" id="xs-font-cycle" title="Cycle char size">
+      <span class="glyph">Aa</span><span class="seg-label">size</span><span id="xs-font-px">22</span>
+    </button>
+    <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
+      <span class="glyph">▦</span><span class="seg-label">touch</span><span id="xs-touch-state">auto</span>
+    </button>
+  </div>
 </div>
 
 <script>
@@ -401,36 +430,41 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // Debounced so a drag/rotate burst settles on the final size, not an
   // intermediate one. visualViewport catches the mobile URL-bar show/hide,
   // which a window 'resize' can miss. Guarded: a resize can fire pre-onReady.
+  // Fit the terminal to #app and letterbox the sub-cell remainder — synchronous,
+  // so a discrete change (font-size tap) can fit in the same frame with no flash.
+  function applyFit() {
+    // Clear the letterbox padding before fitting so fit() measures the full
+    // box, not the previously-padded one (which would ratchet inward).
+    const host = term.element ? term.element.parentElement : null; // the frame mount (#app)
+    if (host) { host.style.padding = "0px"; }
+    try { fit.fit(); } catch (_) {}
+    // Letterbox the sub-cell fit remainder. The grid is a whole number of
+    // fixed-size cells, so up to ~one cell is left over per axis; xterm pins
+    // the grid top-left, pooling the slack on the right/bottom edges. Pad to
+    // place it: centered on X, top-aligned with a small fixed margin on Y so
+    // the grid hugs the top and the keyboard space (from the 55dvh cap) stays
+    // below, instead of the grid centering in the capped band.
+    const screen = host ? host.querySelector(".xterm-screen") : null;
+    if (host && screen) {
+      const slackX = host.clientWidth - screen.clientWidth;
+      const slackY = host.clientHeight - screen.clientHeight;
+      if (slackX > 1) {
+        const p = Math.floor(slackX / 2) + "px";
+        host.style.paddingLeft = p; host.style.paddingRight = p;
+      }
+      if (slackY > 1) {
+        const top = Math.min(8, slackY); // small top margin; the rest sits below
+        host.style.paddingTop = top + "px";
+        host.style.paddingBottom = (slackY - top) + "px";
+      }
+    }
+  }
+  // Debounced wrapper for resize/rotate bursts — settle on the final size, not an
+  // intermediate one.
   let refitPending;
   function refit() {
     clearTimeout(refitPending);
-    refitPending = setTimeout(() => {
-      // Clear the letterbox padding before fitting so fit() measures the full
-      // box, not the previously-padded one (which would ratchet inward).
-      const host = term.element ? term.element.parentElement : null; // the frame mount (#app)
-      if (host) { host.style.padding = "0px"; }
-      try { fit.fit(); } catch (_) {}
-      // Letterbox the sub-cell fit remainder. The grid is a whole number of
-      // fixed-size cells, so up to ~one cell is left over per axis; xterm pins
-      // the grid top-left, pooling the slack on the right/bottom edges. Pad to
-      // place it: centered on X, top-aligned with a small fixed margin on Y so
-      // the grid hugs the top and the keyboard space (from the 55dvh cap) stays
-      // below, instead of the grid centering in the capped band.
-      const screen = host ? host.querySelector(".xterm-screen") : null;
-      if (host && screen) {
-        const slackX = host.clientWidth - screen.clientWidth;
-        const slackY = host.clientHeight - screen.clientHeight;
-        if (slackX > 1) {
-          const p = Math.floor(slackX / 2) + "px";
-          host.style.paddingLeft = p; host.style.paddingRight = p;
-        }
-        if (slackY > 1) {
-          const top = Math.min(8, slackY); // small top margin; the rest sits below
-          host.style.paddingTop = top + "px";
-          host.style.paddingBottom = (slackY - top) + "px";
-        }
-      }
-    }, 100);
+    refitPending = setTimeout(applyFit, 100);
   }
   window.addEventListener('resize', refit);
   window.addEventListener('orientationchange', refit);
@@ -451,8 +485,16 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // pre-open fit inside refit is caught.
   function setTermFontSize(n) {
     if (typeof n !== 'number' || n < 6 || n > 64) return;
+    const cols = term.cols, rows = term.rows;
     term.options.fontSize = n;
-    refit();
+    clearTimeout(refitPending);  // cancel any pending debounced fit
+    applyFit();                  // fit now — no 100ms unfitted flash/lurch
+    // The box re-fits in-frame, but xterm reflows the OLD frame's content into
+    // the new grid — a garbled flash until the game's repaint (BEL nudge round
+    // trip) lands. Clear the viewport so the interim is clean background
+    // instead. Only when the grid actually changed: same-dims means no reflow
+    // AND no resize nudge, so a clear would sit blank until the next keypress.
+    if (term.element && (term.cols !== cols || term.rows !== rows)) term.write('\x1b[2J');
   }
 
   const $ = (id) => document.getElementById(id);
@@ -567,33 +609,53 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     btn.addEventListener('mousedown', (e) => e.preventDefault());  // don't steal terminal focus
   }
 
-  // --- Touch panes. Two+ panes share the same physical layout (3x3 left + 2x3
-  // right). The right column is identical on every pane so muscle memory works;
-  // only the left 3x3 swaps content. Turn-based, so giving up the D-pad on a
-  // non-movement pane is fine — one nav tap restores it. ---
+  // --- Touch panes. Two panes, each its own grid: MOVE (6-col: D-pad + actions)
+  // and a-z (20-col QWERTY keyboard). They share row HEIGHT (both 5 rows) so a
+  // swap doesn't resize vertically, but not width. Turn-based, so giving up the
+  // D-pad on the keyboard pane is fine — one nav tap restores it. ---
   const ESC = '\u001b';
-  // PROTOTYPE: 'NAV' = the pane-switcher tile; mv() = a repeating movement arrow.
-  const NAV = 'NAV';
+  // mv() = a repeating movement arrow (carries .dpad for the color treatment).
+  // The pane switch is a top-bar segmented control now, not an in-grid tile.
   const mv = (key, glyph, label) => ({ key, glyph, label, repeat: true, cls: 'dpad' });
-  // Each pane is a FLAT, row-major tile list (6 per row): a spec, `null` (empty),
-  // or NAV. 24+ slots means MOVE holds movement + all common actions + y/n, so we
-  // only need two panes — MOVE and a full a–z keyboard for menu selection (xsofy
-  // menus label items a..z up to max-inventory 26, so a smaller letter set can't
-  // pick a full drop menu). ESC + NAV sit in consistent spots across both panes.
+  // a-z keyboard helpers. kbd() = a QWERTY key on the fine 20-col grid: each key
+  // spans 2 units so 10 fit per row (a phone-keyboard width). The .kbd class
+  // relaxes the 44px min-width so 10 keys fit a 390px phone (~37px each, below the
+  // tap floor — the same tradeoff OS keyboards make). spacer() = an invisible
+  // offset that produces the iPhone home/bottom-row stagger.
+  const kbd = (k) => ({ key: k, glyph: k, span: 2, cls: 'kbd' });
+  const spacer = (n) => ({ spacer: n });
+  // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
+  // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
+  // a-z is a 20-col QWERTY keyboard for menu selection (xsofy menus label items
+  // a..z up to max-inventory 26, so a smaller letter set can't pick a full drop
+  // menu). Both are 5 rows, so button HEIGHT matches on a swap — only the key
+  // widths differ (the keyboard is deliberately its own shape).
   const PANES = [
-    { label: 'MOVE', cols: 6, tiles: [
-      // 5 rows (constant with the a-z pane). D-pad centered on the right (rows
-      // 2-4, cols 4-6) with y/n/wait below it (row 5). Left three cols step down
-      // toward col 3 (nearest the pad); the freed cells are muted placeholders.
-      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: '<', glyph: '<', label: 'ASC' },   { key: '>', glyph: '>', label: 'DESC' }, { key: 'm', glyph: 'm', label: 'MSG' },  { key: 'r', glyph: 'r', label: 'RUNES' }, NAV,
-      null,                                      { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'e', glyph: 'e', label: 'EQUIP' }, mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      null,                                      null,                                     { key: 'i', glyph: 'i', label: 'INV' },  mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
-      null,                                      null,                                     { key: 'd', glyph: 'd', label: 'DROP' }, mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-      null,                                      null,                                     { key: 'a', glyph: 'a', label: 'USE' },  { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    { label: 'PLAY', cols: 6, tiles: [
+      // 5 rows (same height as the a-z keyboard pane). D-pad centered on the
+      // right (rows 2-4, cols 4-6) with y/n/wait below it (row 5). esc anchors
+      // top-left; col 2 runs the menu letters a-e in order (a/d/e double as
+      // their game actions, b/c are pure menu picks); col 3 stacks fire/get,
+      // then the stair pair, then runes. Remaining cells are muted placeholders.
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '\r', glyph: '⏎', label: 'ENTER' }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
+      null,                                      { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      null,                                      { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      null,                                      { key: 'd', glyph: 'd', label: 'DROP' },  { key: '>', glyph: '>', label: 'DESC' },  mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+      null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
     ]},
-    { label: 'a–z', cols: 6, tiles: [
-      ...'abcdefghijklmnopqrstuvwxyz'.split('').map((c) => ({ key: c, glyph: c })),
-      { key: ESC, glyph: 'esc', label: 'BACK' }, NAV, null, null,
+    { label: 'a–z', cols: 20, tiles: [
+      // iPhone-ish QWERTY on a fine 20-col grid (each key spans 2 units = 10 per
+      // row). 5 rows to match the MOVE pane's height (no vertical jump on swap).
+      // Numbers row on top; home + bottom rows stagger via leading/trailing
+      // spacers (the bottom row's trailing slot is ⌫, phone-style); a function
+      // row (esc · space · ⏎) closes it like a phone keyboard — the pane switch
+      // now lives in the top bar, not a tile. Every row's spans sum to 20 so
+      // row-major auto-flow breaks cleanly.
+      ...'1234567890'.split('').map(kbd),
+      ...'qwertyuiop'.split('').map(kbd),
+      spacer(1), ...'asdfghjkl'.split('').map(kbd), spacer(1),
+      spacer(3), ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+      { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, { key: ' ', glyph: '␣', label: 'SPACE', span: 14 }, { key: '\r', glyph: '⏎', label: 'ENTER', span: 3 },
     ]},
   ];
   let currentPane = 0;
@@ -606,27 +668,38 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     // another (e.g. "y" is NW movement on Pane 1, YES on Pane 2).
     if (spec.repeat) btn.dataset.repeat = '1';
     if (spec.cls) btn.classList.add(spec.cls);
+    if (spec.span) btn.style.gridColumn = 'span ' + spec.span;
     const labelHtml = spec.label ? `<span class="label">${spec.label}</span>` : '';
     btn.innerHTML = `<span class="glyph">${spec.glyph}</span>${labelHtml}`;
     bindButton(btn);
     return btn;
   }
 
-  // Keyset selector (pane switcher) — swaps panes, sends no key, so it's not
-  // routed through bindButton (no hold-repeat). Label names the target pane.
-  function makeNav() {
-    const nav = document.createElement('button');
-    nav.className = 'nav';
-    nav.innerHTML = `<span class="label">${PANES[(currentPane + 1) % PANES.length].label + ' →'}</span>`;
-    nav.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      stopHoldRepeat();  // kill any in-flight repeat from a tile we're replacing
-      currentPane = (currentPane + 1) % PANES.length;
-      renderTouch();
-    });
-    nav.addEventListener('mousedown', (e) => e.preventDefault());
-    return nav;
+  // Layer switcher — the top-bar segmented MOVE | a·z control. setPane swaps the
+  // touch pane; updateSwitcher paints the active half. (Replaces the in-grid NAV
+  // tile, so the switch has one fixed home across both panes and orientations.)
+  const segMoveEl = $('xs-seg-move'), segAzEl = $('xs-seg-az'), segSetEl = $('xs-seg-set');
+  function updateSwitcher() {
+    segMoveEl?.classList.toggle('active', currentPane === 0);
+    segAzEl?.classList.toggle('active', currentPane === 1);
+    segSetEl?.classList.toggle('active', currentPane === 2);
   }
+  // Pane 2 = the settings surface (not a tile grid): show it in the key-pane
+  // area via .show-settings and skip renderTouch (PANES has no [2]).
+  function setPane(idx) {
+    if (idx === currentPane) return;
+    stopHoldRepeat();  // kill any in-flight repeat from a tile we're leaving
+    currentPane = idx;
+    document.getElementById('xsofy-shell').classList.toggle('show-settings', idx === 2);
+    if (idx !== 2) renderTouch();
+    updateSwitcher();
+  }
+  segMoveEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(0); });
+  segAzEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(1); });
+  segSetEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(2); });
+  segMoveEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  segAzEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  segSetEl?.addEventListener('mousedown', (e) => e.preventDefault());
 
   function renderTouch() {
     const touchEl = $('xs-touch');
@@ -634,7 +707,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     touchEl.innerHTML = '';
     touchEl.style.gridTemplateColumns = `repeat(${pane.cols || 6}, 1fr)`;
     for (const spec of pane.tiles) {
-      if (spec === NAV) { touchEl.appendChild(makeNav()); continue; }
+      if (spec && spec.spacer) {  // invisible offset for the keyboard stagger
+        const s = document.createElement('div');
+        s.style.gridColumn = 'span ' + spec.spacer;
+        touchEl.appendChild(s);
+        continue;
+      }
       touchEl.appendChild(tileFor(spec));  // tileFor turns null into a filler
     }
   }
@@ -665,6 +743,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   document.body.classList.add('dpad-' + dpadVariant);
 
   renderTouch();  // initial render; tiles bind via tileFor on every pane swap
+  updateSwitcher();  // paint the active half of the top-bar layer switcher
   // Static info-row buttons (repeat/font/touch/OPTIONS) — bound once, not rebuilt.
   document.querySelectorAll('#xsofy-shell .info button').forEach(bindButton);
   // Safety net: pointer released anywhere (dragged off a button) kills repeat.
@@ -733,16 +812,14 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   });
   touchToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
 
-  // --- OPTIONS tile — runtime toggle of the debug tier, plus the URL-seeded dev
-  // tier. Tiers are additive: mode-play is the permanent base; the tile toggles
-  // mode-debug (player-visible diagnostics); ?mode=dev adds mode-dev (dev
-  // tooling) on top. The tile cycles play↔debug only — dev is URL-gated, so dev
-  // tooling never appears just from tapping. Diagnostics (turn/perf) are
-  // mode-urldiag, URL-only, so a runtime tap never surfaces dev noise. ---
+  // --- Shell mode tiers. Additive: mode-play is the permanent base; mode-debug
+  // (player-visible diagnostics) rides ?mode= or a state persisted back when the
+  // OPTIONS cycle tile existed (still honored); ?mode=dev adds mode-dev (dev
+  // tooling) on top, and pins mode-debug — dev is a strict superset of debug.
+  // Diagnostics (turn/perf) are mode-urldiag, URL-only. There is currently no
+  // runtime toggle — if one returns, the ⚙ settings pane is its natural home. ---
   const SHELL_LS_KEY = 'xsofy/shell-state', SHELL_STATES = ['play', 'debug'];
-  const STATE_LABEL = { play: '←', debug: '⚙' };  // shown for the destination tier
   const shellRoot = document.getElementById('xsofy-shell');
-  const shellCycleEl = $('xs-shell-cycle'), shellCycleLabelEl = $('xs-shell-cycle-label');
   const urlMode = new URLSearchParams(location.search).get('mode');
   const devMode = urlMode === 'dev';
   let currentShellState = localStorage.getItem(SHELL_LS_KEY);
@@ -750,24 +827,10 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   else if (urlMode === 'play') currentShellState = 'play';
   else if (!SHELL_STATES.includes(currentShellState)) currentShellState = 'play';
   function applyShellState() {
-    // dev is a strict superset of debug — ?mode=dev pins mode-debug on
-    // regardless of the play↔debug cycle.
     shellRoot.classList.toggle('mode-debug', currentShellState === 'debug' || devMode);
     shellRoot.classList.toggle('mode-dev', devMode);
     shellRoot.classList.toggle('mode-urldiag', urlMode === 'debug' || urlMode === 'dev');
-    if (shellCycleLabelEl) {
-      const next = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
-      shellCycleLabelEl.textContent = STATE_LABEL[next];
-    }
   }
   applyShellState();
-  shellCycleEl?.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();  // don't also fire the bindButton press path
-    currentShellState = SHELL_STATES[(SHELL_STATES.indexOf(currentShellState) + 1) % SHELL_STATES.length];
-    localStorage.setItem(SHELL_LS_KEY, currentShellState);
-    applyShellState();
-  });
-  shellCycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
 })();
 </script>
