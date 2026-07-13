@@ -1792,6 +1792,7 @@
     :help (assoc world :screen :help)
     :pickup (pickup world)
     :inventory (assoc world :screen :inventory)
+    :toggle-console (assoc world :screen :console)
     :rune-codex (assoc world :screen :rune-codex)
     :equip-menu (assoc world :screen :quick-menu :menu-action :equip)
     :unequip-menu (assoc world :screen :quick-menu :menu-action :unequip)

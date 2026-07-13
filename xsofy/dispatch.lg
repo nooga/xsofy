@@ -15,7 +15,7 @@
 (def ^:private ui-actions
   #{:messages :help :inventory :rune-codex
     :equip-menu :unequip-menu :drop-menu :use-menu
-    :quit})
+    :toggle-console :quit})
 
 ;; Non-actions: input that maps to no game action at all — an unbound key
 ;; (:unknown), a terminal-resize wake byte (:resize), or nil. Unlike UI actions
@@ -23,7 +23,10 @@
 ;; or a stray keystroke or a window resize would advance the seed and grow the
 ;; :action-log, silently breaking (seed, action-log) replay determinism.
 (def ^:private ignored-actions
-  #{:unknown :resize :eof})
+  ;; :console-taint is the dev-console sentinel — it never reaches live dispatch
+  ;; (the console appends it to :action-log directly, not as a keypress), so this
+  ;; is just a safety no-op; `replay` below truncates the run at it.
+  #{:unknown :resize :eof :console-taint})
 
 (defn action-type
   "The dispatch key for an action: a bare keyword as-is, or the :type of a
@@ -80,9 +83,15 @@
 (defn replay
   "Reconstruct a world by replaying `actions` on a fresh deterministic world
    built from `seed`. Returns the final world. Because dispatch is pure and
-   the seed chain is reproduced exactly, this equals the original live play."
+   the seed chain is reproduced exactly, this equals the original live play.
+
+   Stops at a :console-taint sentinel: a dev-console touch can't be reproduced
+   from actions, so the run reconstructs faithfully up to that point and no
+   further (rather than replaying a divergent tail)."
   [w h seed actions]
-  (reduce dispatch (world/make-world w h seed) actions))
+  (reduce dispatch
+          (world/make-world w h seed)
+          (take-while (fn [a] (not= (action-type a) :console-taint)) actions)))
 
 ;; Game-state-level dispatch (dispatch-gs / replay-gs) lives in xsofy.dag — it
 ;; layers the commit DAG over this world-level dispatch. Keeping it there avoids

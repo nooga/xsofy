@@ -227,15 +227,28 @@
                         (when (>= run 1000000)
                           (throw (ex-info "replay: implausible run length" {:run run})))
                         (recur (inc r) off2
-                               (into acc (repeat run (nth dict di)))))))]
-      {:seed seed :actions actions})))
+                               (into acc (repeat run (nth dict di)))))))
+          ;; A dev-console-touched run carries a :console-taint sentinel; stop the
+          ;; replay there (drop it and everything after) and report the boundary.
+          ti (first (keep-indexed (fn [idx a] (when (= a :console-taint) idx)) actions))]
+      (if ti
+        {:seed seed :actions (subvec actions 0 ti) :console-truncated? true}
+        {:seed seed :actions actions}))))
 
 (defn encode-run
   "Convenience: replay code for a finished world (its :seed-input + :action-log).
    The log may mix bare keywords and parameterized map actions (item use/equip/
-   unequip/drop/enchant routed through dispatch) — the wire format carries both."
+   unequip/drop/enchant routed through dispatch) — the wire format carries both.
+
+   For a dev-console-touched run the log carries a :console-taint sentinel; we
+   keep it as the last entry and drop everything after it, so the code is minimal
+   and self-describing — a decoder sees the sentinel and knows the replay stops
+   there (the console change isn't reproducible from actions). See xsofy.console."
   [world]
-  (encode (:seed-input world) (or (:action-log world) [])))
+  (let [log (or (:action-log world) [])
+        i   (first (keep-indexed (fn [idx a] (when (= a :console-taint) idx)) log))
+        log (if i (subvec log 0 (inc i)) log)]
+    (encode (:seed-input world) log)))
 
 (defn encode-run-safe
   "Like encode-run, but returns nil instead of throwing if encoding fails for any

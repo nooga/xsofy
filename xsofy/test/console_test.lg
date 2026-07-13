@@ -1,0 +1,86 @@
+(ns xsofy.test.console-test
+  "Tests for xsofy.console — the read-only command surface (Cut 0) and the line
+   editor. The submit/enter path renders the game beneath the panel (needs a
+   terminal), so it is exercised in the native/web manual run; here we test the
+   pure pieces: run-command (what submit wraps) and the render-free editing keys."
+  (:require [test :refer [deftest is testing]]
+            [string :as str]
+            [xsofy.console :as console]))
+
+(def world
+  {:entities {:player {:body {:hp 5 :max-hp 20} :pos [3 4]}}
+   :turn 0 :depth 1 :seed-input 42 :seed 99 :action-log []})
+
+(def ESC (str (char 27)))
+(def DEL (str (char 127)))
+
+;; --- command surface ------------------------------------------------------
+
+(deftest read-only-commands-return-values
+  (testing "(seed) reports the seed pair, world untouched"
+    (let [r (console/run-command world "(seed)")]
+      (is (:ok r))
+      (is (= {:seed-input 42 :seed 99} (:val r)))))
+  (testing "(player) reports hp / pos / depth"
+    (let [r (console/run-command world "(player)")]
+      (is (:ok r))
+      (is (= 5 (get-in r [:val :hp])))
+      (is (= [3 4] (get-in r [:val :pos])))
+      (is (= 1 (get-in r [:val :depth])))))
+  (testing "(location) reports pos / depth / turn"
+    (is (= {:pos [3 4] :depth 1 :turn 0}
+           (:val (console/run-command world "(location)")))))
+  (testing "(help) lists the commands"
+    (let [r (console/run-command world "(help)")]
+      (is (:ok r))
+      (is (str/includes? (:val r) "seed")))))
+
+(deftest bare-symbol-resolves-like-a-call
+  (testing "`help` without parens dispatches the same as (help)"
+    (is (:ok (console/run-command world "help")))))
+
+(deftest unknown-form-is-reported-not-run
+  (testing "a non-whitelisted head is refused, never evaluated — no eval path"
+    (let [r (console/run-command world "(no-such-fn-xyz)")]
+      (is (not (:ok r)))
+      (is (str/includes? (:val r) "unknown command"))))
+  (testing "a mutating-looking form is equally inert: there is no eval, so it
+            resolves to 'unknown command', it does not run"
+    (is (not (:ok (console/run-command world "(hp! 100)"))))))
+
+(deftest parse-error-is-caught-not-thrown
+  (testing "an unbalanced form reports :ok false instead of killing the loop"
+    (is (not (:ok (console/run-command world "(seed"))))))
+
+;; --- line editor ----------------------------------------------------------
+
+(deftest typing-inserts-at-cursor
+  (let [st (-> (console/init-state world [80 24])
+               (console/handle-key [:action "a"])
+               (console/handle-key [:action "b"]))]
+    (is (= "ab" (:input st)))
+    (is (= 2 (:cursor st)))))
+
+(deftest backspace-deletes-before-cursor
+  (let [st (-> (console/init-state world [80 24])
+               (console/handle-key [:action "x"])
+               (console/handle-key [:action "y"])
+               (console/handle-key [:action DEL]))]
+    (is (= "x" (:input st)))
+    (is (= 1 (:cursor st)))))
+
+(deftest history-up-recalls-the-last-line
+  (testing "Up (ESC[A) with populated history restores the newest entry"
+    (let [st (-> (assoc (console/init-state world [80 24]) :history ["(seed)" "(player)"])
+                 (console/handle-key [:action (str ESC "[A")]))]
+      (is (= "(player)" (:input st)))
+      (is (= 8 (:cursor st))))))
+
+(deftest esc-and-backtick-close-returning-the-world-unchanged
+  (testing "either close key exits the loop, handing the SAME world back (read-only)"
+    (let [st (console/init-state world [80 24])
+          r1 (console/handle-key st [:action ESC])
+          r2 (console/handle-key st [:action "`"])]
+      (is (reduced? r1))
+      (is (reduced? r2))
+      (is (= world (deref r1))))))
