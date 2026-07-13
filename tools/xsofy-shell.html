@@ -146,7 +146,9 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   border-top: 1px solid var(--bar-rule);
 }
 #xsofy-shell .row { align-items: center; gap: 0.6rem; padding: 0.45rem 0.75rem; }
-#xsofy-shell .touch { gap: 0.15rem; padding: 0.5rem 0.6rem 0.7rem; }
+/* Side/bottom padding folds in the device safe areas (viewport-fit=cover):
+   home indicator below in portrait, notch/rounded corners at the sides. */
+#xsofy-shell .touch { gap: 0.15rem; padding: 0.5rem calc(0.6rem + env(safe-area-inset-right, 0px)) calc(0.7rem + env(safe-area-inset-bottom, 0px)) calc(0.6rem + env(safe-area-inset-left, 0px)); }
 /* Touch tiles fill their fixed grid row exactly, so a glyph-only key (a–z pane)
    is the same height as a glyph+label key (gameplay pane) — no size jump when
    swapping panes. Content is centered by the button's own flexbox. */
@@ -212,7 +214,7 @@ body.force-touch #xsofy-shell .seg-switch { display: inline-flex; }
    inside #xsofy-shell, so the button/theme rules still apply. The rail keeps
    the PLAY grid while the sheet is up — movement stays under the thumb during
    menus. Close = tap the play/config segment. */
-#xsofy-shell .kbd-sheet { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; grid-template-columns: repeat(20, 1fr); gap: 0.15rem; grid-auto-rows: 44px; padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom)); background: var(--bar-bg); border-top: 1px solid var(--bar-rule); }
+#xsofy-shell .kbd-sheet { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; grid-template-columns: repeat(20, 1fr); gap: 0.15rem; grid-auto-rows: 44px; padding: 0.5rem calc(0.6rem + env(safe-area-inset-right, 0px)) calc(0.5rem + env(safe-area-inset-bottom, 0px)) calc(0.6rem + env(safe-area-inset-left, 0px)); background: var(--bar-bg); border-top: 1px solid var(--bar-rule); }
 #xsofy-shell .kbd-sheet.open { display: grid; }
 /* Landscape status strip — the diag chips (t/perf/dims) don't work crammed next
    to the switcher in the rail, so landscape reserves a thin band under the
@@ -310,7 +312,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   body.force-touch              { flex-direction: row; }
   /* 22px shaved off the terminal for the status strip below it. */
   body.force-touch #app         { height: calc(100dvh - 22px); flex: 1 1 auto; min-width: 0; }
-  body.force-touch #xsofy-shell .status-strip { display: flex; position: fixed; left: 0; right: 30%; bottom: 0; height: 22px; z-index: 20; align-items: center; gap: 0.6rem; padding: 0 0.5rem; background: var(--bar-bg); border-top: 1px solid var(--bar-rule); font-size: 10px; }
+  body.force-touch #xsofy-shell .status-strip { display: flex; position: fixed; left: 0; right: 30%; bottom: 0; height: 22px; z-index: 20; align-items: center; gap: 0.6rem; padding: 0 0.5rem 0 calc(0.5rem + env(safe-area-inset-left, 0px)); background: var(--bar-bg); border-top: 1px solid var(--bar-rule); font-size: 10px; }
   /* Info left (title, then quest), stats hugging the right edge. The .info-
      scoped title/quest rules don't follow the nodes here, so restate the look
      at strip scale: title keeps its weight, quest keeps the ellipsize-from-
@@ -324,10 +326,17 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     overflow: auto;
     border-top: none;
     border-left: 1px solid var(--bar-rule);
+    /* The rail owns the right screen edge; keep keys clear of the notch/
+       rounded corner when that side faces it. */
+    padding-right: env(safe-area-inset-right, 0px);
   }
-  /* Undo the strip-centering; the 6-col grid fills the rail (landscape polish
-     is deferred in this prototype — portrait is the focus). */
-  body.force-touch #xsofy-shell .touch { max-width: none; width: auto; margin: 0; }
+  /* Undo the strip-centering AND its content sizing: in the rail the grid
+     must SHRINK with the viewport — flex 1 + min-height 0 (the strip rule's
+     flex:0 0 auto otherwise sizes the grid to content and overflows short
+     phones), no 44px key-width floor, tighter key padding. 667x375 and
+     568x320 clipped the bottom row and the right D-pad column before this. */
+  body.force-touch #xsofy-shell .touch { max-width: none; width: auto; margin: 0; flex: 1 1 auto; min-height: 0; }
+  body.force-touch #xsofy-shell .touch button { min-width: 0; padding: 0.2rem 0.15rem; }
   /* Narrow rail: collapse the info bar to a single column so title/quest don't
      fight the fixed-width chips for space. */
   body.force-touch #xsofy-shell .info { grid-template-columns: minmax(0, 1fr); }
