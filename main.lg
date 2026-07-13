@@ -461,13 +461,16 @@
                _ (sfx/clear-screen tw th)  ;; initial clear; the loop re-clears + re-scatters on resize
                ;; Dev repro capture of this organic run's replay code. Trigger is
                ;; per-platform: ?dump-replay= URL param on web (js/url-param),
-               ;; XSOFY_DUMP_REPLAY env var natively. Gated so players never see it.
+               ;; XSOFY_DUMP_REPLAY env var natively — and any dev build
+               ;; (?mode=dev), whose shell renders the emit as a replay link in
+               ;; the config pane. Gated so players never see it.
                ;; Sink differs because *err* aliases *out* in WASM (one host writer
                ;; for both — let-go rendermain), so writing *err* there paints the
                ;; game screen. On web route the dump off-terminal via a js/emit host
                ;; event; natively keep stderr (redirect 2>file to capture past the TUI).
                _ (when-let [trig (or (js/url-param "dump-replay")
-                                     (os/getenv "XSOFY_DUMP_REPLAY"))]
+                                     (os/getenv "XSOFY_DUMP_REPLAY")
+                                     (when (= (js/url-param "mode") "dev") "dev"))]
                    (when (> (count trig) 0)
                      (let [code (replay/encode-run-safe world)
                            payload (or code "(unavailable: run has parameterized actions)")]
