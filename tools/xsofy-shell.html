@@ -100,8 +100,11 @@ body.force-touch #xsofy-shell { flex: 1 1 auto; overflow: auto; }
      pack the buttons into whatever height that slice provides rather than
      growing the slice to fit them. Both panes are exactly 5 rows (30 cells /
      6 cols), so the rows fill identically on each: uniform button height, no
-     size jump on swap, and the grid can never overflow into a scrollbar. */
-  grid-auto-rows: 1fr;
+     size jump on swap, and the grid can never overflow into a scrollbar.
+     minmax(0,…) is load-bearing: a bare 1fr track floors at the buttons'
+     content height, and in the landscape rail 6 such rows overshoot 100dvh by
+     a few px — the "ever so slightly scrollable" rail. */
+  grid-auto-rows: minmax(0, 1fr);
   align-items: stretch;
   min-width: 0;
   flex: 1;
@@ -308,9 +311,13 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   /* 22px shaved off the terminal for the status strip below it. */
   body.force-touch #app         { height: calc(100dvh - 22px); flex: 1 1 auto; min-width: 0; }
   body.force-touch #xsofy-shell .status-strip { display: flex; position: fixed; left: 0; right: 30%; bottom: 0; height: 22px; z-index: 20; align-items: center; gap: 0.6rem; padding: 0 0.5rem; background: var(--bar-bg); border-top: 1px solid var(--bar-rule); font-size: 10px; }
-  /* Stats hug the right edge; the left side is reserved for informational
-     content (title/quest wiring, later). */
+  /* Info left (title, then quest), stats hugging the right edge. The .info-
+     scoped title/quest rules don't follow the nodes here, so restate the look
+     at strip scale: title keeps its weight, quest keeps the ellipsize-from-
+     the-LEFT trick (the item name survives truncation). */
   body.force-touch #xsofy-shell .status-strip .stats { margin-left: auto; }
+  body.force-touch #xsofy-shell .status-strip .title { flex: 0 0 auto; color: var(--bar-fg); font-weight: 500; white-space: nowrap; }
+  body.force-touch #xsofy-shell .status-strip .quest { flex: 0 1 auto; min-width: 0; color: var(--bar-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
   body.force-touch #xsofy-shell {
     flex: 0 0 30%;
     height: 100dvh;
@@ -350,14 +357,14 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
         <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
         <span class="diag-only stat-hidden" id="xs-dims"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
       </span>
-      <!-- Layer switcher — 3-segment MOVE | a·z | ⚙, anchored far right. MOVE/a·z
-           swap the touch pane; ⚙ opens the settings pane (below) where the dev/
-           player toggles now live, freeing the top bar. Always visible; one
+      <!-- Layer switcher — 2-segment ⚙ | a·z, anchored far right. PLAY is the
+           base state (no segment lit); each segment TOGGLES its layer — tap to
+           open, tap again to return to play. Two segments instead of three so
+           the portrait bar has room for title + quest. Always visible; one
            control in a fixed spot across panes and orientations. -->
       <div class="seg-switch" id="xs-layer-switch" role="group" aria-label="Touch layer">
         <button class="seg" id="xs-seg-set" title="Settings" aria-label="Settings">config</button>
         <button class="seg" id="xs-seg-az" title="a–z keyboard">a·z</button>
-        <button class="seg active" id="xs-seg-move" title="Movement + action controls">play</button>
       </div>
     </div>
   </div>
@@ -534,12 +541,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const questEl = $('xs-quest');
   const turnEl = $('xs-turn');
 
-  // Capitalize a quest-item name for the bar. Keep it terse.
+  // Quest-item name for the bar — bare (no "seeking" prefix), it's the part
+  // that must survive the narrow portrait bar.
   function nameOf(q) {
     if (!q) return '';
     if (typeof q === 'string') return q;
-    const n = q.name || q[':name'] || q[':item']?.name;
-    return n ? `seeking ${n}` : '';
+    return q.name || q[':name'] || q[':item']?.name || '';
   }
 
   // Build provenance chip (settings pane): fetch the JSON written by
@@ -668,19 +675,16 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // offset that produces the iPhone home/bottom-row stagger.
   const kbd = (k) => ({ key: k, glyph: k, span: 2, cls: 'kbd' });
   const spacer = (n) => ({ spacer: n });
-  // Landscape PLAY variants (?pland=a|b) — the ~30% landscape rail fits 4 key
-  // columns, not 6, so the pane carries a landscape-specific 6-row tile list.
-  // The grid is an 8-UNIT fine grid: a regular key spans 2 (s2 defaults that),
-  // so a row holds 4 full keys — or trades one for two thin span-1 companions,
-  // which is how row 1 packs esc/m/i + thin ⏎ and ? into four slots. Both
-  // variants cut the same 2 of portrait's 26 keys: b/c, the only tiles with no
-  // game action (they stay reachable on the a-z pane). 'a': pad right-middle,
-  // action column left, y/n/wait beneath the pad. 'b': pad in the BOTTOM-RIGHT
-  // corner (the zero-reach thumb home), YES/NO/WAIT beside it, actions
-  // clustered on top.
-  const s2 = (t) => (t.span ? t : { ...t, span: 2 });
+  // Landscape PLAY variants (?pland=a|b) — the ~30% landscape rail fits 4
+  // columns, not 6, so the pane carries a landscape-specific 4x6 tile list.
+  // No ⏎ here (no known in-game use; the a·z sheet keeps one), ? rides row 1.
+  // Both variants cut the same 2 of portrait's 26 keys: b/c, the only tiles
+  // with no game action (they stay reachable on the a-z pane). 'a': pad
+  // right-middle, action column left, y/n/wait beneath the pad. 'b': pad in
+  // the BOTTOM-RIGHT corner (the zero-reach thumb home), YES/NO/WAIT beside
+  // it, actions clustered on top.
   const LAND_ROW1 = [
-    { key: ESC, glyph: 'esc', label: 'BACK' },  { key: 'm', glyph: 'm', label: 'MSG' },   { key: 'i', glyph: 'i', label: 'INV' },   { key: '\r', glyph: '⏎', span: 1, cls: 'kbd' }, { key: '?', glyph: '?', span: 1, cls: 'kbd' },
+    { key: ESC, glyph: 'esc', label: 'BACK' },  { key: 'm', glyph: 'm', label: 'MSG' },   { key: 'i', glyph: 'i', label: 'INV' },   { key: '?', glyph: '?', label: 'HELP' },
   ];
   const LAND_PLAY_TILES = {
     a: [
@@ -701,7 +705,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     ],
   };
   const plandVariant = new URLSearchParams(location.search).get('pland') || 'a';
-  const LAND_PLAY = { cols: 8, tiles: (LAND_PLAY_TILES[plandVariant] || LAND_PLAY_TILES.a).map(s2) };
+  const LAND_PLAY = { cols: 4, tiles: LAND_PLAY_TILES[plandVariant] || LAND_PLAY_TILES.a };
   // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
   // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
   // a-z is a 20-col QWERTY keyboard for menu selection (xsofy menus label items
@@ -764,12 +768,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     return btn;
   }
 
-  // Layer switcher — the top-bar segmented MOVE | a·z control. setPane swaps the
-  // touch pane; updateSwitcher paints the active half. (Replaces the in-grid NAV
-  // tile, so the switch has one fixed home across both panes and orientations.)
-  const segMoveEl = $('xs-seg-move'), segAzEl = $('xs-seg-az'), segSetEl = $('xs-seg-set');
+  // Layer switcher — the top-bar ⚙ | a·z toggles. PLAY (pane 0) is the base
+  // state with no segment lit; setPane swaps the layer, updateSwitcher paints
+  // the lit segment. (Replaces the in-grid NAV tile, so the switch has one
+  // fixed home across both panes and orientations.)
+  const segAzEl = $('xs-seg-az'), segSetEl = $('xs-seg-set');
   function updateSwitcher() {
-    segMoveEl?.classList.toggle('active', currentPane === 0);
     segAzEl?.classList.toggle('active', currentPane === 1);
     segSetEl?.classList.toggle('active', currentPane === 2);
   }
@@ -783,16 +787,9 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     renderTouch();
     updateSwitcher();
   }
-  segMoveEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(0); });
-  // In the landscape rail the a·z segment fronts a modal overlay (the bottom
-  // sheet), so a second tap dismisses it back to play — unlike portrait, where
-  // a·z is a regular pane and the segment keeps plain segmented behavior.
-  segAzEl?.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    if (currentPane === 1 && isLandRail()) setPane(0); else setPane(1);
-  });
-  segSetEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(2); });
-  segMoveEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  // Both segments toggle: tapping the active one returns to the play base.
+  segAzEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(currentPane === 1 ? 0 : 1); });
+  segSetEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(currentPane === 2 ? 0 : 2); });
   segAzEl?.addEventListener('mousedown', (e) => e.preventDefault());
   segSetEl?.addEventListener('mousedown', (e) => e.preventDefault());
 
@@ -818,14 +815,23 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     }
   }
 
-  // The diag chips live in the rail's info row in portrait but in the
-  // status strip under the terminal in landscape (they don't fit beside the
-  // switcher there). appendChild MOVES the node, so this is idempotent.
+  // Title/quest and the diag chips live in the rail's info row in portrait but
+  // in the status strip under the terminal in landscape (info left, stats
+  // right — none of it fits beside the switcher there). appendChild MOVES the
+  // nodes, so this is idempotent; the .info grid-areas re-place title/quest on
+  // the way back regardless of child order.
   function placeStats() {
-    const stats = $('xs-stats');
-    if (!stats) return;
-    if (isLandRail()) $('xs-status-strip').appendChild(stats);
-    else document.querySelector('#xsofy-shell .debug-row')?.insertBefore(stats, $('xs-layer-switch'));
+    const stats = $('xs-stats'), title = $('xs-title'), quest = $('xs-quest');
+    const strip = $('xs-status-strip'), info = document.querySelector('#xsofy-shell .info');
+    if (isLandRail()) {
+      if (title) strip.appendChild(title);
+      if (quest) strip.appendChild(quest);
+      if (stats) strip.appendChild(stats);
+    } else {
+      if (title) info?.appendChild(title);
+      if (quest) info?.appendChild(quest);
+      if (stats) document.querySelector('#xsofy-shell .debug-row')?.insertBefore(stats, $('xs-layer-switch'));
+    }
   }
 
   function renderTouch() {
