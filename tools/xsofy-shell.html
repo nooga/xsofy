@@ -684,37 +684,21 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   // offset that produces the iPhone home/bottom-row stagger.
   const kbd = (k) => ({ key: k, glyph: k, span: 2, cls: 'kbd' });
   const spacer = (n) => ({ spacer: n });
-  // Landscape PLAY variants (?pland=a|b) — the ~30% landscape rail fits 4
-  // columns, not 6, so the pane carries a landscape-specific 4x6 tile list.
-  // No ⏎ here (no known in-game use; the a·z sheet keeps one), ? rides row 1.
-  // Both variants cut the same 2 of portrait's 26 keys: b/c, the only tiles
-  // with no game action (they stay reachable on the a-z pane). 'a': pad
-  // right-middle, action column left, y/n/wait beneath the pad. 'b': pad in
-  // the BOTTOM-RIGHT corner (the zero-reach thumb home), YES/NO/WAIT beside
-  // it, actions clustered on top.
-  const LAND_ROW1 = [
+  // Landscape PLAY — the ~30% landscape rail fits 4 columns, not 6, so the
+  // pane carries a landscape-specific 4x6 tile list: pad right-middle, action
+  // column down the left, y/n/wait beneath the pad. (A corner-anchored-pad
+  // alternative lost the on-device comparison, 2026-07-13.) No ⏎ here — no
+  // known in-game use, and the a·z sheet keeps one; ? rides row 1. Cuts b/c
+  // vs portrait's 26 keys: the only tiles with no game action (both stay
+  // reachable on the a-z pane).
+  const LAND_PLAY = { cols: 4, tiles: [
     { key: ESC, glyph: 'esc', label: 'BACK' },  { key: 'm', glyph: 'm', label: 'MSG' },   { key: 'i', glyph: 'i', label: 'INV' },   { key: '?', glyph: '?', label: 'HELP' },
-  ];
-  const LAND_PLAY_TILES = {
-    a: [
-      ...LAND_ROW1,
-      { key: 'a', glyph: 'a', label: 'USE' },     { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'g', glyph: 'g', label: 'GET' },
-      { key: 'd', glyph: 'd', label: 'DROP' },    mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      { key: '<', glyph: '<', label: 'ASC' },     mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
-      { key: '>', glyph: '>', label: 'DESC' },    mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-      { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'y', glyph: 'y', label: 'YES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
-    ],
-    b: [
-      ...LAND_ROW1,
-      { key: 'a', glyph: 'a', label: 'USE' },     { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: '<', glyph: '<', label: 'ASC' },   { key: '>', glyph: '>', label: 'DESC' },
-      { key: 'd', glyph: 'd', label: 'DROP' },    { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'g', glyph: 'g', label: 'GET' },   { key: 'r', glyph: 'r', label: 'RUNES' },
-      { key: 'y', glyph: 'y', label: 'YES' },     mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      { key: 'n', glyph: 'n', label: 'NO' },      mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
-      { key: '.', glyph: '·', label: 'WAIT', repeat: true }, mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-    ],
-  };
-  const plandVariant = new URLSearchParams(location.search).get('pland') || 'a';
-  const LAND_PLAY = { cols: 4, tiles: LAND_PLAY_TILES[plandVariant] || LAND_PLAY_TILES.a };
+    { key: 'a', glyph: 'a', label: 'USE' },     { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'g', glyph: 'g', label: 'GET' },
+    { key: 'd', glyph: 'd', label: 'DROP' },    mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+    { key: '<', glyph: '<', label: 'ASC' },     mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+    { key: '>', glyph: '>', label: 'DESC' },    mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+    { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'y', glyph: 'y', label: 'YES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+  ]};
   // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
   // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
   // a-z is a 20-col QWERTY keyboard for menu selection (xsofy menus label items
