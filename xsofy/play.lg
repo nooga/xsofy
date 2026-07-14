@@ -80,6 +80,7 @@
   (let [prev (:world state)
         new-world (apply-auto-stops (dispatch/dispatch world key) world)
         _ (bridge/emit-stats new-world)
+        _ (bridge/emit-replay-code new-world)
         cur-size (term/size)
         resized (not= cur-size (:size state))
         floor-changed (not= (:depth new-world) (:depth prev))]

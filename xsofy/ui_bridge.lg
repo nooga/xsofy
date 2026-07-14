@@ -1,5 +1,6 @@
 (ns xsofy.ui-bridge
-  (:require [js]))
+  (:require [js]
+            [xsofy.replay :as replay]))
 
 ;; Outbound channel from the game to whatever HTML/JS shell is hosting it.
 ;; Builds on let-go's (js/emit ...) — see ../let-go fork on branch
@@ -53,6 +54,22 @@
                     :max-hp (get-in player [:body :max-hp] 1)
                     :depth  (or (:depth world) 1)
                     :turn   (or (:turn world) 0)}))))
+
+(defn emit-replay-code
+  "Dev-only live capture of the current run's replay code (:replay-dump —
+   the same channel the death-time capture in main.lg uses). The HTML
+   shell's config pane renders it as a ?replay= link, so a dev build can
+   share/reproduce a run without dying first. Throttled to every 10th
+   turn: encode cost grows with the action log, and the chip lagging a
+   few turns is fine. The first turn always emits, so the chip is live
+   from a run's first action. Skips runs whose codes are unavailable
+   (parameterized actions) — encode-run-safe returns nil there."
+  [world]
+  (let [t (or (:turn world) 0)]
+    (when (and (= (js/url-param "mode") "dev")
+               (or (<= t 1) (zero? (mod t 10))))
+      (when-let [code (replay/encode-run-safe world)]
+        (emit :replay-dump {:code code})))))
 
 (defn emit-term-size
   "Fired at game-loop entry and whenever the terminal reports a new size

@@ -935,15 +935,21 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   cycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
   initFontSize();
 
-  // --- Replay link: the death-time dev capture (main.lg emits
-  // xsofy/replay-dump on any ?mode=dev death) becomes a reproducible link in
+  // --- Replay link: the dev-build capture (ui_bridge emits xsofy/replay-dump
+  // live every ~10 turns, main.lg on death) becomes a reproducible link in
   // the config pane. Unavailable codes (parameterized-action runs) stay
   // hidden rather than rendering a dead link. ---
   const replayLinkEl = $('xs-replay-link'), replayCodeEl = $('xs-replay-code');
   window.addEventListener('xsofy/replay-dump', (e) => {
     const code = e.detail?.code;
     if (!replayLinkEl || !code || code.startsWith('(unavailable')) return;
-    replayLinkEl.href = location.pathname + '?replay=' + encodeURIComponent(code);
+    // Carry the session context (mode/dpad/…) into the replay URL — dropping
+    // ?mode=dev made the link land in a chrome-less play tier that read as
+    // "nothing happened". The code carries its own seed.
+    const qs = new URLSearchParams(location.search);
+    qs.delete('seed');
+    qs.set('replay', code);
+    replayLinkEl.href = location.pathname + '?' + qs.toString();
     if (replayCodeEl) replayCodeEl.textContent = code.length > 9 ? code.slice(0, 8) + '…' : code;
     replayLinkEl.classList.remove('stat-hidden');
   });
