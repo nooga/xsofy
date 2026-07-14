@@ -413,11 +413,12 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
       <span class="glyph">▦</span><span class="seg-label">touch</span><span id="xs-touch-state">auto</span>
     </button>
-    <!-- Replay link — appears once a dev-build death capture lands (the game
-         emits xsofy/replay-dump; see main.lg :death). Tapping it replays the
-         run; long-press for the OS copy/share sheet. Dev-only + hidden until
-         a code arrives. -->
-    <a class="font-cycle dev-only stat-hidden" id="xs-replay-link" title="Reproduce this run">
+    <!-- Replay link — appears once the run's first capture lands (the game
+         emits xsofy/replay-dump live every ~10 turns and at death). Tapping
+         it replays the run; long-press for the OS copy/share sheet. A player
+         feature (not tier-gated); hidden until a code arrives and reset on
+         each new run so it can never link a stale run. -->
+    <a class="font-cycle stat-hidden" id="xs-replay-link" title="Reproduce this run">
       <span class="glyph">▶</span><span class="seg-label">replay</span><span id="xs-replay-code"></span>
     </a>
     <!-- Build provenance — ungated (bug reports need it, nooga/xsofy#44).
@@ -935,11 +936,18 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   cycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
   initFontSize();
 
-  // --- Replay link: the dev-build capture (ui_bridge emits xsofy/replay-dump
-  // live every ~10 turns, main.lg on death) becomes a reproducible link in
-  // the config pane. Unavailable codes (parameterized-action runs) stay
-  // hidden rather than rendering a dead link. ---
+  // --- Replay link: the game's capture (ui_bridge emits xsofy/replay-dump
+  // live every ~10 turns, main.lg exactly at death) becomes a reproducible
+  // link in the config pane. Unavailable codes (parameterized-action runs)
+  // stay hidden rather than rendering a dead link. Reset on every new run
+  // (xsofy/startup) so the chip can never link a previous run. ---
   const replayLinkEl = $('xs-replay-link'), replayCodeEl = $('xs-replay-code');
+  window.addEventListener('xsofy/startup', () => {
+    if (!replayLinkEl) return;
+    replayLinkEl.classList.add('stat-hidden');
+    replayLinkEl.removeAttribute('href');
+    if (replayCodeEl) replayCodeEl.textContent = '';
+  });
   window.addEventListener('xsofy/replay-dump', (e) => {
     const code = e.detail?.code;
     if (!replayLinkEl || !code || code.startsWith('(unavailable')) return;
