@@ -476,7 +476,7 @@
                      (let [code (replay/encode-run-safe world)
                            payload (or code "(unavailable: run has parameterized actions)")]
                        (if (= (os/os-name) "js")
-                         (js/emit "xsofy/replay-dump" {:code payload})
+                         (js/emit "xsofy/replay-dump" {:code payload :turn (or (:turn world) 0)})
                          (do (write! *err* (str "replay-code: " payload "\n"))
                              (flush! *err*))))))
                ;; Animate the death screen via the poll-based event loop: a

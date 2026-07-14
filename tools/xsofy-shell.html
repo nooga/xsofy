@@ -958,7 +958,11 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     qs.delete('seed');
     qs.set('replay', code);
     replayLinkEl.href = location.pathname + '?' + qs.toString();
-    if (replayCodeEl) replayCodeEl.textContent = code.length > 9 ? code.slice(0, 8) + '…' : code;
+    // Label with the capture turn — meaningful to a human, unlike a code
+    // prefix. Falls back to the code snippet if the emit predates :turn.
+    if (replayCodeEl) replayCodeEl.textContent =
+      (e.detail.turn != null) ? ('t' + e.detail.turn)
+                              : (code.length > 9 ? code.slice(0, 8) + '…' : code);
     replayLinkEl.classList.remove('stat-hidden');
   });
 

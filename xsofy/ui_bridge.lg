@@ -70,7 +70,7 @@
   (let [t (or (:turn world) 0)]
     (when (or (<= t 1) (zero? (mod t 10)))
       (when-let [code (replay/encode-run-safe world)]
-        (emit :replay-dump {:code code})))))
+        (emit :replay-dump {:code code :turn t})))))
 
 (defn emit-term-size
   "Fired at game-loop entry and whenever the terminal reports a new size
