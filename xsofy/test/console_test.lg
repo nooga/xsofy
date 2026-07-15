@@ -30,10 +30,14 @@
   (testing "(location) reports pos / depth / turn"
     (is (= {:pos [3 4] :depth 1 :turn 0}
            (:val (console/run-command world "(location)")))))
+  (testing "(replay) yields a code string for a clean run"
+    (let [r (console/run-command world "(replay)")]
+      (is (:ok r))
+      (is (string? (:val r)))))
   (testing "(help) lists the commands"
     (let [r (console/run-command world "(help)")]
       (is (:ok r))
-      (is (str/includes? (:val r) "seed")))))
+      (is (str/includes? (:val r) "replay")))))
 
 (deftest bare-symbol-resolves-like-a-call
   (testing "`help` without parens dispatches the same as (help)"
