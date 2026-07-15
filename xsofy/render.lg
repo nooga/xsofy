@@ -434,11 +434,13 @@
               hp max-hp
               [140 30 30] [40 12 12] [220 180 160])
       (swap! row inc)
-      ;; player status bars
-      (reset! row (render-status-bars r @row player))
       ;; stats
       (ui/write-line r @row (str " Str " str_ "  Def " def-val) [140 130 110] ui/bg)
       (swap! row inc)
+      ;; player status bars — dynamic zone between core stats and equipment, so
+      ;; transient effects (frozen/poison/…) don't shove the always-present
+      ;; HP/Str lines around every tick.
+      (reset! row (render-status-bars r @row player))
       (ui/write-line r @row (str " " wep-name " (" dmg-str ")") [160 160 180] ui/bg)
       (swap! row inc)
       (ui/write-line r @row (str " " arm-name) [140 130 110] ui/bg)
