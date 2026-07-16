@@ -58,7 +58,7 @@ test('seed 12345 reproduces the title (proves ?seed bridge + wasm xxh3 parity)',
     await waitForServer();
     await page.goto('/?seed=12345');
     expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
-    await expect(page.locator('#terminal')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#app')).toBeVisible({ timeout: 20000 });
     await waitForTermText(page, TITLE);
     expect(errors, errors.join('\n')).toEqual([]);
   } finally { await stopServer(srv); }
@@ -75,7 +75,7 @@ test('?replay= plays back the run (decode + animated playback + xxh3 parity)', a
     await waitForServer();
     await page.goto('/?replay=' + encodeURIComponent(REPLAY_CODE));
     expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
-    await expect(page.locator('#terminal')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#app')).toBeVisible({ timeout: 20000 });
     // Playback skips the title screen and renders the game; the HUD seed line
     // proves the code decoded to seed 12345 and the run was rebuilt + rendered.
     await waitForTermText(page, 'Seed 12345');

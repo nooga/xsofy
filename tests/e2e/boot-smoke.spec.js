@@ -41,7 +41,7 @@ function watchConsole(page) {
   return errors;
 }
 
-// xterm.js renders into .xterm-rows; its text is in textContent (NOT #terminal
+// xterm.js renders into .xterm-rows; its text is in textContent (NOT #app
 // innerText, which comes back empty).
 function termText(page) {
   return page.evaluate(() => {
@@ -66,7 +66,7 @@ test('worker-mode boot: cross-origin isolated, renders the title, console-clean'
     await waitForServer();
     await page.goto('/?seed=12345');
     expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
-    await expect(page.locator('#terminal')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#app')).toBeVisible({ timeout: 20000 });
     await waitForTermText(page, TITLE_FRAGMENT);
     expect(await termText(page)).not.toContain('Interactive input requires a local server');
     expect(errors, errors.join('\n')).toEqual([]);
@@ -83,11 +83,11 @@ test('title animation runs (subtitle paints + frames change)', async ({ page }) 
   try {
     await waitForServer();
     await page.goto('/?seed=12345');
-    await expect(page.locator('#terminal')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#app')).toBeVisible({ timeout: 20000 });
     await waitForTermText(page, 'Press any key');
-    const a = await page.locator('#terminal').screenshot();
+    const a = await page.locator('#app').screenshot();
     await page.waitForTimeout(700);
-    const b = await page.locator('#terminal').screenshot();
+    const b = await page.locator('#app').screenshot();
     expect(Buffer.compare(a, b)).not.toBe(0);
     expect(errors, errors.join('\n')).toEqual([]);
   } finally { await stopServer(srv); }
