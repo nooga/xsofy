@@ -56,7 +56,10 @@
    #app, which is #xsofy-shell's sibling, not a descendant. */
 body.force-touch #app { flex: 0 0 auto; height: 55dvh; }
 @media (orientation: landscape) {
-  body.force-touch #app { flex: 0 0 auto; height: calc(100vh - 260px); }
+  /* Reserve the touch UI's height so the terminal doesn't overflow it. Budget:
+     info bar (52) + 4 pad rows @60px (240) + gaps/padding (~35) ~= 330. Bumped
+     from 260 when the pad went 3->4 rows (a fixed-60px row landscape path). */
+  body.force-touch #app { flex: 0 0 auto; height: calc(100vh - 330px); }
 }
 
 /* Client shell scaffold. Blank structural host mounted as #app's flex sibling
@@ -86,48 +89,271 @@ body.force-touch #xsofy-shell { flex: 1 1 auto; overflow: auto; }
    layout applies unconditionally (harmless while display:none); only the
    none↔grid switch is conditional. .pad/.actions are populated by the
    controls slice. */
+/* PROTOTYPE: unified 6-col grid (3 action | 3 D-pad ~= 50/50 for thumb reach,
+   vs the old 2|3 = 60% D-pad). Each pane lays its own tiles straight into this
+   grid via renderTouch — no separate action/pad blocks — so a pane can own any
+   slot (e.g. the a-z pane spans the full width). Rows auto-size equally. */
 #xsofy-shell .touch {
   display: none;
-  grid-template-columns: 3fr 2fr;
-  grid-template-rows: 1fr;
+  grid-template-columns: repeat(6, 1fr);
+  /* The keyboard area is a fixed slice (terminal capped at 55dvh); 1fr rows
+     pack the buttons into whatever height that slice provides rather than
+     growing the slice to fit them. Both panes are exactly 5 rows (30 cells /
+     6 cols), so the rows fill identically on each: uniform button height, no
+     size jump on swap, and the grid can never overflow into a scrollbar.
+     minmax(0,…) is load-bearing: a bare 1fr track floors at the buttons'
+     content height, and in the landscape rail 6 such rows overshoot 100dvh by
+     a few px — the "ever so slightly scrollable" rail. */
+  grid-auto-rows: minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
   flex: 1;
   min-height: 0;
 }
 @media (orientation: portrait) { #xsofy-shell .touch { display: grid; } }
 body.force-touch #xsofy-shell .touch { display: grid; }
-/* Landscape force-touch — constrain the D-pad to a usable width instead of
-   letting it span a 1024+px viewport, and center it. */
 @media (orientation: landscape) {
   body.force-touch #xsofy-shell .touch {
-    max-width: 560px;
-    width: 100%;
-    margin-left: auto;
-    margin-right: auto;
-    flex: 0 0 auto;
+    max-width: 720px; width: 100%; margin-left: auto; margin-right: auto; flex: 0 0 auto;
   }
 }
-#xsofy-shell .pad,
-#xsofy-shell .actions {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  /* Explicit 100% breaks the circular sizing: without it, 1fr rows resolve
-     against content size, which the rows themselves determine — so they
-     collapse. */
-  height: 100%;
-}
-#xsofy-shell .pad { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
-#xsofy-shell .actions { grid-template-columns: 1fr 1fr; grid-template-rows: repeat(3, 1fr); }
 
-/* Dev-tier visibility contract. Two axes: the OPTIONS tile reveals player
-   options at runtime (mode-debug), while diagnostics (mode-urldiag) and dev
-   tooling (mode-dev) are URL-gated only — set here now so the controls slice
-   only has to add tier-classed elements, not re-plumb the gating. Nothing
-   carries these classes yet, so every rule is inert until then. */
+/* Dev-tier visibility contract. mode-debug reveals player-visible diagnostics;
+   diagnostics (mode-urldiag) and dev tooling (mode-dev) are URL-gated only
+   (?mode=debug|dev). The mode classes are painted by applyShellState below. */
 #xsofy-shell:not(.mode-debug)   .debug-only { display: none; }
 #xsofy-shell:not(.mode-urldiag) .diag-only  { display: none; }
 #xsofy-shell:not(.mode-dev)     .dev-only   { display: none; }
 #xsofy-shell.mode-debug .play-only          { display: none; }
+
+/* ============================================================
+   controls + style — opinionated chrome layered onto the scaffold above.
+   Theming, the info-bar grid, and the button/tile look. These rules only add
+   appearance to the structure already established; they don't restructure it.
+   ============================================================ */
+#xsofy-shell {
+  --bar-bg: #110d08;
+  --bar-fg: #ede1c4;
+  --bar-dim: #7a6d52;
+  --bar-accent: #f5b041;
+  --bar-rule: rgba(245, 176, 65, 0.18);
+  background: var(--bar-bg);
+  color: var(--bar-fg);
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  user-select: none;
+  -webkit-user-select: none;
+  border-top: 1px solid var(--bar-rule);
+}
+#xsofy-shell .row { align-items: center; gap: 0.6rem; padding: 0.45rem 0.75rem; }
+/* Side/bottom padding folds in the device safe areas (viewport-fit=cover):
+   home indicator below in portrait, notch/rounded corners at the sides. */
+#xsofy-shell .touch { gap: 0.15rem; padding: 0.5rem calc(0.6rem + env(safe-area-inset-right, 0px)) calc(0.7rem + env(safe-area-inset-bottom, 0px)) calc(0.6rem + env(safe-area-inset-left, 0px)); }
+/* Touch tiles fill their fixed grid row exactly, so a glyph-only key (a–z pane)
+   is the same height as a glyph+label key (gameplay pane) — no size jump when
+   swapping panes. Content is centered by the button's own flexbox. */
+#xsofy-shell .touch button { height: 100%; min-height: 0; }
+/* Keyboard keys (a-z pane): 10 per row won't fit a 390px phone at the 44px
+   tap-target floor (10 x 44 = 440 > 390), so relax min-width and let the fine
+   grid size them (~37px). Below the guideline, but that's what OS keyboards do
+   — the visible key is small; a finger still lands it. */
+#xsofy-shell .touch button.kbd { min-width: 0; padding-left: 0; padding-right: 0; }
+#xsofy-shell .touch button.kbd .glyph { font-size: 15px; }
+
+/* Two-row info bar. Single-row crammed title/quest/stats/chips into ~375px and
+   lost the right half of both proper-noun strings on every phone:
+     row 1:  [ title ]   [ OPTIONS tile ]
+     row 2:  [ quest ]   [ stats + option chips ]
+   The left column carries the proper-noun strings; minmax(0,1fr) lets it shrink
+   below content width so text-overflow:ellipsis fires. */
+#xsofy-shell .info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.6rem;
+  row-gap: 0.15rem;
+  align-items: start;
+  padding-top: 0.3rem;
+  border-bottom: 1px solid var(--bar-rule);
+  /* Hard height so opening/closing options never resizes the bar. min-height was
+     only a floor — the debug row's chips could still grow it past 56 and make the
+     bar flip; a fixed height + border-box keeps it constant (the single-line
+     chips below are sized to fit). Options fill the space below the tile, empty
+     in play. */
+  box-sizing: border-box;
+  height: 52px;
+  overflow: hidden;
+}
+#xsofy-shell .info .title { grid-area: 1 / 1; color: var(--bar-fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Right controls row: spans BOTH text rows (grid-row 1/3), vertically centered,
+   right-aligned — one row of full-height chips instead of two half-height stacks
+   (the left column keeps its two text rows). */
+#xsofy-shell .info .debug-row { grid-area: 1 / 2 / 3 / 3; justify-self: end; align-self: center; display: flex; flex-direction: row; align-items: center; gap: 0.4rem; }
+/* Layer switcher — a compact segmented MOVE | a·z toggle. The active half is
+   filled amber; tapping the other half swaps the touch pane. */
+/* The switcher only makes sense when the touch UI is active — same condition as
+   .touch (portrait OR force-touch). Hidden on desktop-no-touch so there's no
+   switcher leading into panes that don't belong there (and no config trap). */
+#xsofy-shell .seg-switch { display: none; flex: 0 0 auto; align-items: stretch; min-height: 2.2rem; border: 1px solid var(--bar-rule); border-radius: 5px; overflow: hidden; }
+@media (orientation: portrait) { #xsofy-shell .seg-switch { display: inline-flex; } }
+body.force-touch #xsofy-shell .seg-switch { display: inline-flex; }
+/* Dev tier gets the switcher even without touch: config (build chip, ▦ force-
+   touch) must stay reachable on a plain desktop — and ▦ must stay recoverable
+   after toggling the touch layout off. */
+#xsofy-shell.mode-dev .seg-switch { display: inline-flex; }
+#xsofy-shell .seg-switch .seg { min-height: 0; min-width: 0; margin: 0; padding: 0 0.6rem; border: 0; border-radius: 0; background: transparent; color: var(--bar-dim); font-size: 11px; letter-spacing: 0.04em; }
+#xsofy-shell .seg-switch .seg + .seg { border-left: 1px solid var(--bar-rule); }
+#xsofy-shell .seg-switch .seg.active { background: rgba(245, 176, 65, 0.18); color: var(--bar-accent); }
+#xsofy-shell .seg-switch .seg-icon { font-size: 13px; padding: 0 0.5rem; }
+/* Settings pane — shares the key-pane area; shown only when the ⚙ segment is
+   active (body toggles .show-settings). Chips wrap from the top-left. */
+/* Bottom padding reserves the two build-chip lines: the chip is absolutely
+   positioned at the pane's bottom edge, and in a content-sized pane (desktop
+   dev) it would otherwise overlap the chips. */
+#xsofy-shell .settings { display: none; position: relative; flex-wrap: wrap; align-content: flex-start; justify-content: flex-end; gap: 0.5rem; padding: 0.7rem 0.6rem calc(0.7rem + 30px); flex: 1; min-height: 0; }
+/* Same visibility gate as the switcher (portrait | force-touch | dev) — an
+   unconditional show left the pane rendering into a collapsed desktop bar
+   after ▦ toggled the touch layout off (chips + build chip piled up bottom-
+   right as residue). */
+@media (orientation: portrait) { #xsofy-shell.show-settings .settings { display: flex; } }
+body.force-touch #xsofy-shell.show-settings .settings { display: flex; }
+#xsofy-shell.mode-dev.show-settings .settings { display: flex; }
+#xsofy-shell.show-settings .touch { display: none !important; }
+#xsofy-shell .settings .font-cycle { flex: 0 0 auto; }
+#xsofy-shell .settings .seg-label { color: var(--bar-dim); font-size: 10px; }
+/* Landscape a·z bottom sheet — in the landscape rail a 10-wide keyboard
+   compresses into ~25px slivers, so the a·z segment opens it FULL-WIDTH across
+   the bottom instead. position:fixed escapes the rail while the element stays
+   inside #xsofy-shell, so the button/theme rules still apply. The rail keeps
+   the PLAY grid while the sheet is up — movement stays under the thumb during
+   menus. Close = tap the play/config segment. */
+#xsofy-shell .kbd-sheet { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; grid-template-columns: repeat(20, 1fr); gap: 0.15rem; grid-auto-rows: 44px; padding: 0.5rem calc(0.6rem + env(safe-area-inset-right, 0px)) calc(0.5rem + env(safe-area-inset-bottom, 0px)) calc(0.6rem + env(safe-area-inset-left, 0px)); background: var(--bar-bg); border-top: 1px solid var(--bar-rule); }
+#xsofy-shell .kbd-sheet.open { display: grid; }
+/* Landscape status strip — the diag chips (t/perf/dims) don't work crammed next
+   to the switcher in the rail, so landscape reserves a thin band under the
+   terminal and the chips reparent into it (placeStats). The a·z sheet may
+   cover it (z 30 > 20). Hidden outside the landscape-rail mode; the future
+   title/quest wiring can share it. */
+#xsofy-shell .status-strip { display: none; }
+/* Hold-to-repeat is a touch affordance — desktop keyboards repeat at the OS
+   level, so hide the toggle on a fine pointer (still shown under force-touch). */
+@media (hover: hover) and (pointer: fine) {
+  body:not(.force-touch) #xsofy-shell .touch-only { display: none; }
+}
+/* Self-revealing perf cells: hidden until their datum is emitted, so the bar
+   shows only live numbers, not dead middots. */
+#xsofy-shell .stat-hidden { display: none; }
+/* Ellipsize the quest from the LEFT so the meaningful suffix (the item name)
+   survives truncation — "…of Borrowed Confidence", not "seeking C…". */
+#xsofy-shell .info .quest { grid-area: 2 / 1; color: var(--bar-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; direction: rtl; text-align: left; }
+/* Build-provenance chip — lives in the settings pane (tucked away but ungated:
+   bug reports need it, nooga/xsofy#44). Pinned to the pane's bottom edge, out
+   of the chips' wrap flow; SHA stays drag-selectable. */
+#xsofy-shell .settings .build { position: absolute; left: 0.6rem; right: 0.6rem; bottom: 0.5rem; text-align: right; color: var(--bar-dim); font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; min-width: 0; font-variant-numeric: tabular-nums; user-select: text; -webkit-user-select: text; }
+/* Pre-startup title placeholder (version from build-info) — dim so the real
+   title visibly takes over when the game announces itself. */
+#xsofy-shell .info .title.placeholder { color: var(--bar-dim); font-weight: 400; }
+#xsofy-shell .info .stats { display: flex; align-items: center; gap: 0.6rem; color: var(--bar-accent); font-variant-numeric: tabular-nums; }
+#xsofy-shell .info .stats .k { color: var(--bar-dim); }
+
+#xsofy-shell button {
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--bar-fg);
+  background: rgba(245, 176, 65, 0.06);
+  border: 1px solid var(--bar-rule);
+  border-radius: 8px;
+  padding: 0.55rem 0.5rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(245, 176, 65, 0.25);
+  transition: background 0.08s ease, border-color 0.08s ease;
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  line-height: 1.1;
+}
+#xsofy-shell button:active,
+#xsofy-shell button.pressed { background: rgba(245, 176, 65, 0.22); border-color: var(--bar-accent); }
+
+/* D-pad color-treatment variants (?dpad=). The movement tiles carry .dpad; these
+   distinguish the pad from the amber action cluster for at-a-glance ID.
+   - fill (default): same amber hue, more filled — the 3x3 reads as one solid pad.
+   - cool: a subtle slate hue shift — movement as its own navigational zone.
+   - off: no treatment (baseline). */
+body.dpad-fill #xsofy-shell button.dpad { background: rgba(245, 176, 65, 0.22); border-color: rgba(245, 176, 65, 0.50); }
+body.dpad-fill #xsofy-shell button.dpad .glyph { color: #ffcf7a; }
+body.dpad-cool #xsofy-shell button.dpad { background: rgba(126, 166, 208, 0.09); border-color: rgba(126, 166, 208, 0.28); }
+body.dpad-cool #xsofy-shell button.dpad .glyph { color: #a8c6e0; }
+body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55); }
+
+#xsofy-shell button .glyph { font-size: 16px; color: var(--bar-accent); }
+#xsofy-shell button .label { font-size: 10px; color: var(--bar-dim); letter-spacing: 0.05em; margin-top: 2px; }
+/* Empty slot in a pane — holds grid alignment without a tappable target. */
+/* Empty grid slots: a disabled button-shaped ghost (fills the cell like a real
+   tile, but muted and non-tappable) so the grid structure reads clearly. */
+#xsofy-shell button.filler {
+  background: rgba(245, 176, 65, 0.012);
+  border-color: rgba(245, 176, 65, 0.06);
+  cursor: default;
+  pointer-events: none;
+}
+/* Font-size cycle lives in the info row: compact, intrinsic height so the row
+   stays one line. */
+/* Info-bar chips (font size, repeat, force-touch, options tile). Lay glyph +
+   value on ONE line (flex-direction:row overrides the button column) so the chip
+   height is constant as the value changes — that height jitter was flipping the
+   shrunk info bar. */
+#xsofy-shell .font-cycle { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 0.25rem; min-height: 2.2rem; min-width: 0; padding: 0.15rem 0.6rem; border-radius: 5px; font-size: 11px; line-height: 1.2; color: var(--bar-dim); }
+#xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
+
+/* Phone landscape (short viewport) — split the shell to the RIGHT instead of
+   stacking it below the terminal (which leaves a phone only ~130px of game).
+   Terminal keeps the left ~70% so the game's own left HUD sidebar has the width
+   to stay open — unlike portrait, where the narrow terminal drops it. Portrait's
+   exact control block — side-by-side D-pad + the multi-pane action column (cycle
+   + all panes intact) — is transplanted verbatim into a ~30% right column: we
+   only REPOSITION it, not reshape it. Scoped by max-height so tablet/desktop
+   force-touch opt-in (taller viewports) keeps the centered strip above. First
+   cut — ratio tuned on-device (F18). Must follow the landscape force-touch rules
+   above: equal specificity, so source order decides which wins on a phone (both
+   media queries match). */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.force-touch              { flex-direction: row; }
+  /* 22px shaved off the terminal for the status strip below it. */
+  body.force-touch #app         { height: calc(100dvh - 22px); flex: 1 1 auto; min-width: 0; }
+  body.force-touch #xsofy-shell .status-strip { display: flex; position: fixed; left: 0; right: 30%; bottom: 0; height: 22px; z-index: 20; align-items: center; gap: 0.6rem; padding: 0 0.5rem 0 calc(0.5rem + env(safe-area-inset-left, 0px)); background: var(--bar-bg); border-top: 1px solid var(--bar-rule); font-size: 10px; }
+  /* Info left (title, then quest), stats hugging the right edge. The .info-
+     scoped title/quest rules don't follow the nodes here, so restate the look
+     at strip scale: title keeps its weight, quest keeps the ellipsize-from-
+     the-LEFT trick (the item name survives truncation). */
+  body.force-touch #xsofy-shell .status-strip .stats { margin-left: auto; }
+  body.force-touch #xsofy-shell .status-strip .title { flex: 0 0 auto; color: var(--bar-fg); font-weight: 500; white-space: nowrap; }
+  body.force-touch #xsofy-shell .status-strip .quest { flex: 0 1 auto; min-width: 0; color: var(--bar-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+  body.force-touch #xsofy-shell {
+    flex: 0 0 30%;
+    height: 100dvh;
+    overflow: auto;
+    border-top: none;
+    border-left: 1px solid var(--bar-rule);
+    /* The rail owns the right screen edge; keep keys clear of the notch/
+       rounded corner when that side faces it. */
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  /* Undo the strip-centering AND its content sizing: in the rail the grid
+     must SHRINK with the viewport — flex 1 + min-height 0 (the strip rule's
+     flex:0 0 auto otherwise sizes the grid to content and overflows short
+     phones), no 44px key-width floor, tighter key padding. 667x375 and
+     568x320 clipped the bottom row and the right D-pad column before this. */
+  body.force-touch #xsofy-shell .touch { max-width: none; width: auto; margin: 0; flex: 1 1 auto; min-height: 0; }
+  body.force-touch #xsofy-shell .touch button { min-width: 0; padding: 0.2rem 0.15rem; }
+  /* Narrow rail: collapse the info bar to a single column so title/quest don't
+     fight the fixed-width chips for space. */
+  body.force-touch #xsofy-shell .info { grid-template-columns: minmax(0, 1fr); }
+}
 </style>
 
 <!-- Blank scaffold: empty info + touch rows, mounted as #app's sibling. The
@@ -135,11 +361,65 @@ body.force-touch #xsofy-shell .touch { display: grid; }
      D-pad/action tiles into .pad/.actions — the structure and IDs are here so
      that slice is purely additive. -->
 <div id="xsofy-shell" class="mode-play">
-  <div class="row info"></div>
-  <div class="row touch">
-    <div class="pad" id="xs-pad"></div>
-    <div class="actions" id="xs-actions"></div>
+  <div class="row info">
+    <!-- Title/quest are tier-independent: the debug tier used to hide them in
+         favor of the build chip sharing this cell, but the chip lives in the
+         config pane now — dev/debug sessions kept losing the title (and the
+         version placeholder) for no benefit. -->
+    <span class="title" id="xs-title">—</span>
+    <span class="quest" id="xs-quest"></span>
+    <!-- Right controls: ONE horizontal row spanning both text rows (grid-row
+         1/3), vertically centered, so the buttons get the bar's full height
+         instead of two half-height stacks. Play shows just the ⚙ tile; debug
+         adds the perf stats + option chips to its left. Tier classes gate each
+         item, so it's just ⚙ in play. -->
+    <div class="debug-row">
+      <span class="stats" id="xs-stats">
+        <span class="diag-only stat-hidden"><span class="k">t</span><span id="xs-turn">·</span></span>
+        <span class="diag-only stat-hidden" id="xs-perf-turn-wrap"><span class="k">@t</span><span id="xs-perf-turn">·</span></span>
+        <span class="diag-only stat-hidden"><span class="k">u</span><span id="xs-update">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">r</span><span id="xs-render">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">i</span><span id="xs-input-lag">·</span><span class="k">ms</span></span>
+        <span class="diag-only stat-hidden"><span class="k">c</span><span id="xs-cells">·</span></span>
+        <span class="diag-only stat-hidden" id="xs-dims"><span id="xs-cols">·</span>×<span id="xs-rows">·</span></span>
+      </span>
+      <!-- Layer switcher — 2-segment ⚙ | a·z, anchored far right. PLAY is the
+           base state (no segment lit); each segment TOGGLES its layer — tap to
+           open, tap again to return to play. Two segments instead of three so
+           the portrait bar has room for title + quest. Always visible; one
+           control in a fixed spot across panes and orientations. -->
+      <div class="seg-switch" id="xs-layer-switch" role="group" aria-label="Touch layer">
+        <button class="seg" id="xs-seg-set" title="Settings" aria-label="Settings">config</button>
+        <button class="seg" id="xs-seg-az" title="a–z keyboard">a·z</button>
+      </div>
+    </div>
   </div>
+  <!-- One 6-col grid, filled per-pane by renderTouch (prototype). -->
+  <div class="row touch" id="xs-touch"></div>
+  <!-- Settings pane — occupies the key-pane area when ⚙ is selected. Holds the
+       dev/player toggles that used to sit in the top bar; room to grow. Font +
+       repeat are player settings (always available); force-touch is dev-only. -->
+  <div class="row settings" id="xs-settings">
+    <button class="font-cycle" id="xs-repeat-toggle" title="Toggle hold-to-repeat">
+      <span class="glyph">↻</span><span class="seg-label">repeat</span><span id="xs-repeat-state">on</span>
+    </button>
+    <button class="font-cycle" id="xs-font-cycle" title="Cycle char size">
+      <span class="glyph">Aa</span><span class="seg-label">size</span><span id="xs-font-px">22</span>
+    </button>
+    <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
+      <span class="glyph">▦</span><span class="seg-label">touch</span><span id="xs-touch-state">auto</span>
+    </button>
+    <!-- Build provenance — ungated (bug reports need it, nooga/xsofy#44).
+         Populated from build-info.json: tools/write-build-info.sh in CI/make
+         wasm, serve.sh locally; absent = ad-hoc bundle, chip stays empty. -->
+    <span class="build" id="xs-build" title="Build provenance — build-info.json"></span>
+  </div>
+  <!-- Landscape-only a·z bottom sheet; renderTouch fills it when the a·z
+       segment is active in the landscape rail mode. Empty otherwise. -->
+  <div class="kbd-sheet" id="xs-kbd-sheet"></div>
+  <!-- Landscape-only status strip under the terminal; placeStats reparents the
+       diag chips (#xs-stats) here in landscape-rail mode. -->
+  <div class="status-strip" id="xs-status-strip"></div>
 </div>
 
 <script>
@@ -166,7 +446,7 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   // ?font=system bypasses the bundled rune face and renders in the platform
   // mono — a debug/preference escape hatch. Runes (U+16A0–16FF) then fall back
   // to the viewer's system fonts, which may tofu where none cover them.
-  const MONO = '"DejaVu Sans Mono", "Menlo", monospace';
+  const MONO = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace';
   const sysFont = new URLSearchParams(location.search).get('font') === 'system';
   const term = new Terminal({
     fontFamily: sysFont ? MONO : '"Fairfax HD", ' + MONO,
@@ -215,36 +495,41 @@ body.force-touch #xsofy-shell .touch { display: grid; }
   // Debounced so a drag/rotate burst settles on the final size, not an
   // intermediate one. visualViewport catches the mobile URL-bar show/hide,
   // which a window 'resize' can miss. Guarded: a resize can fire pre-onReady.
+  // Fit the terminal to #app and letterbox the sub-cell remainder — synchronous,
+  // so a discrete change (font-size tap) can fit in the same frame with no flash.
+  function applyFit() {
+    // Clear the letterbox padding before fitting so fit() measures the full
+    // box, not the previously-padded one (which would ratchet inward).
+    const host = term.element ? term.element.parentElement : null; // the frame mount (#app)
+    if (host) { host.style.padding = "0px"; }
+    try { fit.fit(); } catch (_) {}
+    // Letterbox the sub-cell fit remainder. The grid is a whole number of
+    // fixed-size cells, so up to ~one cell is left over per axis; xterm pins
+    // the grid top-left, pooling the slack on the right/bottom edges. Pad to
+    // place it: centered on X, top-aligned with a small fixed margin on Y so
+    // the grid hugs the top and the keyboard space (from the 55dvh cap) stays
+    // below, instead of the grid centering in the capped band.
+    const screen = host ? host.querySelector(".xterm-screen") : null;
+    if (host && screen) {
+      const slackX = host.clientWidth - screen.clientWidth;
+      const slackY = host.clientHeight - screen.clientHeight;
+      if (slackX > 1) {
+        const p = Math.floor(slackX / 2) + "px";
+        host.style.paddingLeft = p; host.style.paddingRight = p;
+      }
+      if (slackY > 1) {
+        const top = Math.min(8, slackY); // small top margin; the rest sits below
+        host.style.paddingTop = top + "px";
+        host.style.paddingBottom = (slackY - top) + "px";
+      }
+    }
+  }
+  // Debounced wrapper for resize/rotate bursts — settle on the final size, not an
+  // intermediate one.
   let refitPending;
   function refit() {
     clearTimeout(refitPending);
-    refitPending = setTimeout(() => {
-      // Clear the letterbox padding before fitting so fit() measures the full
-      // box, not the previously-padded one (which would ratchet inward).
-      const host = term.element ? term.element.parentElement : null; // the frame mount (#app)
-      if (host) { host.style.padding = "0px"; }
-      try { fit.fit(); } catch (_) {}
-      // Letterbox the sub-cell fit remainder. The grid is a whole number of
-      // fixed-size cells, so up to ~one cell is left over per axis; xterm pins
-      // the grid top-left, pooling the slack on the right/bottom edges. Pad to
-      // place it: centered on X, top-aligned with a small fixed margin on Y so
-      // the grid hugs the top and the keyboard space (from the 55dvh cap) stays
-      // below, instead of the grid centering in the capped band.
-      const screen = host ? host.querySelector(".xterm-screen") : null;
-      if (host && screen) {
-        const slackX = host.clientWidth - screen.clientWidth;
-        const slackY = host.clientHeight - screen.clientHeight;
-        if (slackX > 1) {
-          const p = Math.floor(slackX / 2) + "px";
-          host.style.paddingLeft = p; host.style.paddingRight = p;
-        }
-        if (slackY > 1) {
-          const top = Math.min(8, slackY); // small top margin; the rest sits below
-          host.style.paddingTop = top + "px";
-          host.style.paddingBottom = (slackY - top) + "px";
-        }
-      }
-    }, 100);
+    refitPending = setTimeout(applyFit, 100);
   }
   window.addEventListener('resize', refit);
   window.addEventListener('orientationchange', refit);
@@ -255,30 +540,443 @@ body.force-touch #xsofy-shell .touch { display: grid; }
     window.visualViewport.addEventListener('scroll', refit);
   }
 
-  // --- Force-touch detection (plumbing; the toggle UI is a later slice). A
-  // coarse primary pointer (phone/tablet) needs the on-screen controls in every
-  // orientation, so drive body.force-touch from capability OR a persisted dev
-  // override. The class lives on <body> because it also retargets #app (the
-  // terminal), which is #xsofy-shell's sibling, not a descendant. ---
-  const coarsePointer = !!window.matchMedia?.('(pointer: coarse)')?.matches;
-  const forceTouchEnabled = localStorage.getItem('xsofy/force-touch') === '1';
-  document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
+  // ============================================================
+  // controls + style — info-bar wiring, the D-pad/action tiles, and the player
+  // options. All of it hangs off the scaffold's containers and mode classes.
+  // ============================================================
 
-  // --- Dev-tier gating (plumbing; the runtime OPTIONS toggle is a later slice).
-  // Seed the tier from ?mode= (debug|dev → diagnostics/dev tooling) or the last
-  // persisted state, and stamp the mode classes onto #xsofy-shell so the tier-
-  // gated CSS above has its contract. mode-play is the permanent base; dev is a
-  // strict superset of debug. Nothing is tier-classed yet, so this is inert
-  // until the controls slice adds gated elements. ---
+  // Shell-owned font sizing (replaces the fork's host-side _lgSetFontSize). Safe
+  // before term.open: it sets the option (the boot-time fit picks it up) and the
+  // pre-open fit inside refit is caught.
+  function setTermFontSize(n) {
+    if (typeof n !== 'number' || n < 6 || n > 64) return;
+    const cols = term.cols, rows = term.rows;
+    term.options.fontSize = n;
+    clearTimeout(refitPending);  // cancel any pending debounced fit
+    applyFit();                  // fit now — no 100ms unfitted flash/lurch
+    // The box re-fits in-frame, but xterm reflows the OLD frame's content into
+    // the new grid — a garbled flash until the game's repaint (BEL nudge round
+    // trip) lands. Clear the viewport so the interim is clean background
+    // instead. Only when the grid actually changed: same-dims means no reflow
+    // AND no resize nudge, so a clear would sit blank until the next keypress.
+    if (term.element && (term.cols !== cols || term.rows !== rows)) term.write('\x1b[2J');
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const titleEl = $('xs-title');
+  const questEl = $('xs-quest');
+  const turnEl = $('xs-turn');
+
+  // Quest-item name for the bar — bare (no "seeking" prefix), it's the part
+  // that must survive the narrow portrait bar.
+  function nameOf(q) {
+    if (!q) return '';
+    if (typeof q === 'string') return q;
+    return q.name || q[':name'] || q[':item']?.name || '';
+  }
+
+  // Build provenance chip (settings pane): fetch the JSON written by
+  // tools/write-build-info.sh (CI / make wasm) or serve.sh (local). Silently
+  // no-ops when absent (ad-hoc bundles). Until the game announces itself via
+  // xsofy/startup, the version also stands in for the title — a light
+  // "xsofy vX" the real title overwrites (nooga/xsofy#44).
+  const buildEl = $('xs-build');
+  if (buildEl) {
+    fetch('build-info.json', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        const ver = d.version || '';
+        const xs = (d.xsofy || '').slice(0, 7);
+        const lg = (d['let-go'] || '');
+        const dt = d.date || '';
+        buildEl.innerHTML = `xsofy ${ver ? ver + ' · ' : ''}${xs}${dt ? ' · ' + dt : ''}<br>lg ${lg}`;
+        if (titleEl && titleEl.textContent === '—' && (ver || xs)) {
+          // Bar shows just the release part (v0.0.2), not the whole describe
+          // string — the chip keeps the full provenance.
+          const rel = (ver.match(/^v\d+(?:\.\d+)*/) || [])[0];
+          titleEl.textContent = 'xsofy ' + (rel || ver || xs);
+          titleEl.classList.add('placeholder');
+        }
+      })
+      .catch(() => {});
+  }
+
+  window.addEventListener('xsofy/startup', (e) => {
+    const d = e.detail || {};
+    titleEl.classList.remove('placeholder');  // real title supersedes the version stand-in
+    titleEl.textContent = d.title || '—';
+    questEl.textContent = nameOf(d.quest);
+    // Reset + re-hide the turn counter on a new run; it self-reveals after the
+    // first real tick, so the bar never shows a dead "t·"/"t0".
+    turnEl.textContent = '0';
+    turnEl.parentElement.classList.add('stat-hidden');
+  });
+
+  // @t reports the turn the perf measurements were taken for; by design it lags
+  // t (current turn) by exactly 1. Showing both when they're +1 apart is noise —
+  // hide @t in that case, reveal it only on real drift (perf pipeline stuck).
+  let lastTurn = null, lastPerfTurn = null;
+  const perfTurnWrap = $('xs-perf-turn-wrap');
+  function paintPerfTurnDrift() {
+    if (!perfTurnWrap) return;
+    const inSync = lastTurn != null && lastPerfTurn != null
+      && Number(lastTurn) - Number(lastPerfTurn) === 1;
+    perfTurnWrap.classList.toggle('stat-hidden', lastPerfTurn == null || inSync);
+  }
+
+  window.addEventListener('xsofy/stats', (e) => {
+    const d = e.detail || {};
+    // hp/max-hp/depth are still emitted but shown by the in-grid HUD now; only
+    // the debug turn counter reads here.
+    if (d.turn != null) {
+      turnEl.textContent = d.turn;
+      turnEl.parentElement.classList.remove('stat-hidden');  // self-reveal
+      lastTurn = d.turn;
+      paintPerfTurnDrift();
+    }
+  });
+
+  // Terminal size — the debug bar shows current cols×rows so dimension-specific
+  // layout bugs are reproducible without guesswork.
+  const colsEl = $('xs-cols'), rowsEl = $('xs-rows'), dimsEl = $('xs-dims');
+  window.addEventListener('xsofy/term-size', (e) => {
+    const d = e.detail || {};
+    if (d.cols != null && colsEl) colsEl.textContent = d.cols;
+    if (d.rows != null && rowsEl) rowsEl.textContent = d.rows;
+    if (d.cols != null && d.rows != null) dimsEl?.classList.remove('stat-hidden');
+  });
+
+  // Per-turn engine vs render split. Display lags one turn to match the map's
+  // top-right gauge (which can't show the current turn's number without
+  // rendering twice): on turn N's event we paint turn N-1's held values, then
+  // stash N for N+1.
+  const updateEl = $('xs-update'), renderEl = $('xs-render'), inputLagEl = $('xs-input-lag');
+  const perfTurnEl = $('xs-perf-turn'), cellsEl = $('xs-cells');
+  let pendingPerf = null;
+  window.addEventListener('xsofy/perf', (e) => {
+    if (pendingPerf) {
+      if (pendingPerf.update != null) { updateEl.textContent = pendingPerf.update; updateEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf.render != null) { renderEl.textContent = pendingPerf.render; renderEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf['input-lag'] != null) { inputLagEl.textContent = pendingPerf['input-lag']; inputLagEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf.cells != null) { cellsEl.textContent = pendingPerf.cells; cellsEl.parentElement.classList.remove('stat-hidden'); }
+      if (pendingPerf.turn != null) { perfTurnEl.textContent = pendingPerf.turn; lastPerfTurn = pendingPerf.turn; paintPerfTurnDrift(); }
+    }
+    pendingPerf = e.detail || null;
+  });
+
+  // Pointer-driven key injection. pointerdown so taps register the instant the
+  // finger lands. sendInput accepts raw bytes — they go through the same path as
+  // xterm keystrokes, so no game-side code knows the difference.
+  function press(btn) {
+    const k = btn.dataset.key;
+    if (!k || !window.LetGoHost) return;
+    // Data attributes can't carry literal control bytes — decode JS-escapes.
+    const decoded = k.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    window.LetGoHost.sendInput(decoded);
+    btn.classList.add('pressed');
+    setTimeout(() => btn.classList.remove('pressed'), 90);
+  }
+
+  function bindButton(btn) {
+    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); press(btn); startHoldRepeat(btn); });
+    btn.addEventListener('pointerup', stopHoldRepeat);
+    btn.addEventListener('pointerleave', stopHoldRepeat);
+    btn.addEventListener('pointercancel', stopHoldRepeat);
+    btn.addEventListener('mousedown', (e) => e.preventDefault());  // don't steal terminal focus
+  }
+
+  // --- Touch panes. Two panes, each its own grid: MOVE (6-col: D-pad + actions)
+  // and a-z (20-col QWERTY keyboard). They share row HEIGHT (both 5 rows) so a
+  // swap doesn't resize vertically, but not width. Turn-based, so giving up the
+  // D-pad on the keyboard pane is fine — one nav tap restores it. ---
+  const ESC = '\u001b';
+  // mv() = a repeating movement arrow (carries .dpad for the color treatment).
+  // The pane switch is a top-bar segmented control now, not an in-grid tile.
+  const mv = (key, glyph, label) => ({ key, glyph, label, repeat: true, cls: 'dpad' });
+  // a-z keyboard helpers. kbd() = a QWERTY key on the fine 20-col grid: each key
+  // spans 2 units so 10 fit per row (a phone-keyboard width). The .kbd class
+  // relaxes the 44px min-width so 10 keys fit a 390px phone (~37px each, below the
+  // tap floor — the same tradeoff OS keyboards make). spacer() = an invisible
+  // offset that produces the iPhone home/bottom-row stagger.
+  const kbd = (k) => ({ key: k, glyph: k, span: 2, cls: 'kbd' });
+  const spacer = (n) => ({ spacer: n });
+  // Landscape PLAY — the ~30% landscape rail fits 4 columns, not 6, so the
+  // pane carries a landscape-specific 4x6 tile list: pad right-middle, action
+  // column down the left, y/n/wait beneath the pad. (A corner-anchored-pad
+  // alternative lost the on-device comparison, 2026-07-13.) No ⏎ here — no
+  // known in-game use, and the a·z sheet keeps one; ? rides row 1. Cuts b/c
+  // vs portrait's 26 keys: the only tiles with no game action (both stay
+  // reachable on the a-z pane).
+  const LAND_PLAY = { cols: 4, tiles: [
+    { key: ESC, glyph: 'esc', label: 'BACK' },  { key: 'm', glyph: 'm', label: 'MSG' },   { key: 'i', glyph: 'i', label: 'INV' },   { key: '?', glyph: '?', label: 'HELP' },
+    { key: 'a', glyph: 'a', label: 'USE' },     { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'f', glyph: 'f', label: 'FIRE' },  { key: 'g', glyph: 'g', label: 'GET' },
+    { key: 'd', glyph: 'd', label: 'DROP' },    mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+    { key: '<', glyph: '<', label: 'ASC' },     mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+    { key: '>', glyph: '>', label: 'DESC' },    mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+    { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'y', glyph: 'y', label: 'YES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+  ]};
+  // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
+  // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
+  // a-z is a 20-col QWERTY keyboard for menu selection (xsofy menus label items
+  // a..z up to max-inventory 26, so a smaller letter set can't pick a full drop
+  // menu). Both are 5 rows, so button HEIGHT matches on a swap — only the key
+  // widths differ (the keyboard is deliberately its own shape).
+  const PANES = [
+    { label: 'PLAY', cols: 6, land: LAND_PLAY, tiles: [
+      // 5 rows (same height as the a-z keyboard pane). D-pad centered on the
+      // right (rows 2-4, cols 4-6) with y/n/wait below it (row 5). esc anchors
+      // top-left; col 2 runs the menu letters a-e in order (a/d/e double as
+      // their game actions, b/c are pure menu picks); col 3 stacks fire/get,
+      // then the stair pair, then runes. Remaining cells are muted placeholders.
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '\r', glyph: '⏎', label: 'ENTER' }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
+      { key: '?', glyph: '?', label: 'HELP' },   { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
+      null,                                      { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      null,                                      { key: 'd', glyph: 'd', label: 'DROP' },  { key: '>', glyph: '>', label: 'DESC' },  mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
+      null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    ]},
+    { label: 'a–z', cols: 20,
+      // Landscape sheet variant: 4 rows to give the game back a strip — the
+      // SPACE row is dropped (menus confirm on enter/letters), esc moves up
+      // into the bottom row's leading stagger slot (mirroring ⌫), and ⏎ rides
+      // as a thin span-1 companion right of 'l'.
+      land: { cols: 20, tiles: [
+        ...'1234567890'.split('').map(kbd),
+        ...'qwertyuiop'.split('').map(kbd),
+        { key: '?', glyph: '?', span: 1, cls: 'kbd' }, ...'asdfghjkl'.split('').map(kbd), { key: '\r', glyph: '⏎', span: 1, cls: 'kbd' },
+        { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+      ]},
+      tiles: [
+      // iPhone-ish QWERTY on a fine 20-col grid (each key spans 2 units = 10 per
+      // row). 5 rows to match the MOVE pane's height (no vertical jump on swap).
+      // Numbers row on top; home + bottom rows stagger via leading/trailing
+      // spacers (the bottom row's trailing slot is ⌫, phone-style); a function
+      // row (esc · space · ⏎) closes it like a phone keyboard — the pane switch
+      // now lives in the top bar, not a tile. Every row's spans sum to 20 so
+      // row-major auto-flow breaks cleanly.
+      ...'1234567890'.split('').map(kbd),
+      ...'qwertyuiop'.split('').map(kbd),
+      spacer(1), ...'asdfghjkl'.split('').map(kbd), spacer(1),
+      spacer(3), ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+      { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, { key: ' ', glyph: '␣', label: 'SPACE', span: 11 }, { key: '?', glyph: '?', label: 'HELP', span: 3 }, { key: '\r', glyph: '⏎', label: 'ENTER', span: 3 },
+    ]},
+  ];
+  let currentPane = 0;
+
+  function tileFor(spec) {
+    if (spec === null) { const f = document.createElement('button'); f.className = 'filler'; f.disabled = true; return f; }
+    const btn = document.createElement('button');
+    btn.dataset.key = spec.key;
+    // Per-instance (not per-key): the same key repeats on one pane and not
+    // another (e.g. "y" is NW movement on Pane 1, YES on Pane 2).
+    if (spec.repeat) btn.dataset.repeat = '1';
+    if (spec.cls) btn.classList.add(spec.cls);
+    if (spec.span) btn.style.gridColumn = 'span ' + spec.span;
+    const labelHtml = spec.label ? `<span class="label">${spec.label}</span>` : '';
+    btn.innerHTML = `<span class="glyph">${spec.glyph}</span>${labelHtml}`;
+    bindButton(btn);
+    return btn;
+  }
+
+  // Layer switcher — the top-bar ⚙ | a·z toggles. PLAY (pane 0) is the base
+  // state with no segment lit; setPane swaps the layer, updateSwitcher paints
+  // the lit segment. (Replaces the in-grid NAV tile, so the switch has one
+  // fixed home across both panes and orientations.)
+  const segAzEl = $('xs-seg-az'), segSetEl = $('xs-seg-set');
+  function updateSwitcher() {
+    segAzEl?.classList.toggle('active', currentPane === 1);
+    segSetEl?.classList.toggle('active', currentPane === 2);
+  }
+  // Pane 2 = the settings surface (not a tile grid): show it in the key-pane
+  // area via .show-settings; renderTouch still runs to close a lingering sheet.
+  function setPane(idx) {
+    if (idx === currentPane) return;
+    stopHoldRepeat();  // kill any in-flight repeat from a tile we're leaving
+    currentPane = idx;
+    document.getElementById('xsofy-shell').classList.toggle('show-settings', idx === 2);
+    renderTouch();
+    updateSwitcher();
+  }
+  // Both segments toggle: tapping the active one returns to the play base.
+  segAzEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(currentPane === 1 ? 0 : 1); });
+  segSetEl?.addEventListener('pointerdown', (e) => { e.preventDefault(); setPane(currentPane === 2 ? 0 : 2); });
+  segAzEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  segSetEl?.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // Landscape rail mode: the phone-landscape split (terminal left, ~30% rail
+  // right) from the max-height CSS block below, active only while the touch UI
+  // is (body.force-touch — set for any coarse pointer). Panes render their
+  // `land` variant there; the a-z pane escapes the rail into the bottom sheet.
+  const landRailMq = matchMedia('(orientation: landscape) and (max-height: 500px)');
+  const isLandRail = () => landRailMq.matches && document.body.classList.contains('force-touch');
+  const layoutFor = (pane) => (isLandRail() && pane.land) ? pane.land : pane;
+
+  function renderInto(el, layout) {
+    el.innerHTML = '';
+    el.style.gridTemplateColumns = `repeat(${layout.cols || 6}, 1fr)`;
+    for (const spec of layout.tiles) {
+      if (spec && spec.spacer) {  // invisible offset for the keyboard stagger
+        const s = document.createElement('div');
+        s.style.gridColumn = 'span ' + spec.spacer;
+        el.appendChild(s);
+        continue;
+      }
+      el.appendChild(tileFor(spec));  // tileFor turns null into a filler
+    }
+  }
+
+  // Title/quest and the diag chips live in the rail's info row in portrait but
+  // in the status strip under the terminal in landscape (info left, stats
+  // right — none of it fits beside the switcher there). appendChild MOVES the
+  // nodes, so this is idempotent; the .info grid-areas re-place title/quest on
+  // the way back regardless of child order.
+  function placeStats() {
+    const stats = $('xs-stats'), title = $('xs-title'), quest = $('xs-quest');
+    const strip = $('xs-status-strip'), info = document.querySelector('#xsofy-shell .info');
+    if (isLandRail()) {
+      if (title) strip.appendChild(title);
+      if (quest) strip.appendChild(quest);
+      if (stats) strip.appendChild(stats);
+    } else {
+      if (title) info?.appendChild(title);
+      if (quest) info?.appendChild(quest);
+      if (stats) document.querySelector('#xsofy-shell .debug-row')?.insertBefore(stats, $('xs-layer-switch'));
+    }
+  }
+
+  function renderTouch() {
+    const touchEl = $('xs-touch'), sheetEl = $('xs-kbd-sheet');
+    const azSheet = isLandRail() && currentPane === 1;
+    sheetEl.classList.toggle('open', azSheet);
+    if (azSheet) {
+      renderInto(sheetEl, layoutFor(PANES[1]));
+      renderInto(touchEl, layoutFor(PANES[0]));  // rail keeps movement under the thumb
+    } else {
+      sheetEl.innerHTML = '';
+      if (currentPane !== 2) renderInto(touchEl, layoutFor(PANES[currentPane]));
+    }
+    placeStats();
+  }
+  // Rotate/split-mode flips re-render the grid (a rotate used to only refit the
+  // terminal, leaving the portrait tile list overflowing the landscape rail).
+  landRailMq.addEventListener('change', () => { renderTouch(); updateSwitcher(); });
+
+  // Hold-to-repeat for opted-in tiles: after REPEAT_INITIAL ms, re-fire every
+  // REPEAT_INTERVAL ms until pointerup/cancel/leave.
+  const REPEAT_INITIAL = 150, REPEAT_INTERVAL = 83, REPEAT_LS_KEY = 'xsofy/auto-repeat';
+  const repeatToggleEl = $('xs-repeat-toggle'), repeatStateEl = $('xs-repeat-state');
+  let repeatEnabled = (localStorage.getItem(REPEAT_LS_KEY) ?? '1') === '1';
+  function paintRepeatState() {
+    if (repeatStateEl) repeatStateEl.textContent = repeatEnabled ? 'on' : 'off';
+    if (repeatToggleEl) repeatToggleEl.style.opacity = repeatEnabled ? '' : '0.5';
+  }
+  paintRepeatState();
+  let cancelHoldRepeat = null;
+  function startHoldRepeat(btn) {
+    if (cancelHoldRepeat) { cancelHoldRepeat(); cancelHoldRepeat = null; }
+    if (!repeatEnabled || btn.dataset.repeat !== '1') return;
+    let intervalId = null;
+    const initialId = setTimeout(() => { intervalId = setInterval(() => press(btn), REPEAT_INTERVAL); }, REPEAT_INITIAL);
+    cancelHoldRepeat = () => { clearTimeout(initialId); if (intervalId) clearInterval(intervalId); };
+  }
+  function stopHoldRepeat() { if (cancelHoldRepeat) { cancelHoldRepeat(); cancelHoldRepeat = null; } }
+
+  // D-pad color treatment variant (prototype): ?dpad=fill|cool|off distinguishes
+  // the movement pad from the action cluster. Defaults to 'fill'.
+  const dpadVariant = new URLSearchParams(location.search).get('dpad') || 'fill';
+  document.body.classList.add('dpad-' + dpadVariant);
+
+  renderTouch();  // initial render; tiles bind via tileFor on every pane swap
+  updateSwitcher();  // paint the active half of the top-bar layer switcher
+  // Static info-row buttons (repeat/font/touch/OPTIONS) — bound once, not rebuilt.
+  document.querySelectorAll('#xsofy-shell .info button').forEach(bindButton);
+  // Safety net: pointer released anywhere (dragged off a button) kills repeat.
+  window.addEventListener('pointerup', stopHoldRepeat);
+  window.addEventListener('pointercancel', stopHoldRepeat);
+
+  repeatToggleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();  // don't also start a repeat on the chip itself
+    repeatEnabled = !repeatEnabled;
+    localStorage.setItem(REPEAT_LS_KEY, repeatEnabled ? '1' : '0');
+    paintRepeatState();
+    stopHoldRepeat();
+  });
+  repeatToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // Font-size cycle. xterm's default 14 is unreadable on a 375px viewport; the
+  // chip cycles a short predictable set. First-ever load picks by orientation.
+  const FONT_SIZES = [12, 14, 18, 22, 28], LS_KEY = 'xsofy/font-size';
+  const cycleEl = $('xs-font-cycle'), fontPxEl = $('xs-font-px');
+  function applyFontSize(n) { setTermFontSize(n); if (fontPxEl) fontPxEl.textContent = n; }
+  function initFontSize() {
+    let n = parseInt(localStorage.getItem(LS_KEY) || '', 10);
+    if (!FONT_SIZES.includes(n)) n = matchMedia('(orientation: portrait)').matches ? 22 : 14;
+    applyFontSize(n);
+  }
+  cycleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const cur = parseInt(fontPxEl?.textContent || '14', 10);
+    const next = FONT_SIZES[(FONT_SIZES.indexOf(cur) + 1) % FONT_SIZES.length];
+    localStorage.setItem(LS_KEY, String(next));
+    applyFontSize(next);
+  });
+  cycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
+  initFontSize();
+
+  // --- Force-touch: capability OR the persisted dev override sets
+  // body.force-touch (reveals the touch UI in every orientation). The class
+  // lives on <body> because it also retargets #app (the terminal), which is
+  // #xsofy-shell's sibling, not a descendant. The ▦ toggle (dev tier) is an
+  // override for keyboardless fine-pointer sessions (desktop/tablet testing). ---
+  const FORCE_TOUCH_LS_KEY = 'xsofy/force-touch';
+  const touchToggleEl = $('xs-touch-toggle'), touchStateEl = $('xs-touch-state');
+  const coarsePointer = !!window.matchMedia?.('(pointer: coarse)')?.matches;
+  let forceTouchEnabled = localStorage.getItem(FORCE_TOUCH_LS_KEY) === '1';
+  function paintForceTouchState() {
+    // Capability forces it on (a touch device can't turn off its only input
+    // method); the toggle only matters on fine-pointer devices.
+    document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
+    // "force" vs "auto": forced pins the touch UI on; unforced ("auto") falls
+    // back to pointer-capability detection (coarse => shown), not truly off.
+    if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? 'force' : 'auto';
+    if (touchToggleEl) touchToggleEl.style.opacity = forceTouchEnabled ? '' : '0.5';
+    // The class feeds isLandRail (rail vs portrait tile lists) and lands after
+    // the first renderTouch on boot — re-render so a landscape boot picks the
+    // rail variant (and the desktop toggle swaps layouts live).
+    renderTouch();
+    updateSwitcher();
+  }
+  paintForceTouchState();
+  touchToggleEl?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    forceTouchEnabled = !forceTouchEnabled;
+    localStorage.setItem(FORCE_TOUCH_LS_KEY, forceTouchEnabled ? '1' : '0');
+    paintForceTouchState();
+    // The class toggle changes #app's height via CSS, but FitAddon only
+    // recomputes on a resize/explicit fit. rAF defers the dispatch so the new
+    // layout is in place when fit runs.
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  });
+  touchToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // --- Shell mode tiers. Additive: mode-play is the permanent base; mode-debug
+  // (player-visible diagnostics) and mode-dev (dev tooling) come from ?mode=
+  // ONLY — dev is a strict superset of debug. The retired OPTIONS cycle tile
+  // used to persist its state in localStorage; honoring that orphaned key left
+  // phones pinned in debug (title mysteriously absent in play) with no UI to
+  // leave, so it's ignored now. If a runtime toggle returns (the ⚙ settings
+  // pane is its natural home), it brings its own persistence.
+  // Diagnostics (turn/perf) are mode-urldiag, URL-only. ---
   const shellRoot = document.getElementById('xsofy-shell');
   const urlMode = new URLSearchParams(location.search).get('mode');
   const devMode = urlMode === 'dev';
-  let shellState = localStorage.getItem('xsofy/shell-state');
-  if (urlMode === 'dev' || urlMode === 'debug') shellState = 'debug';
-  else if (urlMode === 'play') shellState = 'play';
-  else if (shellState !== 'debug') shellState = 'play';
-  shellRoot.classList.toggle('mode-debug', shellState === 'debug' || devMode);
-  shellRoot.classList.toggle('mode-dev', devMode);
-  shellRoot.classList.toggle('mode-urldiag', urlMode === 'debug' || urlMode === 'dev');
+  function applyShellState() {
+    shellRoot.classList.toggle('mode-debug', urlMode === 'debug' || devMode);
+    shellRoot.classList.toggle('mode-dev', devMode);
+    shellRoot.classList.toggle('mode-urldiag', urlMode === 'debug' || urlMode === 'dev');
+  }
+  applyShellState();
 })();
 </script>
