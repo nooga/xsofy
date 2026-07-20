@@ -385,7 +385,13 @@
     (sfx/pause! 400)
     (reduce (fn [w action]
               (let [w' (dispatch/dispatch w action)]
-                (render/render-full w')
+                ;; Mirror the live loop (play/play-advance): an incremental
+                ;; dirty render per turn, full repaint only on a floor change.
+                ;; A full repaint every frame clears the whole screen first,
+                ;; which reads as a blank-then-redraw flicker on playback (#110).
+                (if (= (:depth w') (:depth w))
+                  (render/render-dirty w' w)
+                  (render/render-full w'))
                 ;; Keep the HUD stats tracking the replay as it plays out.
                 (bridge/emit-stats w')
                 (sfx/pause! 90)
