@@ -29,24 +29,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The pinned lane reads .let-go-version; the latest lane uses its matrix
-      # value. One source of truth for the floor, shared with the Pages deploy.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Match the Pages deploy toolchain (deploy-pages.yml) so the floor
+          # lane tests with the Go the shipped bundle is actually built with.
+          go-version: '1.26'
+          # This repo has no go.sum, so setup-go's module cache is inert;
+          # the lg-binary cache below is what saves the compile.
+          cache: false
+
+      # The pinned lane reads .let-go-version; the latest lane resolves the
+      # moving `latest` to its concrete version so the binary cache below can
+      # key on it. One source of truth for the floor, shared with the deploy.
       - name: Resolve let-go version
         id: letgo
         run: |
           if [ "${{ matrix.pin }}" = "true" ]; then
             v="$(grep -v '^#' .let-go-version | grep . | head -1 | tr -d '[:space:]')"
           else
-            v="${{ matrix.letgo }}"
+            v="$(go list -m -f '{{.Version}}' github.com/nooga/let-go@${{ matrix.letgo }})"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      # No go.sum in this repo means no dependency-keyed Go cache, so every
+      # run was compiling let-go from source (~1-3 min). Cache the built
+      # binary keyed on the resolved version instead.
+      - name: Cache lg binary
+        id: lgcache
+        uses: actions/cache@v4
         with:
-          go-version: '1.24'
+          path: ~/go/bin/let-go
+          key: lg-bin-${{ runner.os }}-go1.26-${{ steps.letgo.outputs.version }}
 
       - name: Install let-go ${{ steps.letgo.outputs.version }}
+        if: steps.lgcache.outputs.cache-hit != 'true'
         run: go install github.com/nooga/let-go@${{ steps.letgo.outputs.version }}
 
       - name: Print let-go info

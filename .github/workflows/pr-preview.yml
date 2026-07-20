@@ -52,8 +52,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          # No go.sum in this repo — the lg-binary cache below replaces the
+          # inert module cache.
+          cache: false
+
+      - name: Cache lg binary
+        id: lgcache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/let-go
+          key: lg-bin-${{ runner.os }}-go1.26-${{ steps.letgo.outputs.version }}
 
       - name: Install let-go
+        if: steps.lgcache.outputs.cache-hit != 'true'
         run: go install github.com/nooga/let-go@${{ steps.letgo.outputs.version }}
 
       - name: Build WASM bundle
@@ -66,6 +77,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('tests/browser/package-lock.json', 'tests/e2e/package-lock.json') }}
 
       - name: Install smoke dependencies
         working-directory: tests/browser
