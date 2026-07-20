@@ -175,7 +175,7 @@
       out
       (let [x (first xs)
             run (count (take-while (fn [y] (= y x)) xs))]
-        (recur (drop run xs) (conj out [x run]))))))
+        (recur (seq (drop run xs)) (conj out [x run]))))))
 
 ;; --- encode / decode ---
 
