@@ -1,0 +1,488 @@
+(ns lighttest
+  "Interactive lighting testbed — a dungeon and a movable light, nothing else.
+
+   Generates a level with xsofy.terrain, drops a light source you steer with
+   the keyboard (or let it fly on its own in demo mode), and renders the lit
+   result live so you can *see* how xsofy.lighting behaves — falloff, radius,
+   color mixing, and the gap between the raw radial light field and what
+   wall-occlusion (FOV) actually reveals. No monsters, combat, items, turns, or
+   dispatch: this reuses only the pure terrain/lighting/fov functions plus
+   terminal I/O.
+
+   Frame model: a poll loop (term/key-pending? + sleep). With demo off it blocks
+   on read-key (idle-cheap); with demo on it advances the light each frame and
+   drains input non-blockingly, so every knob stays live while it animates. A
+   terminal resize is detected each frame and forces a clear + full repaint (the
+   map itself is a fixed 79x30 and does NOT reflow — shrinking below ~79x33 clips).
+
+   Render-perf probe (see docs/project_incoming/explore-letgo-term-render-perf.md):
+   let-go's `term` is a raw-emit primitive with no diff layer, so a naive TUI
+   repaints every cell every frame. This tool supplies its own damage buffer +
+   SGR elision + optional color posterize, and shows `drawn=<changed>/<total>` +
+   `sgr=<color-changes>` in the HUD. Press `e` to cycle delta -> sgr-off (isolates
+   the SGR-elision win) -> naive (all optimizations off) for a direct A/B — most
+   telling with demo running.
+
+   Run natively (needs a real TTY):
+     lg tools/lighttest.lg              ; seed 1
+     lg tools/lighttest.lg '{:seed 42}' ; inline EDN config
+   Config keys (all optional): :seed 1  :w 79  :h 30  :depth 1
+
+   Controls (compact legend on-screen; full list here):
+     arrows / hjkl / yubn / numpad  move the active light (8-way)
+     p  cycle demo (off/liss/bounce/mapshift)   ,/.  demo slower/faster
+     +/- radius   c/C color   d  depth (8/6/5/4-bit posterize)   e  cycle render A/B (delta/sgr-off/naive)
+     o  occlusion (FOV)   t  terrain lights   m  hide/show the light marker (@/o)
+     Tab/]/[  select light   a add   x delete   N  new dungeon   q / Esc  quit
+
+   The key table is inlined here (not xsofy.input) on purpose: this tool stays
+   decoupled from the game's input layer so it never rides along with in-flight
+   changes there."
+  (:require [term]
+            [os]
+            [math]
+            [xsofy.terrain :as terrain]
+            [xsofy.lighting :as light]
+            [xsofy.fov :as fov]))
+
+;; --- config: defaults < EDN argument (same shape as tools/mapgen.lg) ---
+
+(def defaults {:seed 1 :w 79 :h 30 :depth 1})
+
+(defn- edn-arg [arg]
+  (cond
+    (or (nil? arg) (= arg "")) {}
+    (= \{ (first arg))         (read-string arg)
+    :else                      (read-string (slurp arg))))
+
+;; --- palette the `c` key cycles through (RGB at full strength) ---
+
+(def color-presets
+  [[255 180 80]    ; warm torch (the game's own torch hue)
+   [255 60 40]     ; red
+   [255 150 30]    ; amber / fire
+   [80 255 120]    ; green
+   [60 130 255]    ; blue
+   [200 60 255]    ; violet
+   [235 235 255]]) ; cold white
+
+;; --- generation ---
+
+(defn- gen-grid [cfg]
+  (let [{:keys [w h depth seed]} cfg]
+    ;; generate-level returns [ {:grid :rooms} world' ]; we only need the grid.
+    (:grid (first (terrain/generate-level w h depth {:seed seed})))))
+
+(defn- init-state [cfg]
+  (let [{:keys [w h depth seed]} cfg
+        grid (gen-grid cfg)]
+    {:w w :h h :depth depth :seed seed :grid grid
+     ;; terrain torches/lava/fire already emit light — collect once per grid so
+     ;; the movable light plays against them, not an empty field.
+     :tlights (light/collect-terrain-lights grid w h)
+     :lights [{:lx (quot w 2) :ly (quot h 2)
+               :radius 8 :preset 0 :color (nth color-presets 0)}]
+     :active 0
+     :occlude? false
+     :terrain-lights? true
+     :markers? true       ; show the @/o light markers
+     :cdepth 8            ; render-perf probe: bits/channel (8 = off)
+     ;; probe A/B (`e` cycles): :delta = damage buffer + SGR/cursor elision (all on);
+     ;; :sgr-off = buffer on but SGR re-emitted per cell (isolates the SGR-elision win,
+     ;; #145 — drawn count unchanged, sgr count rises); :naive = every optimization off
+     ;; (true repaint-everything baseline).
+     :render-mode :delta
+     :sync? true          ; wrap each frame in synchronized-output (DEC 2026) — anti-tearing probe
+     ;; :demo-mode drives the screensaver: :none (hand-steer only) | :liss (Lissajous) |
+     ;; :bounce (edge bounce) | :mapshift (scroll the whole map under a fixed light).
+     ;; `p` cycles through them.
+     :demo-mode :none
+     :shift [0 0]         ; :mapshift terrain scroll offset (toroidal); [0 0] elsewhere
+     :vel [1 1]           ; bounce velocity for the active light
+     :frame 0             ; animation frame counter (drives the path)
+     :frame-ms 40         ; demo pacing (~25 fps); , / . adjust
+     :prev nil            ; previous frame's appearance grid (damage buffer)
+     :tsize nil           ; last-seen terminal size, to detect resize
+     :help? false         ; full-screen help overlay (? key)
+     :stats {:drawn 0 :sgr 0}
+     :running true}))
+
+;; --- helpers ---
+
+(defn- clamp [v lo hi] (max lo (min hi v)))
+
+(defn- pad [s w]
+  (let [s (str s) n (count s)]
+    (if (>= n w)
+      (subs s 0 w)
+      (str s (apply str (repeat (- w n) " "))))))
+
+;; right-align in a fixed width so a changing count/coord doesn't push the rest
+;; of the HUD line sideways frame-to-frame. Never truncates (overflow just widens).
+(defn- lpad [s w]
+  (let [s (str s) n (count s)]
+    (if (>= n w) s (str (apply str (repeat (- w n) " ")) s))))
+
+(defn- all-lights [st]
+  ;; light-at only reads :lx :ly :radius :color, so movable lights (which carry
+  ;; an extra :preset) and terrain lights combine directly.
+  (if (:terrain-lights? st)
+    (into (vec (:tlights st)) (:lights st))
+    (vec (:lights st))))
+
+;; posterize: round a channel to `step` buckets (step 1 = no-op / full 8-bit)
+(def depth->step {8 1  6 4  5 8  4 16})
+(defn- pq [v step] (if (<= step 1) v (min 255 (* step (quot v step)))))
+
+;; --- input: raw key string -> [dx dy] (arrows, hjkl, yubn, numpad) ---
+;; ESC/CSI prefix built at runtime so the source carries no literal escape byte.
+
+(def esc (str (char 27)))
+(def csi (str esc "["))
+
+;; Synchronized Output (DEC private mode 2026): BSU holds the display on the last
+;; frame while we emit, ESU presents the batch atomically — no half-drawn frame /
+;; tearing. Unknown private modes are ignored, so these are no-ops on terminals
+;; without support (xterm.js/iTerm2/Kitty/Wezterm/Ghostty support it).
+(def begin-sync (str csi "?2026h"))
+(def end-sync   (str csi "?2026l"))
+
+(def dir-keys
+  {(str csi "A") [0 -1] "k" [0 -1] "8" [0 -1]
+   (str csi "B") [0 1]  "j" [0 1]  "2" [0 1]
+   (str csi "D") [-1 0] "h" [-1 0] "4" [-1 0]
+   (str csi "C") [1 0]  "l" [1 0]  "6" [1 0]
+   "y" [-1 -1] "7" [-1 -1]
+   "u" [1 -1]  "9" [1 -1]
+   "b" [-1 1]  "1" [-1 1]
+   "n" [1 1]   "3" [1 1]})
+
+;; --- state transitions (one per key) ---
+
+(defn- move-active [st dx dy]
+  (let [i (:active st)
+        l (nth (:lights st) i)
+        nx (clamp (+ (:lx l) dx) 0 (dec (:w st)))
+        ny (clamp (+ (:ly l) dy) 0 (dec (:h st)))]
+    ;; the light passes freely through walls — occlusion is a render concern
+    ;; (toggle `o`), so you can park a light *inside* a wall and watch shadows.
+    (assoc-in st [:lights i] (assoc l :lx nx :ly ny))))
+
+(defn- bump-radius [st d]
+  (update-in st [:lights (:active st) :radius] (fn [r] (clamp (+ r d) 1 40))))
+
+(defn- cycle-color [st dir]
+  (let [i (:active st)
+        p (mod (+ (get-in st [:lights i :preset] 0) dir) (count color-presets))]
+    (-> st
+        (assoc-in [:lights i :preset] p)
+        (assoc-in [:lights i :color] (nth color-presets p)))))
+
+(defn- cycle-depth [st]
+  (assoc st :cdepth (get {8 6, 6 5, 5 4, 4 8} (:cdepth st) 8)))
+
+(def demo-next   {:none :liss,  :liss :bounce,  :bounce :mapshift,  :mapshift :none})
+(def render-next {:delta :sgr-off, :sgr-off :naive, :naive :delta})
+
+(defn- select-light [st d]
+  (assoc st :active (mod (+ (:active st) d) (count (:lights st)))))
+
+(defn- add-light [st]
+  (let [al (nth (:lights st) (:active st))
+        ls (conj (:lights st) al)]
+    (assoc st :lights ls :active (dec (count ls)))))
+
+(defn- del-light [st]
+  (if (<= (count (:lights st)) 1)
+    st
+    (let [i (:active st)
+          ls (:lights st)
+          ls' (vec (concat (take i ls) (drop (inc i) ls)))]
+      (assoc st :lights ls' :active (min i (dec (count ls')))))))
+
+(defn- new-seed [st]
+  (let [s (inc (:seed st))
+        grid (gen-grid (assoc st :seed s))]
+    (assoc st :seed s :grid grid
+           :tlights (light/collect-terrain-lights grid (:w st) (:h st)))))
+
+(defn- update-state [st k]
+  (cond
+    (contains? dir-keys k)    (let [[dx dy] (get dir-keys k)] (move-active st dx dy))
+    (= k "p")                 (let [st (update st :demo-mode demo-next)]
+                                (if (= (:demo-mode st) :mapshift) st (assoc st :shift [0 0])))
+    (= k ",")                 (update st :frame-ms (fn [m] (min 200 (+ m 10))))
+    (= k ".")                 (update st :frame-ms (fn [m] (max 10 (- m 10))))
+    (or (= k "+") (= k "="))  (bump-radius st 1)
+    (= k "-")                 (bump-radius st -1)
+    (= k "c")                 (cycle-color st 1)
+    (= k "C")                 (cycle-color st -1)
+    (= k "d")                 (cycle-depth st)
+    (= k "e")                 (update st :render-mode render-next)
+    (= k "s")                 (update st :sync? not)
+    (= k "m")                 (update st :markers? not)
+    (= k "?")                 (update st :help? not)
+    (or (= k "\t") (= k "]")) (select-light st 1)
+    (= k "[")                 (select-light st -1)
+    (= k "a")                 (add-light st)
+    (= k "x")                 (del-light st)
+    (= k "o")                 (update st :occlude? not)
+    (= k "t")                 (update st :terrain-lights? not)
+    (= k "N")                 (new-seed st)
+    (or (= k "q") (= k esc) (= k (str (char 3)))) (assoc st :running false)
+    :else                     st))
+
+;; --- demo path: advance the active light one frame ---
+
+(defn- demo-step [st]
+  (let [t (inc (:frame st)) i (:active st) l (nth (:lights st) i)
+        w (:w st) h (:h st)]
+    (cond
+      ;; mapshift: scroll the terrain sampling offset one cell/frame diagonally
+      ;; (toroidal wrap). Every cell's glyph changes every frame under a fixed
+      ;; light — coherent full-screen motion, the strongest tearing stressor.
+      (= (:demo-mode st) :mapshift)
+      (let [[sx sy] (:shift st)]
+        (assoc st :frame t :shift [(mod (inc sx) w) (mod (inc sy) h)]))
+      (= (:demo-mode st) :bounce)
+      ;; DVD-logo bounce: integrate velocity, flip at the interior walls
+      (let [[vx vy] (:vel st)
+            rx (+ (:lx l) vx) ry (+ (:ly l) vy)
+            [nx nvx] (if (or (< rx 1) (> rx (- w 2))) [(clamp rx 1 (- w 2)) (- vx)] [rx vx])
+            [ny nvy] (if (or (< ry 1) (> ry (- h 2))) [(clamp ry 1 (- h 2)) (- vy)] [ry vy])]
+        (-> st (assoc :frame t :vel [nvx nvy])
+            (assoc-in [:lights i :lx] nx)
+            (assoc-in [:lights i :ly] ny)))
+      ;; Lissajous: smooth looping curve, x/y on incommensurate frequencies
+      :else
+      (let [cx (quot w 2) cy (quot h 2) ax (- cx 2) ay (- cy 2)
+            x (clamp (+ cx (int (* ax (math/sin (* t 0.060))))) 0 (dec w))
+            y (clamp (+ cy (int (* ay (math/sin (+ (* t 0.100) 1.2))))) 0 (dec h))]
+        (-> st (assoc :frame t)
+            (assoc-in [:lights i :lx] x)
+            (assoc-in [:lights i :ly] y))))))
+
+;; --- rendering ---
+;; A cell's "appearance" is [glyph fr fg fb br bg bb] (post-posterize). We diff
+;; it against the previous frame's grid and only re-emit changed cells, eliding
+;; redundant set-fg/set-bg and skipping move-cursor when the cursor already sits
+;; where the next changed cell is. Light markers are baked into the appearance
+;; so the damage buffer handles them too. The `e` A/B cycles three modes: :delta
+;; (all elisions on), :sgr-off (buffer + cursor elision on but SGR re-emitted per
+;; cell — isolates #145), :naive (old=nil + move/fg/bg per cell — full repaint).
+;; A resize invalidates the buffer (clear + full repaint) since the terminal wiped
+;; what we thought was on screen.
+
+(defn- light-index-at [lights]
+  (loop [i 0 m {}]
+    (if (< i (count lights))
+      (recur (inc i) (assoc m [(:lx (nth lights i)) (:ly (nth lights i))] i))
+      m)))
+
+(defn- cell-app [st x y lset vis lidx step]
+  (let [li (get lidx [x y])]
+    (if li
+      (let [l (nth (:lights st) li)
+            [cr cg cb] (:color l)]
+        [(if (= li (:active st)) "@" "o") (pq cr step) (pq cg step) (pq cb step) 0 0 0])
+      (let [grid (:grid st) w (:w st) h (:h st)
+            ;; :mapshift scrolls the terrain under a fixed light — sample the tile
+            ;; at the shifted+wrapped coord, but keep lighting/FOV at screen coords.
+            [sx sy] (:shift st)
+            tile (terrain/tget grid w (mod (+ x sx) w) (mod (+ y sy) h))
+            ch (get terrain/tile-chars tile " ")
+            style (get terrain/tile-styles tile)
+            lit? (or (not (:occlude? st)) (contains? vis [x y]))
+            lv (if lit? (light/light-at x y lset) [0 0 0])
+            [fr fg fb] (light/apply-light (:fg style) lv)
+            [br bg bb] (light/apply-light (:bg style) lv)]
+        [ch (pq fr step) (pq fg step) (pq fb step) (pq br step) (pq bg step) (pq bb step)]))))
+
+(defn- render-hud! [st tw]
+  ;; three short lines (each <= map width, 79) so the HUD never spills right
+  (let [{:keys [w h active lights occlude? terrain-lights? markers? seed cdepth
+                render-mode sync? demo-mode frame-ms stats]} st
+        al (nth lights active)
+        [cr cg cb] (:color al)
+        ;; every varying field is fixed-width (lpad numbers, pad enums) so the HUD
+        ;; stays column-stable while the light moves / counters tick.
+        line1 (str "light " (inc active) "/" (count lights)
+                   "  (" (lpad (:lx al) 2) "," (lpad (:ly al) 2) ")  r=" (lpad (:radius al) 2)
+                   "  rgb[" (lpad cr 3) "," (lpad cg 3) "," (lpad cb 3) "]"
+                   "  occ:" (if occlude? "ON" "off")
+                   "  terr:" (if terrain-lights? "on" "off")
+                   "  mark:" (if markers? "on" "off"))
+        line2 (str "depth=" cdepth "bit  render=" (pad (name render-mode) 7)
+                   "  sync:" (if sync? "on " "off")
+                   "  demo:" (pad (if (= demo-mode :none) "off"
+                                     (str (name demo-mode) "@" (lpad frame-ms 3) "ms")) 12)
+                   "  drawn=" (lpad (:drawn stats) 4) "/" (* w h)
+                   "  sgr=" (lpad (:sgr stats) 4)
+                   "  seed=" seed)
+        line3 "hjkl move  p demo  ,/. spd  +/- rad  c/d/e/o/t/m/s  Tab/a/x  N q  ?=help"]
+    (term/reset-style)
+    (term/move-cursor 1 (+ h 1)) (term/write (pad line1 tw))
+    (term/move-cursor 1 (+ h 2)) (term/write (pad line2 tw))
+    (term/move-cursor 1 (+ h 3)) (term/write (pad line3 tw))))
+
+(def help-lines
+  ["lighttest — lighting testbed — key reference" ""
+   "Move the active light:"
+   "  arrows / h j k l     orthogonal (1 cell)"
+   "  y u b n             diagonals   (numpad 1-9 also work)"
+   ""
+   "Demo / animation:"
+   "  p                   cycle demo: off -> Lissajous -> edge-bounce -> mapshift"
+   "                      (mapshift scrolls the whole map — the tearing stressor)"
+   "  , / .               demo slower / faster"
+   ""
+   "Light:"
+   "  + / -               radius up / down"
+   "  c / C               cycle color forward / back"
+   "  Tab / ] / [         select next / prev light"
+   "  a / x               add light at cursor / delete active"
+   "  m                   hide / show the light markers (@ / o)"
+   ""
+   "Rendering & perf probe:"
+   "  o                   occlusion: raw radial <-> FOV wall-shadows"
+   "  t                   terrain lights (torches / lava) on / off"
+   "  d                   color depth 8/6/5/4-bit (posterize)"
+   "  e                   cycle render: delta -> sgr-off -> naive (perf A/B)"
+   "  s                   synchronized output on/off (DEC 2026 anti-tearing)"
+   ""
+   "Dungeon / system:"
+   "  N                   new dungeon (next seed)"
+   "  ?                   this help        q / Esc   quit"
+   ""
+   "press any key to return"])
+
+(defn- render-help! [st]
+  (term/reset-style)
+  (term/clear)
+  (loop [i 0 ls help-lines]
+    (when (seq ls)
+      (term/move-cursor 3 (+ 2 i))
+      (term/write (first ls))
+      (recur (inc i) (rest ls))))
+  (term/flush))
+
+(defn- render! [st]
+  (let [{:keys [grid w h lights active occlude? cdepth]} st
+        mode (:render-mode st)
+        full? (= mode :naive)          ; no damage buffer + no cursor/SGR elision
+        sgr-cap? (or full? (= mode :sgr-off))  ; re-emit SGR per drawn cell (isolates #145)
+        tsize (term/size)
+        resized? (not= tsize (:tsize st))
+        ;; on resize the terminal cleared what we drew -> throw away the damage
+        ;; buffer and repaint everything against a fresh clear.
+        prev (if resized? nil (:prev st))
+        _ (when resized? (term/clear))
+        lset (all-lights st)
+        al (nth lights active)
+        vis (when occlude? (fov/compute-fov grid w h (:lx al) (:ly al) (:radius al)))
+        lidx (if (:markers? st) (light-index-at lights) {})
+        step (get depth->step cdepth 1)
+        n (* w h)
+        ;; per-frame emit context (elision + counters)
+        last-fg (atom nil) last-bg (atom nil)
+        cur-col (atom 0)   cur-row (atom 0)
+        drawn (atom 0)     sgr (atom 0)
+        _sync (when (:sync? st) (term/write begin-sync))   ; BSU — before any drawing
+        newfb
+        (reduce
+          (fn [acc idx]
+            (let [x (mod idx w) y (quot idx w)
+                  app (cell-app st x y lset vis lidx step)
+                  ;; naive: pretend nothing was drawn before -> repaint all
+                  old (when (and prev (not full?)) (nth prev idx))]
+              (when (not= app old)
+                (let [[ch fr fg fb br bg bb] app
+                      col (inc x) row (inc y)]
+                  ;; move only if the cursor isn't already here (naive: always)
+                  (when (or full? (not (and (= @cur-col col) (= @cur-row row))))
+                    (term/move-cursor col row))
+                  ;; emit color only on change from the last emitted cell
+                  ;; (sgr-off/naive: always, to expose the SGR-elision cost)
+                  (when (or sgr-cap? (not= @last-fg [fr fg fb]))
+                    (term/set-fg fr fg fb) (reset! last-fg [fr fg fb]) (swap! sgr inc))
+                  (when (or sgr-cap? (not= @last-bg [br bg bb]))
+                    (term/set-bg br bg bb) (reset! last-bg [br bg bb]) (swap! sgr inc))
+                  (term/write ch)
+                  (reset! cur-col (inc col))   ; glyph advanced the cursor one right
+                  (reset! cur-row row)
+                  (swap! drawn inc)))
+              (conj acc app)))
+          [] (range n))
+        st' (assoc st :prev newfb :tsize tsize :stats {:drawn @drawn :sgr @sgr})]
+    (render-hud! st' (or (first tsize) w))
+    (when (:sync? st) (term/write end-sync))   ; ESU — present the whole frame atomically
+    (term/flush)
+    st'))
+
+;; --- terminal lifecycle (mirrors xsofy.main) ---
+
+(defn- init-terminal []
+  (when (nil? (term/size))
+    (println "lighttest needs a real terminal — run it natively (just lighttest).")
+    (os/exit 1))
+  (term/raw-mode!)
+  (term/alternate-screen)
+  (term/hide-cursor)
+  (term/clear))
+
+(defn- shutdown-terminal []
+  (term/reset-style)
+  (term/show-cursor)
+  (term/main-screen)
+  (term/flush)
+  (term/restore-mode!))
+
+;; drain all buffered keys without blocking (used while animating)
+(defn- drain-input [st]
+  (loop [st st]
+    (if (and (:running st) (term/key-pending?))
+      (recur (update-state st (term/read-key)))
+      st)))
+
+(defn- run [st]
+  (loop [st (render! st)]
+    (cond
+      (not (:running st)) st
+      ;; help overlay: modal — pause everything, any key returns (then force a
+      ;; full repaint by dropping the damage buffer, since help clobbered the map).
+      (:help? st)
+      (do (render-help! st)
+          (term/read-key)
+          (recur (render! (assoc st :help? false :prev nil))))
+      ;; demo: advance a frame, poll input, pace. Toggling demo/help mid-frame
+      ;; bounces back through the top so those branches handle it next iteration.
+      (not= (:demo-mode st) :none)
+      (let [st1 (drain-input st)]
+        (cond
+          (not (:running st1)) st1
+          (:help? st1) (recur st1)   ; the :help? branch repaints as an overlay
+          ;; demo just turned off: paint one frame so the HUD shows demo:off now,
+          ;; rather than leaving the last animated frame up until the next keypress
+          ;; (the idle :else branch blocks on read-key before it would repaint).
+          (= (:demo-mode st1) :none) (recur (render! st1))
+          :else (let [st2 (render! (demo-step st1))]
+                  (sleep (:frame-ms st2))
+                  (recur st2))))
+      ;; keyboard-only: block until a key (read-key wakes with BEL on resize,
+      ;; so render! still runs and repaints at the new size), then react
+      :else
+      (recur (render! (update-state st (term/read-key)))))))
+
+(defn -main []
+  (let [cfg (merge defaults (edn-arg (first *command-line-args*)))]
+    (init-terminal)
+    (try
+      (run (init-state cfg))
+      (catch e
+        (shutdown-terminal)
+        (println "lighttest error:")
+        (println e))
+      (finally
+        (shutdown-terminal)))))
+
+(-main)
