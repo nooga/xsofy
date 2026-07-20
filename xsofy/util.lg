@@ -191,9 +191,12 @@
      (clamp8 (+ ab bb))]))
 
 (defn cell-hash
-  "Deterministic spatial hash for per-cell color variation."
+  "Deterministic spatial hash for per-cell color variation.
+   Uses unchecked (wrapping) arithmetic so the 32-bit-multiply products don't
+   trip let-go's checked-* overflow guard on a 32-bit-int runtime (TinyGo wasm).
+   Value is masked to &255, so wrap semantics don't matter for the cosmetic output."
   [x y]
-  (let [h (+ (* x 374761393) (* y 668265263))]
+  (let [h (unchecked-add (unchecked-multiply x 374761393) (unchecked-multiply y 668265263))]
     (bit-and (bit-xor h (bit-shift-right h 13)) 255)))
 
 (defn jitter
