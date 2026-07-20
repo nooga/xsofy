@@ -93,3 +93,73 @@
   ;; destructure nil — they fall back to the game's default dimensions.
   (testing "no TTY → [ui/game-width ui/game-height] defaults"
     (is (= [100 36] (render/term-dims)))))
+
+;; --- Render-perf golden tests (SGR elision #145 + appearance diff #146) ---
+;; The perf work is render-only, but its correctness rests on invariants that are
+;; easy to break silently: a seeded render must be reproducible, the diff must
+;; skip unchanged cells and redraw changed ones, and the pen must never change the
+;; color a cell ends up showing. These drive render-map-tile through with-out-str
+;; (term/* writes to *out*) and assert on the captured escape stream plus the
+;; appearance buffer. A prior manual check was glyph-only and missed a color-order
+;; regression; these cover color.
+
+(def render-test-rect {:x 1 :y 1 :w 12 :h 12 :cx 0 :cy 0})
+
+(defn reset-render-perf-state! []
+  (render/pen-reset!)
+  (reset! render/cell-appearance {}))
+
+(deftest render-is-reproducible-under-a-seed
+  ;; fire/water/lava draw color from the global rand stream, so a render pass is
+  ;; only deterministic when that stream is seeded. This is the property that
+  ;; makes iteration order safe to reason about — #145 leaves the FOV-delta loop
+  ;; unsorted precisely so it consumes draws in a stable order.
+  (testing "same seed → identical output for an animated (fire) tile"
+    (reset-render-perf-state!)
+    (set-rand-seed! 1234)
+    (let [a (with-out-str (render/render-map-tile render-test-rect 3 3 15 true nil [0 0 0] nil nil))]
+      (reset-render-perf-state!)
+      (set-rand-seed! 1234)
+      (let [b (with-out-str (render/render-map-tile render-test-rect 3 3 15 true nil [0 0 0] nil nil))]
+        (is (pos? (count a)))
+        (is (= a b))))))
+
+(deftest static-tile-color-is-rand-independent
+  ;; A static floor tile jitters deterministically by (x,y), not from rand, so
+  ;; how many draws preceded it cannot change its color. This is why reordering
+  ;; the delta loop can never affect static terrain.
+  (testing "floor tile renders identically across different rand states"
+    (reset-render-perf-state!)
+    (set-rand-seed! 1)
+    (let [a (with-out-str (render/render-map-tile render-test-rect 4 4 1 true nil [0 0 0] nil nil))]
+      (reset-render-perf-state!)
+      (set-rand-seed! 999)
+      (dotimes [_ 50] (rand-int 100))            ; advance the shared stream
+      (let [b (with-out-str (render/render-map-tile render-test-rect 4 4 1 true nil [0 0 0] nil nil))]
+        (is (= a b))))))
+
+(deftest appearance-diff-skips-unchanged-cell
+  (testing "a second identical render of a cell produces no output"
+    (reset-render-perf-state!)
+    (let [first-out  (with-out-str (render/render-map-tile render-test-rect 5 5 1 true nil [0 0 0] nil nil))
+          second-out (with-out-str (render/render-map-tile render-test-rect 5 5 1 true nil [0 0 0] nil nil))]
+      (is (pos? (count first-out)))              ; first paints
+      (is (= "" second-out))                     ; second is skipped by the diff
+      (is (some? (get @render/cell-appearance [5 5]))))))
+
+(deftest appearance-diff-redraws-changed-cell
+  (testing "changing the light value re-emits the cell"
+    (reset-render-perf-state!)
+    (with-out-str (render/render-map-tile render-test-rect 6 6 1 true nil [0 0 0] nil nil))
+    (let [lit-out (with-out-str (render/render-map-tile render-test-rect 6 6 1 true nil [120 120 120] nil nil))]
+      (is (pos? (count lit-out))))))
+
+(deftest pen-elides-redundant-color
+  ;; Two cells resolving to the same color emit the fg SGR once, not twice.
+  ;; Out-of-fov cells all paint the constant background color, so they collide.
+  (testing "same-color cells share one set-fg within a batch"
+    (reset-render-perf-state!)
+    (let [out (with-out-str
+                (render/render-map-tile render-test-rect 7 7 nil false nil nil nil nil)
+                (render/render-map-tile render-test-rect 8 7 nil false nil nil nil nil))]
+      (is (= 1 (count (re-seq #"38;2" out)))))))
