@@ -240,6 +240,21 @@ body.force-touch #xsofy-shell.show-settings .settings { display: flex; }
 @media (hover: hover) and (pointer: fine) {
   body:not(.force-touch) #xsofy-shell .touch-only { display: none; }
 }
+/* Touch mode 'off' (third state of the ▦ cycle): suppress the touch UI even
+   where portrait or a coarse pointer would reveal it — phone with a BT
+   keyboard, narrow desktop windows. The terminal reclaims the viewport
+   (overrides both the portrait 55dvh cap and portrait's flex:1 shell). The
+   mode-dev re-enables keep the switcher + settings pane reachable: that's the
+   only way back out of 'off', same recoverability contract as line "dev tier
+   gets the switcher" above. no-touch and force-touch are mutually exclusive
+   (the JS sets at most one). */
+body.no-touch #xsofy-shell .touch { display: none; }
+body.no-touch #xsofy-shell .seg-switch { display: none; }
+body.no-touch #xsofy-shell.mode-dev .seg-switch { display: inline-flex; }
+body.no-touch #xsofy-shell .settings { display: none; }
+body.no-touch #xsofy-shell.mode-dev.show-settings .settings { display: flex; }
+body.no-touch #app { flex: 1 1 auto; height: auto; }
+body.no-touch #xsofy-shell { flex: 0 0 auto; }
 /* Self-revealing perf cells: hidden until their datum is emitted, so the bar
    shows only live numbers, not dead middots. */
 #xsofy-shell .stat-hidden { display: none; }
@@ -932,15 +947,22 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const FORCE_TOUCH_LS_KEY = 'xsofy/force-touch';
   const touchToggleEl = $('xs-touch-toggle'), touchStateEl = $('xs-touch-state');
   const coarsePointer = !!window.matchMedia?.('(pointer: coarse)')?.matches;
-  let forceTouchEnabled = localStorage.getItem(FORCE_TOUCH_LS_KEY) === '1';
+  // Three states: auto (pointer capability decides — and portrait's media query
+  // may still reveal the UI), force (pinned on), off (suppressed everywhere via
+  // body.no-touch — phone with a BT keyboard, narrow desktop windows). Legacy
+  // stored '1' was the old boolean force; map it forward.
+  const TOUCH_MODES = ['auto', 'force', 'off'];
+  let touchMode = localStorage.getItem(FORCE_TOUCH_LS_KEY);
+  if (touchMode === '1') touchMode = 'force';
+  if (!TOUCH_MODES.includes(touchMode)) touchMode = 'auto';
   function paintForceTouchState() {
-    // Capability forces it on (a touch device can't turn off its only input
-    // method); the toggle only matters on fine-pointer devices.
-    document.body.classList.toggle('force-touch', coarsePointer || forceTouchEnabled);
-    // "force" vs "auto": forced pins the touch UI on; unforced ("auto") falls
-    // back to pointer-capability detection (coarse => shown), not truly off.
-    if (touchStateEl) touchStateEl.textContent = forceTouchEnabled ? 'force' : 'auto';
-    if (touchToggleEl) touchToggleEl.style.opacity = forceTouchEnabled ? '' : '0.5';
+    // In auto, capability forces it on (a touch device can't turn off its only
+    // input method); 'off' is an explicit dev override and wins even there.
+    document.body.classList.toggle('force-touch',
+      touchMode === 'force' || (touchMode === 'auto' && coarsePointer));
+    document.body.classList.toggle('no-touch', touchMode === 'off');
+    if (touchStateEl) touchStateEl.textContent = touchMode;
+    if (touchToggleEl) touchToggleEl.style.opacity = touchMode === 'auto' ? '0.5' : '';
     // The class feeds isLandRail (rail vs portrait tile lists) and lands after
     // the first renderTouch on boot — re-render so a landscape boot picks the
     // rail variant (and the desktop toggle swaps layouts live).
@@ -951,8 +973,8 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   touchToggleEl?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    forceTouchEnabled = !forceTouchEnabled;
-    localStorage.setItem(FORCE_TOUCH_LS_KEY, forceTouchEnabled ? '1' : '0');
+    touchMode = TOUCH_MODES[(TOUCH_MODES.indexOf(touchMode) + 1) % TOUCH_MODES.length];
+    localStorage.setItem(FORCE_TOUCH_LS_KEY, touchMode);
     paintForceTouchState();
     // The class toggle changes #app's height via CSS, but FitAddon only
     // recomputes on a resize/explicit fit. rAF defers the dispatch so the new
