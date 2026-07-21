@@ -721,13 +721,38 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 }
 `;
 
+  // SNES Mode 7 demo: idle affine spin + zoom breathing over the terminal,
+  // sampled nearest-neighbor (chunky rotated pixels — the authentic look) on
+  // an infinitely tiled plane (wrap=REPEAT). Idle-animated for now; the real
+  // use is game-signaled transitions (descend swirl) once an OSC trigger
+  // channel exists — see the spike notes.
+  const MODE7_GLSL = `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  // center origin, aspect-corrected so glyphs keep their shape mid-rotation
+  vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+  float a = iTime * 0.35;                    // spin
+  float z = 1.5 + 1.1 * sin(iTime * 0.27);   // zoom breathing
+  mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
+  vec2 p = rot * uv * z;
+  // back to texture space; REPEAT wrap tiles the screen into an endless plane
+  vec2 tuv = p * vec2(iResolution.y / iResolution.x, 1.0) + 0.5;
+  fragColor = vec4(texture(iChannel0, tuv).rgb, 1.0);
+}
+`;
+
   // Registry: ?shader=<name> picks one (default crt). Only the selected source
-  // is compiled, so the shaders can't collide with each other.
-  const FX_SHADERS = { crt: CRT_GLSL, water: WATER_GLSL };
+  // is compiled, so the shaders can't collide with each other. nearest/repeat
+  // control how the terminal texture is sampled.
+  const FX_SHADERS = {
+    crt:   { src: CRT_GLSL },
+    water: { src: WATER_GLSL },
+    mode7: { src: MODE7_GLSL, nearest: true, repeat: true },
+  };
 
   function startCrtOverlay() {
     if (!glAddon || fxParams.get('crt') === 'off') return;
-    const fxSource = FX_SHADERS[fxParams.get('shader')] || CRT_GLSL;
+    const fx = FX_SHADERS[fxParams.get('shader')] || FX_SHADERS.crt;
+    const fxSource = fx.src;
     const overlay = document.createElement('canvas');
     overlay.style.cssText =
       'position:fixed;left:0;top:0;pointer-events:none;z-index:10;display:none;';
@@ -777,10 +802,13 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     gl.uniform1i(gl.getUniformLocation(prog, 'iChannel0'), 0);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // WebGL2 supports REPEAT on non-power-of-two textures, so tiling works.
+    const wrap = fx.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+    const filt = fx.nearest ? gl.NEAREST : gl.LINEAR;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
     // Canvas rows are top-down, GL texture space is bottom-up; flipping on
     // upload keeps gl_FragCoord and iChannel0 in the same orientation, which is
     // what Shadertoy-convention shaders assume.
