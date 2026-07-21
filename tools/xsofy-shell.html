@@ -694,10 +694,19 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       '  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));' +
       '  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);' +
       '}';
-    const crtScale = (window.devicePixelRatio || 1) >= 2 ? '0.33333333' : '0.66666666';
+    // SCALE sets the *virtual CRT resolution* the Lottes filter re-scans: the
+    // input is fetched on a grid of iResolution*SCALE, so anything below 1/dpr
+    // resamples the terminal below CSS resolution and text goes soft (the
+    // shader's own "0.333 for high-DPI" advice assumes pixel-art sources).
+    // Default to sampling at ~CSS resolution: scanline pitch = 1 CSS px, text
+    // as sharp as a 1x display. ?crtscale=0.33 etc. for chunkier/blurrier.
+    const dpr = window.devicePixelRatio || 1;
+    let crtScale = parseFloat(fxParams.get('crtscale'));
+    if (!(crtScale >= 0.2 && crtScale <= 1)) crtScale = dpr >= 2 ? 0.5 : 0.66666666;
+    const crtScaleLit = crtScale.toFixed(8); // GLSL float literal (never a bare int)
     const wrapFS = '#version 300 es\nprecision highp float;\n' +
       'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\nuniform float iTime;\n' +
-      'out vec4 xsofyFragColor;\n' + CRT_GLSL.replace(/__CRT_SCALE__/g, crtScale) +
+      'out vec4 xsofyFragColor;\n' + CRT_GLSL.replace(/__CRT_SCALE__/g, crtScaleLit) +
       '\nvoid main() { mainImage(xsofyFragColor, gl_FragCoord.xy); }\n';
     function compile(type, src) {
       const s = gl.createShader(type);
