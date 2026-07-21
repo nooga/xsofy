@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
 <!-- Terminal font (Fairfax HD, OFL — Kreative Software), inlined as a base64 WOFF2
      so it ships in the bundle: no external request, no CDN, and no COEP crossorigin
      dance under the bundle's require-corp. One face for the whole terminal: xterm
@@ -458,6 +459,314 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
+  // --- SPIKE: WebGL renderer + CRT post-process ------------------------------
+  // (a) xterm's WebGL renderer (@xterm/addon-webgl) — replaces the DOM renderer
+  //     with a glyph-atlas GL canvas. ?renderer=dom opts back out.
+  // (b) a WebGL2 overlay canvas that re-samples the renderer's canvas through a
+  //     Shadertoy-convention CRT shader every frame. ?crt=off opts out of (b)
+  //     while keeping (a).
+  const fxParams = new URLSearchParams(location.search);
+  let glAddon = null;
+  function enableWebgl() {
+    if (fxParams.get('renderer') === 'dom') { console.info('renderer=dom: skipping WebGL addon'); return; }
+    if (typeof WebglAddon === 'undefined') { console.warn('WebGL addon script not loaded'); return; }
+    try {
+      // preserveDrawingBuffer=true: the CRT overlay samples this canvas from its
+      // own rAF, after the addon's frame has already composited — a non-preserved
+      // WebGL backbuffer reads back blank at that point.
+      const addon = new WebglAddon.WebglAddon(true);
+      addon.onContextLoss(() => {
+        console.warn('xterm WebGL context lost — disposing addon, DOM renderer takes over');
+        addon.dispose(); glAddon = null;
+      });
+      term.loadAddon(addon);
+      glAddon = addon;
+      console.info('WebGL renderer active');
+    } catch (e) {
+      console.warn('WebGL renderer unavailable, staying on DOM renderer:', e);
+    }
+  }
+
+  // Timothy Lottes' CRT-styled scaler (public domain / Unlicense), as adapted
+  // for Ghostty by Qwerasd — ported unmodified from ghostty-shaders crt.glsl:
+  //   https://github.com/0xhckr/ghostty-shaders/blob/main/crt.glsl
+  //   (upstream: https://www.shadertoy.com/view/MtSfRK)
+  // Shadertoy convention: mainImage(fragColor, fragCoord) + iChannel0/iResolution;
+  // the wrapper in startCrtOverlay supplies those, so any ghostty shader drops in.
+  const CRT_GLSL = `
+// "Scanlines" per real screen pixel. 0.33333333 for high-DPI, 0.66666666 for low
+// (the __CRT_SCALE__ token is substituted per devicePixelRatio at compile time).
+#define SCALE __CRT_SCALE__
+// "Tube" warp
+#define CRTS_WARP 1
+// Darkness of vignette in corners after warping (0 black .. 1 none)
+#define MIN_VIN 0.5
+// Mask flavor: GRILLE | GRILLE_LITE | NONE | SHADOW
+#define CRTS_MASK_SHADOW 1
+// Scanline thinness (0.5 fused .. 1.0 too thin)
+#define INPUT_THIN 0.75
+// Horizontal scan blur (-3 pixely .. -1 too blurry)
+#define INPUT_BLUR -2.75
+// Shadow mask amount (0.25 heavy .. 1.0 none)
+#define INPUT_MASK 0.65
+
+float FromSrgb1(float c) {
+  return (c <= 0.04045) ? c * (1.0 / 12.92) :
+  pow(c * (1.0 / 1.055) + (0.055 / 1.055), 2.4);
+}
+vec3 FromSrgb(vec3 c) {
+  return vec3(FromSrgb1(c.r), FromSrgb1(c.g), FromSrgb1(c.b));
+}
+vec3 CrtsFetch(vec2 uv) {
+  return FromSrgb(texture(iChannel0, uv.xy).rgb);
+}
+#define CrtsRcpF1(x) (1.0/(x))
+#define CrtsSatF1(x) clamp((x),0.0,1.0)
+float CrtsMax3F1(float a, float b, float c) { return max(a, max(b, c)); }
+
+vec2 CrtsTone(float thin, float mask) {
+  #ifdef CRTS_MASK_NONE
+  mask = 1.0;
+  #endif
+  #ifdef CRTS_MASK_GRILLE_LITE
+  mask = 0.5 + mask * 0.5;
+  #endif
+  vec2 ret;
+  float midOut = 0.18 / ((1.5 - thin) * (0.5 * mask + 0.5));
+  float pMidIn = 0.18;
+  ret.x = ((-pMidIn) + midOut) / ((1.0 - pMidIn) * midOut);
+  ret.y = ((-pMidIn) * midOut + pMidIn) / (midOut * (-pMidIn) + midOut);
+  return ret;
+}
+
+vec3 CrtsMask(vec2 pos, float dark) {
+  #ifdef CRTS_MASK_GRILLE
+  vec3 m = vec3(dark, dark, dark);
+  float x = fract(pos.x * (1.0 / 3.0));
+  if (x < (1.0 / 3.0)) m.r = 1.0;
+  else if (x < (2.0 / 3.0)) m.g = 1.0;
+  else m.b = 1.0;
+  return m;
+  #endif
+  #ifdef CRTS_MASK_GRILLE_LITE
+  vec3 m = vec3(1.0, 1.0, 1.0);
+  float x = fract(pos.x * (1.0 / 3.0));
+  if (x < (1.0 / 3.0)) m.r = dark;
+  else if (x < (2.0 / 3.0)) m.g = dark;
+  else m.b = dark;
+  return m;
+  #endif
+  #ifdef CRTS_MASK_NONE
+  return vec3(1.0, 1.0, 1.0);
+  #endif
+  #ifdef CRTS_MASK_SHADOW
+  pos.x += pos.y * 3.0;
+  vec3 m = vec3(dark, dark, dark);
+  float x = fract(pos.x * (1.0 / 6.0));
+  if (x < (1.0 / 3.0)) m.r = 1.0;
+  else if (x < (2.0 / 3.0)) m.g = 1.0;
+  else m.b = 1.0;
+  return m;
+  #endif
+}
+
+vec3 CrtsFilter(
+  vec2 ipos,
+  vec2 inputSizeDivOutputSize,
+  vec2 halfInputSize,
+  vec2 rcpInputSize,
+  vec2 rcpOutputSize,
+  vec2 twoDivOutputSize,
+  float inputHeight,
+  vec2 warp,
+  float thin,
+  float blur,
+  float mask,
+  vec2 tone
+) {
+  vec2 pos;
+  #ifdef CRTS_WARP
+  pos = ipos * twoDivOutputSize - vec2(1.0, 1.0);
+  pos *= vec2(
+      1.0 + (pos.y * pos.y) * warp.x,
+      1.0 + (pos.x * pos.x) * warp.y);
+  float vin = 1.0 - (
+      (1.0 - CrtsSatF1(pos.x * pos.x)) * (1.0 - CrtsSatF1(pos.y * pos.y)));
+  vin = CrtsSatF1((-vin) * inputHeight + inputHeight);
+  pos = pos * halfInputSize + halfInputSize;
+  #else
+  pos = ipos * inputSizeDivOutputSize;
+  #endif
+
+  float y0 = floor(pos.y - 0.5) + 0.5;
+  float x0 = floor(pos.x - 1.5) + 0.5;
+  vec2 p = vec2(x0 * rcpInputSize.x, y0 * rcpInputSize.y);
+  vec3 colA0 = CrtsFetch(p);
+  p.x += rcpInputSize.x;
+  vec3 colA1 = CrtsFetch(p);
+  p.x += rcpInputSize.x;
+  vec3 colA2 = CrtsFetch(p);
+  p.x += rcpInputSize.x;
+  vec3 colA3 = CrtsFetch(p);
+  p.y += rcpInputSize.y;
+  vec3 colB3 = CrtsFetch(p);
+  p.x -= rcpInputSize.x;
+  vec3 colB2 = CrtsFetch(p);
+  p.x -= rcpInputSize.x;
+  vec3 colB1 = CrtsFetch(p);
+  p.x -= rcpInputSize.x;
+  vec3 colB0 = CrtsFetch(p);
+
+  float off = pos.y - y0;
+  float pi2 = 6.28318530717958;
+  float hlf = 0.5;
+  float scanA = cos(min(0.5, off * thin) * pi2) * hlf + hlf;
+  float scanB = cos(min(0.5, (-off) * thin + thin) * pi2) * hlf + hlf;
+
+  float off0 = pos.x - x0;
+  float off1 = off0 - 1.0;
+  float off2 = off0 - 2.0;
+  float off3 = off0 - 3.0;
+  float pix0 = exp2(blur * off0 * off0);
+  float pix1 = exp2(blur * off1 * off1);
+  float pix2 = exp2(blur * off2 * off2);
+  float pix3 = exp2(blur * off3 * off3);
+  float pixT = CrtsRcpF1(pix0 + pix1 + pix2 + pix3);
+
+  #ifdef CRTS_WARP
+  pixT *= max(MIN_VIN, vin);
+  #endif
+
+  scanA *= pixT;
+  scanB *= pixT;
+
+  vec3 color =
+    (colA0 * pix0 + colA1 * pix1 + colA2 * pix2 + colA3 * pix3) * scanA +
+      (colB0 * pix0 + colB1 * pix1 + colB2 * pix2 + colB3 * pix3) * scanB;
+
+  color *= CrtsMask(ipos, mask);
+
+  float peak = max(1.0 / (256.0 * 65536.0),
+      CrtsMax3F1(color.r, color.g, color.b));
+  vec3 ratio = color * CrtsRcpF1(peak);
+  peak = peak * CrtsRcpF1(peak * tone.x + tone.y);
+  return ratio * peak;
+}
+
+float ToSrgb1(float c) {
+  return (c < 0.0031308 ? c * 12.92 : 1.055 * pow(c, 0.41666) - 0.055);
+}
+vec3 ToSrgb(vec3 c) {
+  return vec3(ToSrgb1(c.r), ToSrgb1(c.g), ToSrgb1(c.b));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  float aspect = iResolution.x / iResolution.y;
+  fragColor.rgb = CrtsFilter(
+      fragCoord.xy,
+      vec2(1.0),
+      iResolution.xy * SCALE * 0.5,
+      1.0 / (iResolution.xy * SCALE),
+      1.0 / iResolution.xy,
+      2.0 / iResolution.xy,
+      iResolution.y,
+      vec2(1.0 / (50.0 * aspect), 1.0 / 50.0),
+      INPUT_THIN,
+      INPUT_BLUR,
+      INPUT_MASK,
+      CrtsTone(INPUT_THIN, INPUT_MASK)
+    );
+  fragColor = vec4(ToSrgb(fragColor.rgb), 1.0);
+}
+`;
+
+  function startCrtOverlay() {
+    if (!glAddon || fxParams.get('crt') === 'off') return;
+    const overlay = document.createElement('canvas');
+    overlay.style.cssText =
+      'position:fixed;left:0;top:0;pointer-events:none;z-index:10;display:none;';
+    const gl = overlay.getContext('webgl2', { alpha: false, depth: false, antialias: false });
+    if (!gl) { console.warn('CRT overlay: no WebGL2, skipping'); return; }
+
+    // Shadertoy wrapper: fullscreen triangle VS, uniforms + mainImage-call FS.
+    const wrapVS = '#version 300 es\n' +
+      'void main() {' +
+      '  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));' +
+      '  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);' +
+      '}';
+    const crtScale = (window.devicePixelRatio || 1) >= 2 ? '0.33333333' : '0.66666666';
+    const wrapFS = '#version 300 es\nprecision highp float;\n' +
+      'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\nuniform float iTime;\n' +
+      'out vec4 xsofyFragColor;\n' + CRT_GLSL.replace(/__CRT_SCALE__/g, crtScale) +
+      '\nvoid main() { mainImage(xsofyFragColor, gl_FragCoord.xy); }\n';
+    function compile(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+        throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+    let prog;
+    try {
+      prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, wrapVS));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, wrapFS));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+        throw new Error(gl.getProgramInfoLog(prog));
+    } catch (e) { console.warn('CRT shader failed to build:', e); return; }
+    document.body.appendChild(overlay);
+    gl.useProgram(prog);
+    const uRes = gl.getUniformLocation(prog, 'iResolution');
+    const uTime = gl.getUniformLocation(prog, 'iTime');
+    gl.uniform1i(gl.getUniformLocation(prog, 'iChannel0'), 0);
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // Canvas rows are top-down, GL texture space is bottom-up; flipping on
+    // upload keeps gl_FragCoord and iChannel0 in the same orientation, which is
+    // what Shadertoy-convention shaders assume.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+    function frame(t) {
+      if (!glAddon) {
+        console.warn('CRT overlay stopping: WebGL renderer gone');
+        overlay.remove(); return;
+      }
+      // Re-query per frame: the addon can rebuild its canvas (e.g. option flips).
+      // :not(.xterm-link-layer) — the screen holds TWO canvases: xterm's
+      // transparent link-underline layer (2D, first in DOM) and the addon's
+      // WebGL canvas. Sampling the link layer reads back solid black.
+      const src = term.element &&
+        term.element.querySelector('.xterm-screen canvas:not(.xterm-link-layer)');
+      if (!src || src.width === 0) {
+        overlay.style.display = 'none';
+        requestAnimationFrame(frame);
+        return;
+      }
+      // Track the source canvas' on-screen box (letterbox padding, refits).
+      const r = src.getBoundingClientRect();
+      overlay.style.display = 'block';
+      overlay.style.transform = 'translate(' + r.left + 'px,' + r.top + 'px)';
+      overlay.style.width = r.width + 'px';
+      overlay.style.height = r.height + 'px';
+      if (overlay.width !== src.width || overlay.height !== src.height) {
+        overlay.width = src.width; overlay.height = src.height;
+        gl.viewport(0, 0, overlay.width, overlay.height);
+        gl.uniform3f(uRes, overlay.width, overlay.height, 1.0);
+      }
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      gl.uniform1f(uTime, t / 1000);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+  // --- end SPIKE -------------------------------------------------------------
+
   window.LetGoHost.onReady(async (mode) => {
     const s = document.getElementById('status'); if (s) s.style.display = 'none';
     termEl.style.display = 'block';
@@ -474,6 +783,10 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     // Only the bundled face needs the pre-open load; ?font=system has none.
     if (!sysFont) { try { await document.fonts.load('16px "Fairfax HD"'); } catch (e) {} }
     term.open(termEl); fit.fit(); term.focus();
+    // WebGL renderer must load after open(); the CRT overlay needs the
+    // renderer's canvas, so it starts after that.
+    enableWebgl();
+    startCrtOverlay();
     opened = true;
     if (pending) { term.write(pending); pending = ''; }
     if (mode === 'worker') {
