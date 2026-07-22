@@ -731,7 +731,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // center origin, aspect-corrected so glyphs keep their shape mid-rotation
   vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
   float a = iTime * 0.35;                    // spin
-  float z = 1.5 + 1.1 * sin(iTime * 0.27);   // zoom breathing
+  // zoom breathing, biased into zoom-IN territory (z<1 magnifies): dips to
+  // ~4x magnification each ~14s cycle instead of hovering zoomed-out
+  float z = 1.2 + 0.95 * sin(iTime * 0.45);
   mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
   vec2 p = rot * uv * z;
   // back to texture space; REPEAT wrap tiles the screen into an endless plane
