@@ -111,16 +111,20 @@
 (defn run-command
   "Parse `line` with the reader and dispatch its head against the read-only
    command whitelist. No `eval`: an unknown or non-whitelisted form is reported,
-   never executed, so the console can't mutate the run. Both `(help)` and a bare
-   `help` resolve. Returns {:ok bool :val <value>}."
+   never executed, so the console can't mutate the run. `(help)`, a bare `help`,
+   and bare-with-args `hurt 20` all resolve: the line is read wrapped in parens
+   so trailing args survive (a bare read-string stops at the first form, which
+   silently dropped `20` from `hurt 20`), then a user-typed `(...)` is
+   unwrapped from its double nesting. Returns {:ok bool :val <value>}."
   [world line]
-  (let [form (try (read-string line) (catch e ::parse-error))]
+  (let [form (try (read-string (str "(" line ")")) (catch e ::parse-error))]
     (if (= form ::parse-error)
       {:ok false :val "parse error"}
-      (let [head (cond (seq? form)    (first form)
-                       (symbol? form) form
-                       :else          nil)
-            args (when (seq? form) (rest form))]
+      (let [form (if (and (= 1 (count form)) (seq? (first form)))
+                   (first form)
+                   form)
+            head (first form)
+            args (rest form)]
         (if-let [cmd (get commands head)]
           (try {:ok true :val (cmd world args)}
                (catch e {:ok false :val (str e)}))
