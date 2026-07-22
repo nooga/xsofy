@@ -1458,13 +1458,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   repeatToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
 
   // Font-size cycle. xterm's default 14 is unreadable on a 375px viewport; the
-  // chip cycles a short predictable set. First-ever load picks by orientation.
+  // chip cycles a short predictable set. First-ever load picks by orientation
+  // (landscape/desktop bumped 14 -> 18: 14 reads small on laptop screens too;
+  // a stored user choice always wins over these defaults).
   const FONT_SIZES = [12, 14, 18, 22, 28], LS_KEY = 'xsofy/font-size';
   const cycleEl = $('xs-font-cycle'), fontPxEl = $('xs-font-px');
   function applyFontSize(n) { setTermFontSize(n); if (fontPxEl) fontPxEl.textContent = n; }
   function initFontSize() {
     let n = parseInt(localStorage.getItem(LS_KEY) || '', 10);
-    if (!FONT_SIZES.includes(n)) n = matchMedia('(orientation: portrait)').matches ? 22 : 14;
+    if (!FONT_SIZES.includes(n)) n = matchMedia('(orientation: portrait)').matches ? 22 : 18;
     applyFontSize(n);
   }
   cycleEl?.addEventListener('pointerdown', (e) => {
