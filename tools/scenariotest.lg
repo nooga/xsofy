@@ -9,7 +9,9 @@
 
    Run (needs a TTY, except --check):
      lg tools/scenariotest.lg tools/scenarios/water-burning.edn
+     lg tools/scenariotest.lg tools/scenarios/web-trample.edn
      lg tools/scenariotest.lg --check tools/scenarios/water-burning.edn
+     lg tools/scenariotest.lg --check tools/scenarios/web-trample.edn
 
    Default scenario when no path is given: tools/scenarios/water-burning.edn
 

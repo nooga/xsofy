@@ -1,0 +1,20 @@
+;; Dev scenario: player starts webbed on an intact web with two struggles left.
+;; Press right (l/arrow) twice.
+;;
+;; On main (#161): the first struggle's generic status tick silently removes
+;; :webbed, then the second press moves the player off the still-intact web.
+;; With fix/web-trample (#166): the first press leaves one struggle; the second
+;; tears the player free and tramples the web to ash without moving.
+;;
+;;   lg tools/scenariotest.lg tools/scenarios/web-trample.edn
+{:name "web-trample"
+ :desc "Press right twice. Breaking free should trample the web to ash (#161 / #166)."
+ :w 16
+ :h 10
+ :seed 161
+ :fill 1
+ :paint [[5 4 19]]         ; intact web under the player
+ :player {:pos [5 4]
+          :statuses {:webbed {:ttl 2 :max-ttl 2}}}
+ :gear? false
+ :log ["scenariotest: web-trample — press right twice (l/arrow) and inspect the web"]}

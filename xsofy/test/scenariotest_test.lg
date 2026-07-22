@@ -1,6 +1,7 @@
 (ns xsofy.test.scenariotest-test
   (:require [test :refer [deftest is testing]]
-            [tools.scenariotest.build :as build]))
+            [tools.scenariotest.build :as build]
+            [xsofy.terrain :as terrain]))
 
 (deftest creature-patches-target-the-newly-spawned-entity
   (testing "an overlapping player is not mistaken for the spawned creature"
@@ -21,3 +22,15 @@
           "the spawned creature received the AI patch")
       (is (= 99 (get-in imp [:body :hp]))
           "the spawned creature received the deep merge patch"))))
+
+(deftest bundled-web-trample-scenario-stages-issue-161
+  (testing "the web scenario starts on an intact web with two struggles left"
+    (let [scenario (build/load-scenario "tools/scenarios/web-trample.edn")
+          w (build/build-world scenario)
+          [px py] (get-in w [:entities :player :pos])]
+      (is (= "web-trample" (:name scenario)))
+      (is (= [5 4] [px py]))
+      (is (= 19 (terrain/tget (:terrain w) (:width w) px py))
+          "the player starts on an intact web")
+      (is (= 2 (get-in w [:entities :player :statuses :webbed :ttl]))
+          "two movement attempts are required to break free"))))
