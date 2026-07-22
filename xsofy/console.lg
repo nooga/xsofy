@@ -58,6 +58,7 @@
        "  (bench)     quick engine micro-benchmark (per-turn ms)\n"
        "  (crt) (water) (bloom) (mode7)  toggle a shader override (web shell)\n"
        "  (hurt N)    force the red pulse at N% (default 70; 0 clears)\n"
+       "  (pulse K)   one-shot pickup flash: K = rune | item (default item)\n"
        "  (fx)        clear fx overrides\n"
        "  (help)      this list\n"
        "Esc or ` to close."))
@@ -106,6 +107,10 @@
    'water    (fn [_ _] (emit-fx! "shader=water") "water override (repeat to clear)")
    'bloom    (fn [_ _] (emit-fx! "shader=bloom") "bloom override (repeat to clear)")
    'mode7    (fn [_ _] (emit-fx! "shader=mode7") "mode7 override (repeat to clear)")
+   'pulse    (fn [_ args]
+               (let [k (or (first args) 'item)]
+                 (emit-fx! (str "pulse=" k))
+                 (str k " pulse fired")))
    'fx       (fn [_ _] (emit-fx! "shader=,hurt=0") "fx cleared")})
 
 (defn run-command
