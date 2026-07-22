@@ -800,7 +800,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // Shaders compile lazily on first activation, so entries can't collide
   // with each other. nearest/repeat control how the terminal texture is
   // sampled.
+  // Identity passthrough — what the frame loop activates when a transient
+  // effect (hurt, pickup pulse) needs the overlay but no shader is selected.
+  const PLAIN_GLSL = `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = texture(iChannel0, fragCoord / iResolution.xy);
+}
+`;
+
   const FX_SHADERS = {
+    plain: { src: PLAIN_GLSL },
     crt:   { src: CRT_GLSL },
     // water's caustic multiply darkens the whole scene; lift it back up
     water: { src: WATER_GLSL, contrast: 1.2, bright: 0.1 },
@@ -814,6 +823,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // active shader to the water effect while swimming; hurt (integer percent,
   // ramping in below 35% health) drives a red pulse applied over whichever
   // shader is active. window-exposed for manual poking on the demo build.
+  // One-shot pulse palette: c = additive wash color, s = peak strength.
+  const PULSE_KINDS = {
+    rune: { c: [0.55, 0.25, 1.0], s: 0.65 },  // purple — rune pickup
+    item: { c: [1.0, 1.0, 1.0],  s: 0.4 },    // white  — item pickup
+  };
   const fxSignals = { water: 0, hurt: 0 };
   window.xsofyFxSignals = fxSignals;
 
@@ -837,6 +851,12 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       const [k, v] = kv.split('=');
       if (k === 'water') fxSignals.water = +v ? 1 : 0;
       else if (k === 'hurt') fxSignals.hurt = Math.max(0, Math.min(1, (+v || 0) / 100));
+      // pulse=<kind>: one-shot flash (rune/item pickup). Every occurrence
+      // retriggers — the decay envelope runs shell-side off pulseAt.
+      else if (k === 'pulse') {
+        fxSignals.pulse = PULSE_KINDS[v] ? v : 'item';
+        fxSignals.pulseAt = performance.now();
+      }
       // shader=<name>: explicit shader override (dev-console (crt)/(water)/…).
       // Repeating the current override toggles it back off; empty or unknown
       // names clear it. Overrides win over the swim signal and the URL base.
@@ -902,6 +922,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         const fsrc = '#version 300 es\nprecision highp float;\n' +
           'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\n' +
           'uniform float iTime;\nuniform float iHurt;\n' +
+          'uniform float iPulse;\nuniform vec3 iPulseColor;\n' +
           'out vec4 xsofyFragColor;\n' +
           def.src.replace(/__CRT_SCALE__/g, crtScaleLit) +
           '\nvoid main() {\n' +
@@ -909,6 +930,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           '  xsofyFragColor.rgb = clamp((xsofyFragColor.rgb - 0.5) * ' + con + ' + 0.5 + ' + brt + ', 0.0, 1.0);\n' +
           '  float hp = iHurt * (0.55 + 0.45 * sin(iTime * 7.0));\n' +
           '  xsofyFragColor.rgb = mix(xsofyFragColor.rgb, vec3(0.75, 0.03, 0.02), hp * 0.55);\n' +
+          '  xsofyFragColor.rgb += iPulseColor * iPulse;\n' +
           '}\n';
         const prog = gl.createProgram();
         gl.attachShader(prog, compile(gl.VERTEX_SHADER, wrapVS));
@@ -921,7 +943,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         entry = { prog, def: FX_SHADERS[name],
           uRes: gl.getUniformLocation(prog, 'iResolution'),
           uTime: gl.getUniformLocation(prog, 'iTime'),
-          uHurt: gl.getUniformLocation(prog, 'iHurt') };
+          uHurt: gl.getUniformLocation(prog, 'iHurt'),
+          uPulse: gl.getUniformLocation(prog, 'iPulse'),
+          uPulseColor: gl.getUniformLocation(prog, 'iPulseColor') };
       } catch (e) { console.warn('shader "' + name + '" failed to build:', e); }
       progCache[name] = entry;
       return entry;
@@ -973,10 +997,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         requestAnimationFrame(frame);
         return;
       }
+      // One-shot pulse envelope: instant attack, ~500ms quadratic decay.
+      // rAF's timestamp shares performance.now()'s timebase.
+      const pDef = PULSE_KINDS[fxSignals.pulse];
+      const pAge = fxSignals.pulseAt ? t - fxSignals.pulseAt : Infinity;
+      let pStrength = Math.max(0, 1 - pAge / 500);
+      pStrength *= pStrength;
       // Console override wins, then the swim signal, then the URL base
-      // (which may be null: shaders default OFF). Dormant costs nothing —
-      // no texture upload, no readback, overlay hidden.
-      const want = fxSignals.shader || (fxSignals.water ? 'water' : baseName);
+      // (which may be null: shaders default OFF). Transient effects (hurt,
+      // pulses) wake the plain passthrough when nothing else is active, so
+      // they show without a shader selected. Dormant costs nothing — no
+      // texture upload, no readback, overlay hidden.
+      const fxLive = fxSignals.hurt > 0 || (pDef && pStrength > 0);
+      const want = fxSignals.shader || (fxSignals.water ? 'water' : baseName) ||
+        (fxLive ? 'plain' : null);
       const entry = want ? activate(want) : null;
       if (!entry) {
         overlay.style.display = 'none';
@@ -998,6 +1032,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       gl.uniform3f(entry.uRes, overlay.width, overlay.height, 1.0);
       gl.uniform1f(entry.uTime, t / 1000);
       gl.uniform1f(entry.uHurt, fxSignals.hurt);
+      gl.uniform1f(entry.uPulse, pDef ? pStrength * pDef.s : 0);
+      const pc = pDef ? pDef.c : [0, 0, 0];
+      gl.uniform3f(entry.uPulseColor, pc[0], pc[1], pc[2]);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       requestAnimationFrame(frame);
     }
