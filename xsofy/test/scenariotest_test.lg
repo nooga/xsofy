@@ -24,13 +24,30 @@
           "the spawned creature received the deep merge patch"))))
 
 (deftest bundled-web-trample-scenario-stages-issue-161
-  (testing "the web scenario starts on an intact web with two struggles left"
+  (testing "the web scenario starts in a 2/3/2 patch with two struggles left"
     (let [scenario (build/load-scenario "tools/scenarios/web-trample.edn")
           w (build/build-world scenario)
-          [px py] (get-in w [:entities :player :pos])]
+          [px py] (get-in w [:entities :player :pos])
+          web-pos [[5 3] [6 3]
+                   [4 4] [5 4] [6 4]
+                   [5 5] [6 5]]]
       (is (= "web-trample" (:name scenario)))
       (is (= [5 4] [px py]))
-      (is (= 19 (terrain/tget (:terrain w) (:width w) px py))
-          "the player starts on an intact web")
+      (is (every? (fn [[x y]]
+                    (= 19 (terrain/tget (:terrain w) (:width w) x y)))
+                  web-pos)
+          "the full 2/3/2 patch is intact")
       (is (= 2 (get-in w [:entities :player :statuses :webbed :ttl]))
           "two movement attempts are required to break free"))))
+
+(deftest bundled-water-burning-scenario-stages-issue-162
+  (testing "the water scenario starts in a 2x2 shallow-water pool"
+    (let [scenario (build/load-scenario "tools/scenarios/water-burning.edn")
+          w (build/build-world scenario)
+          water-pos [[5 4] [6 4] [5 5] [6 5]]]
+      (is (= "water-burning" (:name scenario)))
+      (is (= [5 4] (get-in w [:entities :player :pos])))
+      (is (every? (fn [[x y]]
+                    (= 3 (terrain/tget (:terrain w) (:width w) x y)))
+                  water-pos)
+          "the full 2x2 pool is shallow water"))))

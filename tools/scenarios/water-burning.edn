@@ -1,5 +1,9 @@
-;; Dev scenario: player standing in shallow water, fire-imp at preferred
+;; Dev scenario: player standing in a shallow-water pool, fire-imp at preferred
 ;; range and already hunting. Wait (.) and the imp should shoot.
+;;
+;; Pool (`@` is the player):
+;;   @~
+;;   ~~
 ;;
 ;; On main (#162): water becomes fire and the player catches :burning.
 ;; With fix/water-burning: water stays water and burning is refused.
@@ -11,7 +15,8 @@
  :h 10
  :seed 42
  :fill 1
- :paint [[5 4 3]]          ; shallow water under the player
+ :paint [[5 4 3] [6 4 3]
+         [5 5 3] [6 5 3]] ; 2x2 shallow-water pool; player on top-left
  :player {:pos [5 4]
           ;; Survive several double-shots (imp speed 2) so the status is visible.
           :body {:hp 80 :max-hp 80}}
