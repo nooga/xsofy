@@ -1,0 +1,27 @@
+;; Dev scenario: player standing in shallow water, fire-imp at preferred
+;; range and already hunting. Wait (.) and the imp should shoot.
+;;
+;; On main (#162): water becomes fire and the player catches :burning.
+;; With fix/water-burning: water stays water and burning is refused.
+;;
+;;   just scenariotest tools/scenarios/water-burning.edn
+;;   lg tools/scenariotest.lg tools/scenarios/water-burning.edn
+{:name "water-burning"
+ :desc "Wait for the fire-imp to shoot. You are in water — you should not burn (#162)."
+ :w 16
+ :h 10
+ :seed 42
+ :fill 1
+ :paint [[5 4 3]]          ; shallow water under the player
+ :player {:pos [5 4]
+          ;; Survive several double-shots (imp speed 2) so the status is visible.
+          :body {:hp 80 :max-hp 80}}
+ :creatures [{:species :fire-imp
+              :pos [9 4]   ; chebyshev dist 4 — in preferred range, not too-close
+              :ai {:state :hunt}
+              ;; Make the shot reliable for review; production chance is 60% /
+              ;; accuracy 75%. Force both so a few waits always land the hit.
+              :merge {:spells {:ranged {:damage 3 :range 5
+                                        :fire-chance 100 :accuracy 100}}}}]
+ :gear? false
+ :log ["scenariotest: water-burning — stand still (.) and watch the imp shot (#162)"]}

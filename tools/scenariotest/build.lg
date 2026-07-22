@@ -1,0 +1,130 @@
+(ns tools.scenariotest.build
+  "Build a playable xsofy world from a dev-scoped scenario EDN map.
+
+   Scenarios are handcrafted arenas — not dungeon gen. The shape is intentionally
+   small so a reviewer can stage one interaction (water+imp, web+struggle, …)
+   and drive it through the real play/dispatch loop.
+
+   Keys (all optional unless noted):
+     :name       string label
+     :desc       string logged on boot
+     :w :h       arena size (default 16×10)
+     :seed       gameplay seed (default 1)
+     :depth      floor depth (default 1)
+     :fill       interior tile id (default 1 = stone floor)
+     :paint      [[x y tile] ...] overlays after fill+border
+     :player     {:pos [x y] :statuses {...}}
+     :creatures  [{:species :fire-imp :pos [x y] :ai {...} :merge {...}} ...]
+     :gear?      true → give-starting-items (default false)
+     :log        initial message-log lines
+
+   The border is always stone walls (tile 8). Creatures are spawned via
+   ent/spawn then optionally :ai-merged / deep-merged so a scenario can wake
+   an AI or force a 100% fire-chance without forking the bestiary."
+  (:require [xsofy.terrain :as terrain]
+            [xsofy.entities :as ent]
+            [xsofy.world :as world]))
+
+(def defaults
+  {:w 16 :h 10 :seed 1 :depth 1 :fill 1 :gear? false
+   :paint [] :creatures [] :log []})
+
+(defn- paint-arena!
+  "Fill interior with :fill, wall the border, then apply :paint overlays."
+  [terrain w h fill paint]
+  (dotimes [y h]
+    (dotimes [x w]
+      (terrain/tset! terrain w x y
+                     (if (or (zero? x) (zero? y)
+                             (= x (dec w)) (= y (dec h)))
+                       8
+                       fill))))
+  (doseq [[x y tile] paint]
+    (when (and (>= x 0) (>= y 0) (< x w) (< y h))
+      (terrain/tset! terrain w x y tile)))
+  terrain)
+
+(defn- spawn-creature
+  "Spawn one creature and apply optional :ai / :merge patches."
+  [world {:keys [species pos ai] :as spec}]
+  (when (nil? species)
+    (throw "scenariotest: creature entry needs :species"))
+  (when (nil? pos)
+    (throw (str "scenariotest: creature " species " needs :pos")))
+  (let [w (ent/spawn world species pos)
+        e (ent/creature-at w pos)
+        id (:id e)]
+    (when (nil? id)
+      (throw (str "scenariotest: spawn of " species " at " pos " produced no creature")))
+    (cond-> w
+      ai (update-in [:entities id :ai] merge ai)
+      (:merge spec) (update-in [:entities id] ent/deep-merge (:merge spec)))))
+
+(defn build-world
+  "Turn a scenario map into a world ready for play/run-play-loop."
+  [scenario]
+  (let [sc (merge defaults scenario)
+        {:keys [w h seed depth fill paint creatures gear?]} sc
+        player-spec (or (:player sc) {})
+        ppos (or (:pos player-spec) [(quot w 2) (quot h 2)])
+        terrain (paint-arena! (terrain/make-terrain w h) w h fill (or paint []))
+        player (-> (world/make-player)
+                   (assoc :pos ppos)
+                   (cond-> (:statuses player-spec)
+                     (assoc :statuses (:statuses player-spec)))
+                   (cond-> (:body player-spec)
+                     (update :body merge (:body player-spec))))
+        boot-log (vec (concat
+                        [(str "scenariotest: " (or (:name sc) "scenario"))]
+                        (or (:log sc) [])
+                        (when (:desc sc) [(:desc sc)])))
+        base {:terrain terrain
+              :width w
+              :height h
+              :entities {:player player}
+              :fov #{}
+              :memory {}
+              :lights nil
+              :stains {}
+              :gases {}
+              :fire-ttl {}
+              :log boot-log
+              :turn 0
+              :depth depth
+              :floors {}
+              :gold 0
+              :rune-table {}
+              :running true
+              :seed seed
+              :seed-input seed
+              :action-log []}
+        w0 (reduce spawn-creature base creatures)
+        w1 (if gear? (world/give-starting-items w0) w0)]
+    (world/update-fov w1)))
+
+(defn load-scenario
+  "Parse scenario from an inline EDN map string, a file path, or a map."
+  [arg]
+  (cond
+    (map? arg) arg
+    (or (nil? arg) (= arg ""))
+    (throw "scenariotest: pass a scenario path or inline EDN map")
+    (= \{ (first arg)) (read-string arg)
+    :else (read-string (slurp arg))))
+
+(defn summarize
+  "One-line human summary for --check / boot banner."
+  [world scenario]
+  (let [p (get-in world [:entities :player])
+        [px py] (:pos p)
+        tile (terrain/tget (:terrain world) (:width world) px py)
+        creatures (->> (vals (:entities world))
+                       (filter (fn [e] (and (:ai e) (not= :player (:id e)))))
+                       (map (fn [e] (str (name (:template e)) "@" (:pos e))))
+                       (vec))]
+    (str (or (:name scenario) "?")
+         " " (:width world) "x" (:height world)
+         " player@" [px py] " tile=" tile
+         " fov=" (count (or (:fov world) #{}))
+         (when (seq creatures)
+           (str " creatures=" creatures)))))
