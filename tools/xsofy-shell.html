@@ -813,6 +813,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // shader is active. window-exposed for manual poking on the demo build.
   const fxSignals = { water: 0, hurt: 0 };
   window.xsofyFxSignals = fxSignals;
+
+  // Renderer-independent terminal text readout, for the CI smoke gate and
+  // debugging: the WebGL renderer draws glyphs to a canvas atlas and never
+  // populates .xterm-rows with DOM text, so DOM-scraping assertions go blind.
+  // This reads the terminal buffer itself, identical under any renderer.
+  window.xsofyTermText = () => {
+    const buf = term.buffer && term.buffer.active;
+    if (!buf) return '';
+    const out = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) out.push(line.translateToString(true));
+    }
+    return out.join('\n');
+  };
   term.parser.registerOscHandler(7777, (data) => {
     fxSignals._n = (fxSignals._n || 0) + 1; // receive counter (demo diagnostics)
     for (const kv of String(data).split(',')) {
