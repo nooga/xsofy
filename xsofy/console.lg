@@ -56,8 +56,19 @@
        "  (player)    player hp / position / depth\n"
        "  (location)  position / depth / turn\n"
        "  (bench)     quick engine micro-benchmark (per-turn ms)\n"
+       "  (crt) (water) (bloom) (mode7)  toggle a shader override (web shell)\n"
+       "  (hurt N)    force the red pulse at N% (default 70; 0 clears)\n"
+       "  (pulse K)   one-shot pickup flash: K = rune | item (default item)\n"
+       "  (fx)        clear fx overrides\n"
        "  (help)      this list\n"
        "Esc or ` to close."))
+
+;; Shell FX hint (demo): a private OSC 7777 escape the web shell's shader
+;; overlay listens for (see tools/xsofy-shell.html). Real terminals discard
+;; unknown OSC, so these are no-ops in the native TUI. Output-only — the
+;; world is untouched, so the console's read-only model holds.
+(defn- emit-fx! [pairs]
+  (term/write (str ESC "]7777;" pairs (char 7))))
 
 (def ^:private commands
   {'help     (fn [_ _] (help-text))
@@ -83,21 +94,42 @@
    ;; so bench never touches the live run. Kept small (3 seeds x 20 turns) so it
    ;; returns in well under a second — the full sweep lives in bench/native.lg.
    'bench    (fn [_ _] (dissoc (perf/run-fixture [:wait (fn [_] ".") 20] [0 1 2] 1)
-                               :per-seed))})
+                               :per-seed))
+   ;; --- shell FX toggles (web-shell demo; no-ops in a real terminal) ---
+   ;; The shell treats a repeated shader override as toggle-off, so (crt)
+   ;; twice returns to the URL base. (hurt 0) clears the pulse; the live
+   ;; low-health signal re-emits on its next change either way.
+   'hurt     (fn [_ args]
+               (let [n (or (first args) 70)]
+                 (emit-fx! (str "hurt=" n))
+                 (str "hurt pulse " n "%")))
+   'crt      (fn [_ _] (emit-fx! "shader=crt")   "crt override (repeat to clear)")
+   'water    (fn [_ _] (emit-fx! "shader=water") "water override (repeat to clear)")
+   'bloom    (fn [_ _] (emit-fx! "shader=bloom") "bloom override (repeat to clear)")
+   'mode7    (fn [_ _] (emit-fx! "shader=mode7") "mode7 override (repeat to clear)")
+   'pulse    (fn [_ args]
+               (let [k (or (first args) 'item)]
+                 (emit-fx! (str "pulse=" k))
+                 (str k " pulse fired")))
+   'fx       (fn [_ _] (emit-fx! "shader=,hurt=0") "fx cleared")})
 
 (defn run-command
   "Parse `line` with the reader and dispatch its head against the read-only
    command whitelist. No `eval`: an unknown or non-whitelisted form is reported,
-   never executed, so the console can't mutate the run. Both `(help)` and a bare
-   `help` resolve. Returns {:ok bool :val <value>}."
+   never executed, so the console can't mutate the run. `(help)`, a bare `help`,
+   and bare-with-args `hurt 20` all resolve: the line is read wrapped in parens
+   so trailing args survive (a bare read-string stops at the first form, which
+   silently dropped `20` from `hurt 20`), then a user-typed `(...)` is
+   unwrapped from its double nesting. Returns {:ok bool :val <value>}."
   [world line]
-  (let [form (try (read-string line) (catch e ::parse-error))]
+  (let [form (try (read-string (str "(" line ")")) (catch e ::parse-error))]
     (if (= form ::parse-error)
       {:ok false :val "parse error"}
-      (let [head (cond (seq? form)    (first form)
-                       (symbol? form) form
-                       :else          nil)
-            args (when (seq? form) (rest form))]
+      (let [form (if (and (= 1 (count form)) (seq? (first form)))
+                   (first form)
+                   form)
+            head (first form)
+            args (rest form)]
         (if-let [cmd (get commands head)]
           (try {:ok true :val (cmd world args)}
                (catch e {:ok false :val (str e)}))

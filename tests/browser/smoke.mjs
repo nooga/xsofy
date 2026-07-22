@@ -73,6 +73,10 @@ try {
 
   await page.waitForFunction(
     (sentinel) => {
+      // The WebGL renderer draws to a canvas atlas and never puts text in
+      // .xterm-rows, so prefer the shell's buffer-API readout when present;
+      // fall back to DOM scraping for builds without it (DOM renderer).
+      if (window.xsofyTermText) return window.xsofyTermText().includes(sentinel);
       const el = document.querySelector('.xterm-rows');
       return el && el.textContent.includes(sentinel);
     },

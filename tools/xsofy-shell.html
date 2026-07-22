@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
 <!-- Terminal font (Fairfax HD, OFL — Kreative Software), inlined as a base64 WOFF2
      so it ships in the bundle: no external request, no CDN, and no COEP crossorigin
      dance under the bundle's require-corp. One face for the whole terminal: xterm
@@ -458,6 +459,589 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
+  // --- SPIKE: WebGL renderer + CRT post-process ------------------------------
+  // (a) xterm's WebGL renderer (@xterm/addon-webgl) — replaces the DOM renderer
+  //     with a glyph-atlas GL canvas. ?renderer=dom opts back out.
+  // (b) a WebGL2 overlay canvas that re-samples the renderer's canvas through a
+  //     Shadertoy-convention CRT shader every frame. ?crt=off opts out of (b)
+  //     while keeping (a).
+  const fxParams = new URLSearchParams(location.search);
+  let glAddon = null;
+  function enableWebgl() {
+    if (fxParams.get('renderer') === 'dom') { console.info('renderer=dom: skipping WebGL addon'); return; }
+    if (typeof WebglAddon === 'undefined') { console.warn('WebGL addon script not loaded'); return; }
+    try {
+      // preserveDrawingBuffer=true: the CRT overlay samples this canvas from its
+      // own rAF, after the addon's frame has already composited — a non-preserved
+      // WebGL backbuffer reads back blank at that point.
+      const addon = new WebglAddon.WebglAddon(true);
+      addon.onContextLoss(() => {
+        console.warn('xterm WebGL context lost — disposing addon, DOM renderer takes over');
+        addon.dispose(); glAddon = null;
+      });
+      term.loadAddon(addon);
+      glAddon = addon;
+      console.info('WebGL renderer active');
+    } catch (e) {
+      console.warn('WebGL renderer unavailable, staying on DOM renderer:', e);
+    }
+  }
+
+  // Timothy Lottes' CRT-styled scaler (public domain / Unlicense), as adapted
+  // for Ghostty by Qwerasd — ported unmodified from ghostty-shaders crt.glsl:
+  //   https://github.com/0xhckr/ghostty-shaders/blob/main/crt.glsl
+  //   (upstream: https://www.shadertoy.com/view/MtSfRK)
+  // Shadertoy convention: mainImage(fragColor, fragCoord) + iChannel0/iResolution;
+  // the wrapper in startCrtOverlay supplies those, so any ghostty shader drops in.
+  const CRT_GLSL = `
+// "Scanlines" per real screen pixel. 0.33333333 for high-DPI, 0.66666666 for low
+// (the __CRT_SCALE__ token is substituted per devicePixelRatio at compile time).
+#define SCALE __CRT_SCALE__
+// "Tube" warp
+#define CRTS_WARP 1
+// Darkness of vignette in corners after warping (0 black .. 1 none)
+#define MIN_VIN 0.5
+// Mask flavor: GRILLE | GRILLE_LITE | NONE | SHADOW
+#define CRTS_MASK_SHADOW 1
+// Scanline thinness (0.5 fused .. 1.0 too thin)
+#define INPUT_THIN 0.75
+// Horizontal scan blur (-3 pixely .. -1 too blurry)
+#define INPUT_BLUR -2.75
+// Shadow mask amount (0.25 heavy .. 1.0 none)
+#define INPUT_MASK 0.65
+
+float FromSrgb1(float c) {
+  return (c <= 0.04045) ? c * (1.0 / 12.92) :
+  pow(c * (1.0 / 1.055) + (0.055 / 1.055), 2.4);
+}
+vec3 FromSrgb(vec3 c) {
+  return vec3(FromSrgb1(c.r), FromSrgb1(c.g), FromSrgb1(c.b));
+}
+vec3 CrtsFetch(vec2 uv) {
+  return FromSrgb(texture(iChannel0, uv.xy).rgb);
+}
+#define CrtsRcpF1(x) (1.0/(x))
+#define CrtsSatF1(x) clamp((x),0.0,1.0)
+float CrtsMax3F1(float a, float b, float c) { return max(a, max(b, c)); }
+
+vec2 CrtsTone(float thin, float mask) {
+  #ifdef CRTS_MASK_NONE
+  mask = 1.0;
+  #endif
+  #ifdef CRTS_MASK_GRILLE_LITE
+  mask = 0.5 + mask * 0.5;
+  #endif
+  vec2 ret;
+  float midOut = 0.18 / ((1.5 - thin) * (0.5 * mask + 0.5));
+  float pMidIn = 0.18;
+  ret.x = ((-pMidIn) + midOut) / ((1.0 - pMidIn) * midOut);
+  ret.y = ((-pMidIn) * midOut + pMidIn) / (midOut * (-pMidIn) + midOut);
+  return ret;
+}
+
+vec3 CrtsMask(vec2 pos, float dark) {
+  #ifdef CRTS_MASK_GRILLE
+  vec3 m = vec3(dark, dark, dark);
+  float x = fract(pos.x * (1.0 / 3.0));
+  if (x < (1.0 / 3.0)) m.r = 1.0;
+  else if (x < (2.0 / 3.0)) m.g = 1.0;
+  else m.b = 1.0;
+  return m;
+  #endif
+  #ifdef CRTS_MASK_GRILLE_LITE
+  vec3 m = vec3(1.0, 1.0, 1.0);
+  float x = fract(pos.x * (1.0 / 3.0));
+  if (x < (1.0 / 3.0)) m.r = dark;
+  else if (x < (2.0 / 3.0)) m.g = dark;
+  else m.b = dark;
+  return m;
+  #endif
+  #ifdef CRTS_MASK_NONE
+  return vec3(1.0, 1.0, 1.0);
+  #endif
+  #ifdef CRTS_MASK_SHADOW
+  pos.x += pos.y * 3.0;
+  vec3 m = vec3(dark, dark, dark);
+  float x = fract(pos.x * (1.0 / 6.0));
+  if (x < (1.0 / 3.0)) m.r = 1.0;
+  else if (x < (2.0 / 3.0)) m.g = 1.0;
+  else m.b = 1.0;
+  return m;
+  #endif
+}
+
+vec3 CrtsFilter(
+  vec2 ipos,
+  vec2 inputSizeDivOutputSize,
+  vec2 halfInputSize,
+  vec2 rcpInputSize,
+  vec2 rcpOutputSize,
+  vec2 twoDivOutputSize,
+  float inputHeight,
+  vec2 warp,
+  float thin,
+  float blur,
+  float mask,
+  vec2 tone
+) {
+  vec2 pos;
+  #ifdef CRTS_WARP
+  pos = ipos * twoDivOutputSize - vec2(1.0, 1.0);
+  pos *= vec2(
+      1.0 + (pos.y * pos.y) * warp.x,
+      1.0 + (pos.x * pos.x) * warp.y);
+  float vin = 1.0 - (
+      (1.0 - CrtsSatF1(pos.x * pos.x)) * (1.0 - CrtsSatF1(pos.y * pos.y)));
+  vin = CrtsSatF1((-vin) * inputHeight + inputHeight);
+  pos = pos * halfInputSize + halfInputSize;
+  #else
+  pos = ipos * inputSizeDivOutputSize;
+  #endif
+
+  float y0 = floor(pos.y - 0.5) + 0.5;
+  float x0 = floor(pos.x - 1.5) + 0.5;
+  vec2 p = vec2(x0 * rcpInputSize.x, y0 * rcpInputSize.y);
+  vec3 colA0 = CrtsFetch(p);
+  p.x += rcpInputSize.x;
+  vec3 colA1 = CrtsFetch(p);
+  p.x += rcpInputSize.x;
+  vec3 colA2 = CrtsFetch(p);
+  p.x += rcpInputSize.x;
+  vec3 colA3 = CrtsFetch(p);
+  p.y += rcpInputSize.y;
+  vec3 colB3 = CrtsFetch(p);
+  p.x -= rcpInputSize.x;
+  vec3 colB2 = CrtsFetch(p);
+  p.x -= rcpInputSize.x;
+  vec3 colB1 = CrtsFetch(p);
+  p.x -= rcpInputSize.x;
+  vec3 colB0 = CrtsFetch(p);
+
+  float off = pos.y - y0;
+  float pi2 = 6.28318530717958;
+  float hlf = 0.5;
+  float scanA = cos(min(0.5, off * thin) * pi2) * hlf + hlf;
+  float scanB = cos(min(0.5, (-off) * thin + thin) * pi2) * hlf + hlf;
+
+  float off0 = pos.x - x0;
+  float off1 = off0 - 1.0;
+  float off2 = off0 - 2.0;
+  float off3 = off0 - 3.0;
+  float pix0 = exp2(blur * off0 * off0);
+  float pix1 = exp2(blur * off1 * off1);
+  float pix2 = exp2(blur * off2 * off2);
+  float pix3 = exp2(blur * off3 * off3);
+  float pixT = CrtsRcpF1(pix0 + pix1 + pix2 + pix3);
+
+  #ifdef CRTS_WARP
+  pixT *= max(MIN_VIN, vin);
+  #endif
+
+  scanA *= pixT;
+  scanB *= pixT;
+
+  vec3 color =
+    (colA0 * pix0 + colA1 * pix1 + colA2 * pix2 + colA3 * pix3) * scanA +
+      (colB0 * pix0 + colB1 * pix1 + colB2 * pix2 + colB3 * pix3) * scanB;
+
+  color *= CrtsMask(ipos, mask);
+
+  float peak = max(1.0 / (256.0 * 65536.0),
+      CrtsMax3F1(color.r, color.g, color.b));
+  vec3 ratio = color * CrtsRcpF1(peak);
+  peak = peak * CrtsRcpF1(peak * tone.x + tone.y);
+  return ratio * peak;
+}
+
+float ToSrgb1(float c) {
+  return (c < 0.0031308 ? c * 12.92 : 1.055 * pow(c, 0.41666) - 0.055);
+}
+vec3 ToSrgb(vec3 c) {
+  return vec3(ToSrgb1(c.r), ToSrgb1(c.g), ToSrgb1(c.b));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  float aspect = iResolution.x / iResolution.y;
+  fragColor.rgb = CrtsFilter(
+      fragCoord.xy,
+      vec2(1.0),
+      iResolution.xy * SCALE * 0.5,
+      1.0 / (iResolution.xy * SCALE),
+      1.0 / iResolution.xy,
+      2.0 / iResolution.xy,
+      iResolution.y,
+      vec2(1.0 / (50.0 * aspect), 1.0 / 50.0),
+      INPUT_THIN,
+      INPUT_BLUR,
+      INPUT_MASK,
+      CrtsTone(INPUT_THIN, INPUT_MASK)
+    );
+  fragColor = vec4(ToSrgb(fragColor.rgb), 1.0);
+}
+`;
+
+  // Animated water caustics — ripple-distorts the sampled terminal and layers
+  // caustic highlights; exercises the wrapper's iTime. From ghostty-shaders
+  // water.glsl (no license header there — chase provenance before upstreaming;
+  // it's the widely-copied Shadertoy caustic loop).
+  const WATER_GLSL = `
+#define TAU 6.28318530718
+#define MAX_ITER 6
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec3 water_color = vec3(1.0, 1.0, 1.0) * 0.5;
+    float time = iTime * 0.5+23.0;
+    vec2 uv = fragCoord.xy / iResolution.xy;
+
+    vec2 p = mod(uv*TAU, TAU)-250.0;
+    vec2 i = vec2(p);
+    float c = 1.0;
+    float inten = 0.005;
+
+    for (int n = 0; n < MAX_ITER; n++)
+    {
+        float t = time * (1.0 - (3.5 / float(n+1)));
+        i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
+        c += 1.0/length(vec2(p.x / (sin(i.x+t)/inten),p.y / (cos(i.y+t)/inten)));
+    }
+    c /= float(MAX_ITER);
+    c = 1.17-pow(c, 1.4);
+    vec3 color = vec3(pow(abs(c), 15.0));
+    color = clamp((color + water_color)*1.2, 0.0, 1.0);
+
+    // perterb uv based on value of c from caustic calc above
+    vec2 tc = vec2(cos(c)-0.75,sin(c)-0.75)*0.04;
+    uv = clamp(uv + tc,0.0,1.0);
+
+    fragColor = texture(iChannel0, uv);
+    // give transparent pixels a color
+    if ( fragColor.a == 0.0 ) fragColor=vec4(1.0,1.0,1.0,1.0);
+    fragColor *= vec4(color, 1.0);
+}
+`;
+
+  // SNES Mode 7 demo: idle affine spin + zoom breathing over the terminal,
+  // sampled nearest-neighbor (chunky rotated pixels — the authentic look) on
+  // an infinitely tiled plane (wrap=REPEAT). Idle-animated for now; the real
+  // use is game-signaled transitions (descend swirl) once an OSC trigger
+  // channel exists — see the spike notes.
+  const MODE7_GLSL = `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  // center origin, aspect-corrected so glyphs keep their shape mid-rotation
+  vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+  float a = iTime * 0.35;                    // spin
+  // zoom breathing, biased into zoom-IN territory (z<1 magnifies): dips to
+  // ~4x magnification each ~14s cycle instead of hovering zoomed-out
+  float z = 1.2 + 0.95 * sin(iTime * 0.45);
+  mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
+  vec2 p = rot * uv * z;
+  // back to texture space; REPEAT wrap tiles the screen into an endless plane
+  vec2 tuv = p * vec2(iResolution.y / iResolution.x, 1.0) + 0.5;
+  fragColor = vec4(texture(iChannel0, tuv).rgb, 1.0);
+}
+`;
+
+  // Bloom — 24-tap golden-spiral glow, from the same qwerasd gist the CRT
+  // adaptation ships in (ghostty-shaders bloom.glsl). Two ES 3.00 ports: the
+  // array initializer uses constructor syntax, and `step` is renamed `stp`
+  // (it shadows the GLSL builtin).
+  const BLOOM_GLSL = `
+const vec3 samples[24] = vec3[24](
+  vec3(0.1693761725038636, 0.9855514761735895, 1.0),
+  vec3(-1.333070830962943, 0.4721463328627773, 0.7071067811865475),
+  vec3(-0.8464394909806497, -1.51113870578065, 0.5773502691896258),
+  vec3(1.554155680728463, -1.2588090085709776, 0.5),
+  vec3(1.681364377589461, 1.4741145918052656, 0.4472135954999579),
+  vec3(-1.2795157692199817, 2.088741103228784, 0.4082482904638631),
+  vec3(-2.4575847530631187, -0.9799373355024756, 0.3779644730092272),
+  vec3(0.5874641440200847, -2.7667464429345077, 0.35355339059327373),
+  vec3(2.997715703369726, 0.11704939884745152, 0.3333333333333333),
+  vec3(0.41360842451688395, 3.1351121305574803, 0.31622776601683794),
+  vec3(-3.167149933769243, 0.9844599011770256, 0.30151134457776363),
+  vec3(-1.5736713846521535, -3.0860263079123245, 0.2886751345948129),
+  vec3(2.888202648340422, -2.1583061557896213, 0.2773500981126146),
+  vec3(2.7150778983300325, 2.5745586041105715, 0.2672612419124244),
+  vec3(-2.1504069972377464, 3.2211410627650165, 0.2581988897471611),
+  vec3(-3.6548858794907493, -1.6253643308191343, 0.25),
+  vec3(1.0130775986052671, -3.9967078676335834, 0.24253562503633297),
+  vec3(4.229723673607257, 0.33081361055181563, 0.23570226039551587),
+  vec3(0.40107790291173834, 4.340407413572593, 0.22941573387056174),
+  vec3(-4.319124570236028, 1.159811599693438, 0.22360679774997896),
+  vec3(-1.9209044802827355, -4.160543952132907, 0.2182178902359924),
+  vec3(3.8639122286635708, -2.6589814382925123, 0.21320071635561041),
+  vec3(3.3486228404946234, 3.4331800232609, 0.20851441405707477),
+  vec3(-2.8769733643574344, 3.9652268864187157, 0.20412414523193154)
+);
+
+float lum(vec4 c) {
+  return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord.xy / iResolution.xy;
+  vec4 color = texture(iChannel0, uv);
+  vec2 stp = vec2(1.414) / iResolution.xy;
+  for (int i = 0; i < 24; i++) {
+    vec3 s = samples[i];
+    vec4 c = texture(iChannel0, uv + s.xy * stp);
+    float l = lum(c);
+    if (l > 0.2) {
+      color += l * s.z * c * 0.2;
+    }
+  }
+  fragColor = color;
+}
+`;
+
+  // Registry: ?shader=<name> picks the base shader. DEFAULT IS NONE — the
+  // page starts with no shader applied; ?shader=crt etc. opts in, and the fx
+  // signals / console overrides can activate one at runtime either way.
+  // Shaders compile lazily on first activation, so entries can't collide
+  // with each other. nearest/repeat control how the terminal texture is
+  // sampled.
+  // Identity passthrough — what the frame loop activates when a transient
+  // effect (hurt, pickup pulse) needs the overlay but no shader is selected.
+  const PLAIN_GLSL = `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = texture(iChannel0, fragCoord / iResolution.xy);
+}
+`;
+
+  const FX_SHADERS = {
+    plain: { src: PLAIN_GLSL },
+    crt:   { src: CRT_GLSL },
+    // water's caustic multiply darkens the whole scene; lift it back up
+    water: { src: WATER_GLSL, contrast: 1.2, bright: 0.1 },
+    bloom: { src: BLOOM_GLSL },
+    mode7: { src: MODE7_GLSL, nearest: true, repeat: true },
+  };
+
+  // Game→shell FX signals (demo/PoC): render.lg emits a private OSC 7777
+  // ("water=1,hurt=42") whenever the signal set changes; real terminals
+  // discard the unknown OSC, so only the web shell reacts. water swaps the
+  // active shader to the water effect while swimming; hurt (integer percent,
+  // ramping in below 35% health) drives a red pulse applied over whichever
+  // shader is active. window-exposed for manual poking on the demo build.
+  // One-shot pulse palette: c = additive wash color, s = peak strength.
+  const PULSE_KINDS = {
+    rune: { c: [0.55, 0.25, 1.0], s: 0.65 },  // purple — rune pickup
+    item: { c: [1.0, 1.0, 1.0],  s: 0.4 },    // white  — item pickup
+  };
+  const fxSignals = { water: 0, hurt: 0 };
+  window.xsofyFxSignals = fxSignals;
+
+  // Renderer-independent terminal text readout, for the CI smoke gate and
+  // debugging: the WebGL renderer draws glyphs to a canvas atlas and never
+  // populates .xterm-rows with DOM text, so DOM-scraping assertions go blind.
+  // This reads the terminal buffer itself, identical under any renderer.
+  window.xsofyTermText = () => {
+    const buf = term.buffer && term.buffer.active;
+    if (!buf) return '';
+    const out = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) out.push(line.translateToString(true));
+    }
+    return out.join('\n');
+  };
+  term.parser.registerOscHandler(7777, (data) => {
+    fxSignals._n = (fxSignals._n || 0) + 1; // receive counter (demo diagnostics)
+    for (const kv of String(data).split(',')) {
+      const [k, v] = kv.split('=');
+      if (k === 'water') fxSignals.water = +v ? 1 : 0;
+      else if (k === 'hurt') fxSignals.hurt = Math.max(0, Math.min(1, (+v || 0) / 100));
+      // pulse=<kind>: one-shot flash (rune/item pickup). Every occurrence
+      // retriggers — the decay envelope runs shell-side off pulseAt.
+      else if (k === 'pulse') {
+        fxSignals.pulse = PULSE_KINDS[v] ? v : 'item';
+        fxSignals.pulseAt = performance.now();
+      }
+      // shader=<name>: explicit shader override (dev-console (crt)/(water)/…).
+      // Repeating the current override toggles it back off; empty or unknown
+      // names clear it. Overrides win over the swim signal and the URL base.
+      else if (k === 'shader') {
+        if (!v || !FX_SHADERS[v] || fxSignals.shader === v) delete fxSignals.shader;
+        else fxSignals.shader = v;
+      }
+    }
+    return true;
+  });
+
+  function startCrtOverlay() {
+    if (!glAddon || fxParams.get('crt') === 'off') return;
+    const baseName = FX_SHADERS[fxParams.get('shader')] ? fxParams.get('shader') : null;
+    const overlay = document.createElement('canvas');
+    overlay.style.cssText =
+      'position:fixed;left:0;top:0;pointer-events:none;z-index:10;display:none;';
+    const gl = overlay.getContext('webgl2', { alpha: false, depth: false, antialias: false });
+    if (!gl) { console.warn('CRT overlay: no WebGL2, skipping'); return; }
+
+    // Shadertoy wrapper: fullscreen triangle VS, uniforms + mainImage-call FS.
+    const wrapVS = '#version 300 es\n' +
+      'void main() {' +
+      '  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));' +
+      '  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);' +
+      '}';
+    // SCALE sets the *virtual CRT resolution* the Lottes filter re-scans: the
+    // input is fetched on a grid of iResolution*SCALE, so anything below 1/dpr
+    // resamples the terminal below CSS resolution and text goes soft (the
+    // shader's own "0.333 for high-DPI" advice assumes pixel-art sources).
+    // Default to sampling at ~CSS resolution: scanline pitch = 1 CSS px, text
+    // as sharp as a 1x display. ?crtscale=0.33 etc. for chunkier/blurrier.
+    const dpr = window.devicePixelRatio || 1;
+    let crtScale = parseFloat(fxParams.get('crtscale'));
+    if (!(crtScale >= 0.2 && crtScale <= 1)) crtScale = dpr >= 2 ? 0.5 : 0.66666666;
+    const crtScaleLit = crtScale.toFixed(8); // GLSL float literal (never a bare int)
+    function compile(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+        throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+    // Program cache: shaders compile lazily on first activation (fx signals
+    // can swap the active effect at runtime); a failed build caches null so
+    // it isn't retried every frame. The wrapper appends the low-health red
+    // throb after mainImage, so hurt composes over any shader.
+    const progCache = {};
+    // Post-shader contrast/brightness, compiled in per shader: some effects
+    // darken the scene (water's caustic multiply bottoms out ~0.6x), and a
+    // mid-anchored contrast stretch + lift after mainImage recovers
+    // legibility without touching the shader itself. Registry defaults per
+    // shader; ?contrast= / ?bright= override every shader for tasting.
+    const conOverride = parseFloat(fxParams.get('contrast'));
+    const brtOverride = parseFloat(fxParams.get('bright'));
+    function ensureProgram(name) {
+      if (name in progCache) return progCache[name];
+      let entry = null;
+      try {
+        const def = FX_SHADERS[name];
+        const con = (isFinite(conOverride) ? conOverride : (def.contrast || 1)).toFixed(4);
+        const brt = (isFinite(brtOverride) ? brtOverride : (def.bright || 0)).toFixed(4);
+        const fsrc = '#version 300 es\nprecision highp float;\n' +
+          'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\n' +
+          'uniform float iTime;\nuniform float iHurt;\n' +
+          'uniform float iPulse;\nuniform vec3 iPulseColor;\n' +
+          'out vec4 xsofyFragColor;\n' +
+          def.src.replace(/__CRT_SCALE__/g, crtScaleLit) +
+          '\nvoid main() {\n' +
+          '  mainImage(xsofyFragColor, gl_FragCoord.xy);\n' +
+          '  xsofyFragColor.rgb = clamp((xsofyFragColor.rgb - 0.5) * ' + con + ' + 0.5 + ' + brt + ', 0.0, 1.0);\n' +
+          '  float hp = iHurt * (0.55 + 0.45 * sin(iTime * 7.0));\n' +
+          '  xsofyFragColor.rgb = mix(xsofyFragColor.rgb, vec3(0.75, 0.03, 0.02), hp * 0.55);\n' +
+          '  xsofyFragColor.rgb += iPulseColor * iPulse;\n' +
+          '}\n';
+        const prog = gl.createProgram();
+        gl.attachShader(prog, compile(gl.VERTEX_SHADER, wrapVS));
+        gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsrc));
+        gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+          throw new Error(gl.getProgramInfoLog(prog));
+        gl.useProgram(prog);
+        gl.uniform1i(gl.getUniformLocation(prog, 'iChannel0'), 0);
+        entry = { prog, def: FX_SHADERS[name],
+          uRes: gl.getUniformLocation(prog, 'iResolution'),
+          uTime: gl.getUniformLocation(prog, 'iTime'),
+          uHurt: gl.getUniformLocation(prog, 'iHurt'),
+          uPulse: gl.getUniformLocation(prog, 'iPulse'),
+          uPulseColor: gl.getUniformLocation(prog, 'iPulseColor') };
+      } catch (e) { console.warn('shader "' + name + '" failed to build:', e); }
+      progCache[name] = entry;
+      return entry;
+    }
+    // No URL base shader is fine — the overlay sits dormant until an fx
+    // signal or console override activates one. A requested-but-broken base
+    // still bails.
+    if (baseName && !ensureProgram(baseName)) return;
+    document.body.appendChild(overlay);
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Canvas rows are top-down, GL texture space is bottom-up; flipping on
+    // upload keeps gl_FragCoord and iChannel0 in the same orientation, which is
+    // what Shadertoy-convention shaders assume.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    let activeName = null;
+    function activate(name) {
+      let entry = ensureProgram(name);
+      if (!entry && baseName) { name = baseName; entry = ensureProgram(baseName); }
+      if (!entry) return null;
+      if (name !== activeName) {
+        activeName = name;
+        gl.useProgram(entry.prog);
+        // Sampling params live on the texture, not the program — re-set per
+        // shader. WebGL2 supports REPEAT on non-power-of-two textures.
+        const wrap = entry.def.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+        const filt = entry.def.nearest ? gl.NEAREST : gl.LINEAR;
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+      }
+      return entry;
+    }
+
+    function frame(t) {
+      if (!glAddon) {
+        console.warn('CRT overlay stopping: WebGL renderer gone');
+        overlay.remove(); return;
+      }
+      // Re-query per frame: the addon can rebuild its canvas (e.g. option flips).
+      // :not(.xterm-link-layer) — the screen holds TWO canvases: xterm's
+      // transparent link-underline layer (2D, first in DOM) and the addon's
+      // WebGL canvas. Sampling the link layer reads back solid black.
+      const src = term.element &&
+        term.element.querySelector('.xterm-screen canvas:not(.xterm-link-layer)');
+      if (!src || src.width === 0) {
+        overlay.style.display = 'none';
+        requestAnimationFrame(frame);
+        return;
+      }
+      // One-shot pulse envelope: instant attack, ~500ms quadratic decay.
+      // rAF's timestamp shares performance.now()'s timebase.
+      const pDef = PULSE_KINDS[fxSignals.pulse];
+      const pAge = fxSignals.pulseAt ? t - fxSignals.pulseAt : Infinity;
+      let pStrength = Math.max(0, 1 - pAge / 500);
+      pStrength *= pStrength;
+      // Console override wins, then the swim signal, then the URL base
+      // (which may be null: shaders default OFF). Transient effects (hurt,
+      // pulses) wake the plain passthrough when nothing else is active, so
+      // they show without a shader selected. Dormant costs nothing — no
+      // texture upload, no readback, overlay hidden.
+      const fxLive = fxSignals.hurt > 0 || (pDef && pStrength > 0);
+      const want = fxSignals.shader || (fxSignals.water ? 'water' : baseName) ||
+        (fxLive ? 'plain' : null);
+      const entry = want ? activate(want) : null;
+      if (!entry) {
+        overlay.style.display = 'none';
+        requestAnimationFrame(frame);
+        return;
+      }
+      // Track the source canvas' on-screen box (letterbox padding, refits).
+      const r = src.getBoundingClientRect();
+      overlay.style.display = 'block';
+      overlay.style.transform = 'translate(' + r.left + 'px,' + r.top + 'px)';
+      overlay.style.width = r.width + 'px';
+      overlay.style.height = r.height + 'px';
+      if (overlay.width !== src.width || overlay.height !== src.height) {
+        overlay.width = src.width; overlay.height = src.height;
+        gl.viewport(0, 0, overlay.width, overlay.height);
+      }
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      // Uniforms every frame — program switches would leave sticky values.
+      gl.uniform3f(entry.uRes, overlay.width, overlay.height, 1.0);
+      gl.uniform1f(entry.uTime, t / 1000);
+      gl.uniform1f(entry.uHurt, fxSignals.hurt);
+      gl.uniform1f(entry.uPulse, pDef ? pStrength * pDef.s : 0);
+      const pc = pDef ? pDef.c : [0, 0, 0];
+      gl.uniform3f(entry.uPulseColor, pc[0], pc[1], pc[2]);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+  // --- end SPIKE -------------------------------------------------------------
+
   window.LetGoHost.onReady(async (mode) => {
     const s = document.getElementById('status'); if (s) s.style.display = 'none';
     termEl.style.display = 'block';
@@ -474,6 +1058,10 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     // Only the bundled face needs the pre-open load; ?font=system has none.
     if (!sysFont) { try { await document.fonts.load('16px "Fairfax HD"'); } catch (e) {} }
     term.open(termEl); fit.fit(); term.focus();
+    // WebGL renderer must load after open(); the CRT overlay needs the
+    // renderer's canvas, so it starts after that.
+    enableWebgl();
+    startCrtOverlay();
     opened = true;
     if (pending) { term.write(pending); pending = ''; }
     if (mode === 'worker') {
@@ -714,7 +1302,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     { key: 'd', glyph: 'd', label: 'DROP' },    mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
     { key: '<', glyph: '<', label: 'ASC' },     mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
     { key: '>', glyph: '>', label: 'DESC' },    mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-    { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'y', glyph: 'y', label: 'YES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: 'y', glyph: 'y', label: 'YES' },   { key: '.', glyph: '·', label: 'WAIT', repeat: true },
   ]};
   // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
   // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
@@ -725,15 +1313,17 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const PANES = [
     { label: 'PLAY', cols: 6, land: LAND_PLAY, tiles: [
       // 5 rows (same height as the a-z keyboard pane). D-pad centered on the
-      // right (rows 2-4, cols 4-6) with y/n/wait below it (row 5). esc anchors
+      // right (rows 2-4, cols 4-6) with n/y/enter below it (row 5); wait rides
+      // top row where enter was (swap: wait is the high-frequency key). esc anchors
       // top-left; col 2 runs the menu letters a-e in order (a/d/e double as
       // their game actions, b/c are pure menu picks); col 3 stacks fire/get,
       // then the stair pair, then runes. Remaining cells are muted placeholders.
-      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '\r', glyph: '⏎', label: 'ENTER' }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
+      // ` (DEV) opens the dev console — dev-gated game-side, a no-op otherwise.
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '.', glyph: '·', label: 'WAIT', repeat: true }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
       { key: '?', glyph: '?', label: 'HELP' },   { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      null,                                      { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      { key: '`', glyph: '`', label: 'DEV' },    { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
       null,                                      { key: 'd', glyph: 'd', label: 'DROP' },  { key: '>', glyph: '>', label: 'DESC' },  mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-      null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+      null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: '\r', glyph: '⏎', label: 'ENTER' },
     ]},
     { label: 'a–z', cols: 20,
       // Landscape sheet variant: 4 rows to give the game back a strip — the
@@ -744,7 +1334,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
         ...'1234567890'.split('').map(kbd),
         ...'qwertyuiop'.split('').map(kbd),
         { key: '?', glyph: '?', span: 1, cls: 'kbd' }, ...'asdfghjkl'.split('').map(kbd), { key: '\r', glyph: '⏎', span: 1, cls: 'kbd' },
-        { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+        { key: ESC, glyph: 'esc', label: 'BACK', span: 2 }, { key: '(', glyph: '(', span: 1, cls: 'kbd' }, { key: ')', glyph: ')', span: 1, cls: 'kbd' }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 2, cls: 'kbd' },
       ]},
       tiles: [
       // iPhone-ish QWERTY on a fine 20-col grid (each key spans 2 units = 10 per
@@ -757,7 +1347,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
       ...'1234567890'.split('').map(kbd),
       ...'qwertyuiop'.split('').map(kbd),
       spacer(1), ...'asdfghjkl'.split('').map(kbd), spacer(1),
-      spacer(3), ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+      { key: '(', glyph: '(', span: 2, cls: 'kbd' }, { key: ')', glyph: ')', span: 2, cls: 'kbd' }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 2, cls: 'kbd' },
       { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, { key: ' ', glyph: '␣', label: 'SPACE', span: 11 }, { key: '?', glyph: '?', label: 'HELP', span: 3 }, { key: '\r', glyph: '⏎', label: 'ENTER', span: 3 },
     ]},
   ];
@@ -905,13 +1495,15 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   repeatToggleEl?.addEventListener('mousedown', (e) => e.preventDefault());
 
   // Font-size cycle. xterm's default 14 is unreadable on a 375px viewport; the
-  // chip cycles a short predictable set. First-ever load picks by orientation.
+  // chip cycles a short predictable set. First-ever load picks by orientation
+  // (landscape/desktop bumped 14 -> 18: 14 reads small on laptop screens too;
+  // a stored user choice always wins over these defaults).
   const FONT_SIZES = [12, 14, 18, 22, 28], LS_KEY = 'xsofy/font-size';
   const cycleEl = $('xs-font-cycle'), fontPxEl = $('xs-font-px');
   function applyFontSize(n) { setTermFontSize(n); if (fontPxEl) fontPxEl.textContent = n; }
   function initFontSize() {
     let n = parseInt(localStorage.getItem(LS_KEY) || '', 10);
-    if (!FONT_SIZES.includes(n)) n = matchMedia('(orientation: portrait)').matches ? 22 : 14;
+    if (!FONT_SIZES.includes(n)) n = matchMedia('(orientation: portrait)').matches ? 22 : 18;
     applyFontSize(n);
   }
   cycleEl?.addEventListener('pointerdown', (e) => {
