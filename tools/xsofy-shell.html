@@ -1267,9 +1267,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       // top-left; col 2 runs the menu letters a-e in order (a/d/e double as
       // their game actions, b/c are pure menu picks); col 3 stacks fire/get,
       // then the stair pair, then runes. Remaining cells are muted placeholders.
+      // ` (DEV) opens the dev console — dev-gated game-side, a no-op otherwise.
       { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '\r', glyph: '⏎', label: 'ENTER' }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
       { key: '?', glyph: '?', label: 'HELP' },   { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
-      null,                                      { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
+      { key: '`', glyph: '`', label: 'DEV' },    { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
       null,                                      { key: 'd', glyph: 'd', label: 'DROP' },  { key: '>', glyph: '>', label: 'DESC' },  mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
       null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
     ]},
