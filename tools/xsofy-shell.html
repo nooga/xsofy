@@ -799,7 +799,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // other. nearest/repeat control how the terminal texture is sampled.
   const FX_SHADERS = {
     crt:   { src: CRT_GLSL },
-    water: { src: WATER_GLSL },
+    // water's caustic multiply darkens the whole scene; lift it back up
+    water: { src: WATER_GLSL, contrast: 1.2, bright: 0.1 },
     bloom: { src: BLOOM_GLSL },
     mode7: { src: MODE7_GLSL, nearest: true, repeat: true },
   };
@@ -818,6 +819,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       const [k, v] = kv.split('=');
       if (k === 'water') fxSignals.water = +v ? 1 : 0;
       else if (k === 'hurt') fxSignals.hurt = Math.max(0, Math.min(1, (+v || 0) / 100));
+      // shader=<name>: explicit shader override (dev-console (crt)/(water)/…).
+      // Repeating the current override toggles it back off; empty or unknown
+      // names clear it. Overrides win over the swim signal and the URL base.
+      else if (k === 'shader') {
+        if (!v || !FX_SHADERS[v] || fxSignals.shader === v) delete fxSignals.shader;
+        else fxSignals.shader = v;
+      }
     }
     return true;
   });
@@ -859,17 +867,28 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     // it isn't retried every frame. The wrapper appends the low-health red
     // throb after mainImage, so hurt composes over any shader.
     const progCache = {};
+    // Post-shader contrast/brightness, compiled in per shader: some effects
+    // darken the scene (water's caustic multiply bottoms out ~0.6x), and a
+    // mid-anchored contrast stretch + lift after mainImage recovers
+    // legibility without touching the shader itself. Registry defaults per
+    // shader; ?contrast= / ?bright= override every shader for tasting.
+    const conOverride = parseFloat(fxParams.get('contrast'));
+    const brtOverride = parseFloat(fxParams.get('bright'));
     function ensureProgram(name) {
       if (name in progCache) return progCache[name];
       let entry = null;
       try {
+        const def = FX_SHADERS[name];
+        const con = (isFinite(conOverride) ? conOverride : (def.contrast || 1)).toFixed(4);
+        const brt = (isFinite(brtOverride) ? brtOverride : (def.bright || 0)).toFixed(4);
         const fsrc = '#version 300 es\nprecision highp float;\n' +
           'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\n' +
           'uniform float iTime;\nuniform float iHurt;\n' +
           'out vec4 xsofyFragColor;\n' +
-          FX_SHADERS[name].src.replace(/__CRT_SCALE__/g, crtScaleLit) +
+          def.src.replace(/__CRT_SCALE__/g, crtScaleLit) +
           '\nvoid main() {\n' +
           '  mainImage(xsofyFragColor, gl_FragCoord.xy);\n' +
+          '  xsofyFragColor.rgb = clamp((xsofyFragColor.rgb - 0.5) * ' + con + ' + 0.5 + ' + brt + ', 0.0, 1.0);\n' +
           '  float hp = iHurt * (0.55 + 0.45 * sin(iTime * 7.0));\n' +
           '  xsofyFragColor.rgb = mix(xsofyFragColor.rgb, vec3(0.75, 0.03, 0.02), hp * 0.55);\n' +
           '}\n';
@@ -933,8 +952,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         requestAnimationFrame(frame);
         return;
       }
-      // Swim signal swaps to the water shader; base shader otherwise.
-      const entry = activate(fxSignals.water ? 'water' : baseName);
+      // Console override wins, then the swim signal, then the URL base.
+      const entry = activate(fxSignals.shader || (fxSignals.water ? 'water' : baseName));
       if (!entry) { overlay.remove(); return; }
       // Track the source canvas' on-screen box (letterbox padding, refits).
       const r = src.getBoundingClientRect();

@@ -56,8 +56,18 @@
        "  (player)    player hp / position / depth\n"
        "  (location)  position / depth / turn\n"
        "  (bench)     quick engine micro-benchmark (per-turn ms)\n"
+       "  (crt) (water) (bloom) (mode7)  toggle a shader override (web shell)\n"
+       "  (hurt N)    force the red pulse at N% (default 70; 0 clears)\n"
+       "  (fx)        clear fx overrides\n"
        "  (help)      this list\n"
        "Esc or ` to close."))
+
+;; Shell FX hint (demo): a private OSC 7777 escape the web shell's shader
+;; overlay listens for (see tools/xsofy-shell.html). Real terminals discard
+;; unknown OSC, so these are no-ops in the native TUI. Output-only — the
+;; world is untouched, so the console's read-only model holds.
+(defn- emit-fx! [pairs]
+  (term/write (str ESC "]7777;" pairs (char 7))))
 
 (def ^:private commands
   {'help     (fn [_ _] (help-text))
@@ -83,7 +93,20 @@
    ;; so bench never touches the live run. Kept small (3 seeds x 20 turns) so it
    ;; returns in well under a second — the full sweep lives in bench/native.lg.
    'bench    (fn [_ _] (dissoc (perf/run-fixture [:wait (fn [_] ".") 20] [0 1 2] 1)
-                               :per-seed))})
+                               :per-seed))
+   ;; --- shell FX toggles (web-shell demo; no-ops in a real terminal) ---
+   ;; The shell treats a repeated shader override as toggle-off, so (crt)
+   ;; twice returns to the URL base. (hurt 0) clears the pulse; the live
+   ;; low-health signal re-emits on its next change either way.
+   'hurt     (fn [_ args]
+               (let [n (or (first args) 70)]
+                 (emit-fx! (str "hurt=" n))
+                 (str "hurt pulse " n "%")))
+   'crt      (fn [_ _] (emit-fx! "shader=crt")   "crt override (repeat to clear)")
+   'water    (fn [_ _] (emit-fx! "shader=water") "water override (repeat to clear)")
+   'bloom    (fn [_ _] (emit-fx! "shader=bloom") "bloom override (repeat to clear)")
+   'mode7    (fn [_ _] (emit-fx! "shader=mode7") "mode7 override (repeat to clear)")
+   'fx       (fn [_ _] (emit-fx! "shader=,hurt=0") "fx cleared")})
 
 (defn run-command
   "Parse `line` with the reader and dispatch its head against the read-only
