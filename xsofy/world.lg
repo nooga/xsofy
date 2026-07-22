@@ -712,7 +712,7 @@
                 (opctx/with-context {:source :lava :reason :hazard}
                   (ent/damage-entity world entity-id 8))
                 (#(if (get-in % [:entities entity-id])
-                    (status/apply-status % entity-id :burning 12)
+                    (fire/apply-burning % entity-id 12)
                     %))))
         ;; chasm: 10 fall damage
         6 (opctx/with-context {:source :chasm :reason :hazard}

@@ -1,7 +1,9 @@
 (ns xsofy.test.fire-test
   (:require [test :refer [deftest is testing]]
             [xsofy.terrain :as terrain]
-            [xsofy.fire :as fire]))
+            [xsofy.status :as status]
+            [xsofy.fire :as fire]
+            [xsofy.spell :as spell]))
 
 (defn- room-world []
   (let [w 12 h 8
@@ -10,7 +12,7 @@
     {:terrain t :width w :height h :fire-ttl {}}))
 
 ;; Regression for the :lights cache gate (perf: only invalidate on real
-;; terrain mutation). step-fire's terrain-changed gate only sees fires it
+;; terrain mutation). step-fire's own terrain-changed gate only sees fires it
 ;; spreads or burns out — ignitions from burning-entities-ignite / dragon /
 ;; rune fire run in separate phases, so the ignite helpers must invalidate
 ;; :lights themselves or a new fire emits no light until it spreads.
@@ -35,3 +37,44 @@
         _ (terrain/tset! (:terrain w) (:width w) 3 3 8)]  ;; wall — not flammable
     (let [w' (fire/ignite w 3 3)]
       (is (= [] (:lights w'))))))
+
+;; --- #162: water prevents burning / forced ignition ---
+
+(deftest ignite-forced-skips-water
+  (testing "shallow and deep water never become fire"
+    (doseq [tile [3 4]]
+      (let [w (assoc (room-world) :lights [])
+            _ (terrain/tset! (:terrain w) (:width w) 3 3 tile)
+            w' (fire/ignite-forced w 3 3 5)]
+        (is (= tile (terrain/tget (:terrain w') (:width w') 3 3)))
+        (is (nil? (get-in w' [:fire-ttl [3 3]])))
+        (is (= [] (:lights w')))))))
+
+(deftest apply-burning-skipped-on-water
+  (testing "entity standing in water does not catch fire"
+    (doseq [tile [3 4]]
+      (let [w (-> (room-world)
+                  (assoc :entities {:e {:id :e :pos [3 3] :body {:hp 10}}}))
+            _ (terrain/tset! (:terrain w) (:width w) 3 3 tile)
+            w' (fire/apply-burning w :e 12)]
+        (is (not (status/has-status? w' :e :burning))))))
+  (testing "entity on floor still burns"
+    (let [w (-> (room-world)
+                (assoc :entities {:e {:id :e :pos [3 3] :body {:hp 10}}}))
+          w' (fire/apply-burning w :e 12)]
+      (is (status/has-status? w' :e :burning)))))
+
+(deftest fire-imp-spell-on-water-does-not-burn
+  (testing "an imp's fire rune leaves a player in water unburned"
+    (doseq [tile [3 4]]
+      (let [w (-> (room-world)
+                  (assoc :entities {:player {:id :player :pos [3 3]
+                                             :body {:hp 20 :max-hp 20}}
+                                    :imp {:id :imp :pos [2 3]
+                                          :body {:hp 8 :max-hp 8}}}))
+            _ (terrain/tset! (:terrain w) (:width w) 3 3 tile)
+            result (spell/eval-spell w :imp [3 3] [:fire])
+            w' (:world result)]
+        (is (= tile (terrain/tget (:terrain w') (:width w') 3 3)))
+        (is (nil? (get-in w' [:fire-ttl [3 3]])))
+        (is (not (status/has-status? w' :player :burning)))))))

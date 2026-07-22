@@ -18,6 +18,26 @@
 (def fire-spread-chance 30)  ;; percent per adjacent flammable per tick
 (def fire-default-ttl 5)
 (def protected-tiles #{13 14})  ;; stairs must survive dragon fire and rune fire
+(def water-tiles #{3 4})        ;; shallow + deep — extinguishes fire, never ignites
+
+(defn water-tile? [tile]
+  (contains? water-tiles tile))
+
+(defn on-water?
+  "True if the entity's current tile is shallow or deep water."
+  [world entity-id]
+  (if-let [[x y] (get-in world [:entities entity-id :pos])]
+    (water-tile? (terrain/tget (:terrain world) (:width world) x y))
+    false))
+
+(defn apply-burning
+  "Apply :burning unless the entity is standing in water (#162).
+   Move-time extinguish already handles walking into water; this closes the
+   standing-still path (e.g. fire-imp shot while already in water)."
+  [world entity-id ttl]
+  (if (on-water? world entity-id)
+    world
+    (status/apply-status world entity-id :burning ttl)))
 
 ;; Fire is light-emitting, so any ignition must invalidate the :lights
 ;; cache — step-fire's own terrain-changed gate only sees fires it spreads
@@ -36,17 +56,20 @@
       world)))
 
 (defn ignite-forced [world x y ttl]
-  "Force fire at a position regardless of terrain."
+  "Force fire at a position regardless of terrain.
+   Water is the exception: it never ignites and never gains fire-ttl (#162)."
   (let [{:keys [terrain width]} world
-        tile (terrain/tget terrain width x y)
-        placed? (and (not= tile 0) (not= tile 8) (not= tile 7)
-                     (not (contains? protected-tiles tile)))]  ;; not void, wall, lava, stairs
-    (when placed?
-      (terrain/tset! terrain width x y fire-tile))
-    (if (contains? protected-tiles tile)
+        tile (terrain/tget terrain width x y)]
+    (if (water-tile? tile)
       world
-      (let [w (assoc-in world [:fire-ttl [x y]] ttl)]
-        (if placed? (assoc w :lights nil) w)))))
+      (let [placed? (and (not= tile 0) (not= tile 8) (not= tile 7)
+                         (not (contains? protected-tiles tile)))]  ;; not void, wall, lava, stairs
+        (when placed?
+          (terrain/tset! terrain width x y fire-tile))
+        (if (contains? protected-tiles tile)
+          world
+          (let [w (assoc-in world [:fire-ttl [x y]] ttl)]
+            (if placed? (assoc w :lights nil) w)))))))
 
 (defn step-fire [world]
   "One tick of fire simulation. Spread, damage, burn out.
@@ -118,7 +141,7 @@
                                               (ent/damage-entity w (:id e) fire-damage))]
                                       ;; only apply burning if still alive
                                       (if (get-in w [:entities (:id e)])
-                                        (status/apply-status w (:id e) :burning 10)
+                                        (apply-burning w (:id e) 10)
                                         w)))
                                   w targets)))
                       w @new-ttl)]

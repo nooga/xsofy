@@ -179,7 +179,7 @@
                            pos nil))
            (fn [[world] pos e]
              (let [world (fire/ignite-forced world (first pos) (second pos) ttl)]
-               [(status/apply-status world (:id e) :burning burn-ttl)])))]
+               [(fire/apply-burning world (:id e) burn-ttl)])))]
      (assoc ctx :world w))))
 
 (defn r-ice
