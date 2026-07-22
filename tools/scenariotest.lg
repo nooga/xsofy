@@ -82,7 +82,10 @@
     nil world
     :confirm-hazard (handle-hazard world)
     :confirm-quit   (handle-quit world)
-    ;; title/death/inventory/help/console/… — out of scope for the draft
+    ;; A dead arena cannot resume: dismissing :death just makes update-world
+    ;; reopen it after the next action, trapping the harness in a loop.
+    :death          (assoc world :running false)
+    ;; title/inventory/help/console/… — out of scope for the draft
     (dismiss-screen world)))
 
 (defn- run-play [world]
