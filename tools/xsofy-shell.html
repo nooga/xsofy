@@ -794,9 +794,12 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 `;
 
-  // Registry: ?shader=<name> picks the base shader (default crt). Shaders
-  // compile lazily on first activation, so entries can't collide with each
-  // other. nearest/repeat control how the terminal texture is sampled.
+  // Registry: ?shader=<name> picks the base shader. DEFAULT IS NONE — the
+  // page starts with no shader applied; ?shader=crt etc. opts in, and the fx
+  // signals / console overrides can activate one at runtime either way.
+  // Shaders compile lazily on first activation, so entries can't collide
+  // with each other. nearest/repeat control how the terminal texture is
+  // sampled.
   const FX_SHADERS = {
     crt:   { src: CRT_GLSL },
     // water's caustic multiply darkens the whole scene; lift it back up
@@ -847,7 +850,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   function startCrtOverlay() {
     if (!glAddon || fxParams.get('crt') === 'off') return;
-    const baseName = FX_SHADERS[fxParams.get('shader')] ? fxParams.get('shader') : 'crt';
+    const baseName = FX_SHADERS[fxParams.get('shader')] ? fxParams.get('shader') : null;
     const overlay = document.createElement('canvas');
     overlay.style.cssText =
       'position:fixed;left:0;top:0;pointer-events:none;z-index:10;display:none;';
@@ -923,7 +926,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       progCache[name] = entry;
       return entry;
     }
-    if (!ensureProgram(baseName)) return; // no base shader, no overlay
+    // No URL base shader is fine — the overlay sits dormant until an fx
+    // signal or console override activates one. A requested-but-broken base
+    // still bails.
+    if (baseName && !ensureProgram(baseName)) return;
     document.body.appendChild(overlay);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -934,7 +940,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     let activeName = null;
     function activate(name) {
       let entry = ensureProgram(name);
-      if (!entry) { name = baseName; entry = ensureProgram(baseName); }
+      if (!entry && baseName) { name = baseName; entry = ensureProgram(baseName); }
       if (!entry) return null;
       if (name !== activeName) {
         activeName = name;
@@ -967,9 +973,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         requestAnimationFrame(frame);
         return;
       }
-      // Console override wins, then the swim signal, then the URL base.
-      const entry = activate(fxSignals.shader || (fxSignals.water ? 'water' : baseName));
-      if (!entry) { overlay.remove(); return; }
+      // Console override wins, then the swim signal, then the URL base
+      // (which may be null: shaders default OFF). Dormant costs nothing —
+      // no texture upload, no readback, overlay hidden.
+      const want = fxSignals.shader || (fxSignals.water ? 'water' : baseName);
+      const entry = want ? activate(want) : null;
+      if (!entry) {
+        overlay.style.display = 'none';
+        requestAnimationFrame(frame);
+        return;
+      }
       // Track the source canvas' on-screen box (letterbox padding, refits).
       const r = src.getBoundingClientRect();
       overlay.style.display = 'block';
@@ -1252,7 +1265,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     { key: 'd', glyph: 'd', label: 'DROP' },    mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
     { key: '<', glyph: '<', label: 'ASC' },     mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
     { key: '>', glyph: '>', label: 'DESC' },    mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-    { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'y', glyph: 'y', label: 'YES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+    { key: 'r', glyph: 'r', label: 'RUNES' },   { key: 'n', glyph: 'n', label: 'NO' },    { key: 'y', glyph: 'y', label: 'YES' },   { key: '.', glyph: '·', label: 'WAIT', repeat: true },
   ]};
   // Each pane is a FLAT, row-major tile list: a spec, `null` (empty), or (a-z
   // only) a spacer. MOVE is a 6-col grid holding movement + common actions + y/n;
@@ -1263,16 +1276,17 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   const PANES = [
     { label: 'PLAY', cols: 6, land: LAND_PLAY, tiles: [
       // 5 rows (same height as the a-z keyboard pane). D-pad centered on the
-      // right (rows 2-4, cols 4-6) with y/n/wait below it (row 5). esc anchors
+      // right (rows 2-4, cols 4-6) with n/y/enter below it (row 5); wait rides
+      // top row where enter was (swap: wait is the high-frequency key). esc anchors
       // top-left; col 2 runs the menu letters a-e in order (a/d/e double as
       // their game actions, b/c are pure menu picks); col 3 stacks fire/get,
       // then the stair pair, then runes. Remaining cells are muted placeholders.
       // ` (DEV) opens the dev console — dev-gated game-side, a no-op otherwise.
-      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '\r', glyph: '⏎', label: 'ENTER' }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
+      { key: ESC, glyph: 'esc', label: 'BACK' }, { key: 'a', glyph: 'a', label: 'USE' },   { key: 'f', glyph: 'f', label: 'FIRE' },  { key: '.', glyph: '·', label: 'WAIT', repeat: true }, { key: 'm', glyph: 'm', label: 'MSG' }, { key: 'i', glyph: 'i', label: 'INV' },
       { key: '?', glyph: '?', label: 'HELP' },   { key: 'b', glyph: 'b' },                 { key: 'g', glyph: 'g', label: 'GET' },   mv('y','↖','y'), mv('k','↑','k'), mv('u','↗','u'),
       { key: '`', glyph: '`', label: 'DEV' },    { key: 'c', glyph: 'c' },                 { key: '<', glyph: '<', label: 'ASC' },   mv('h','←','h'), { key: 'x', glyph: 'x', label: 'AUTO' }, mv('l','→','l'),
       null,                                      { key: 'd', glyph: 'd', label: 'DROP' },  { key: '>', glyph: '>', label: 'DESC' },  mv('b','↙','b'), mv('j','↓','j'), mv('n','↘','n'),
-      null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: '.', glyph: '·', label: 'WAIT', repeat: true },
+      null,                                      { key: 'e', glyph: 'e', label: 'EQUIP' }, { key: 'r', glyph: 'r', label: 'RUNES' }, { key: 'n', glyph: 'n', label: 'NO' }, { key: 'y', glyph: 'y', label: 'YES' }, { key: '\r', glyph: '⏎', label: 'ENTER' },
     ]},
     { label: 'a–z', cols: 20,
       // Landscape sheet variant: 4 rows to give the game back a strip — the
@@ -1283,7 +1297,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         ...'1234567890'.split('').map(kbd),
         ...'qwertyuiop'.split('').map(kbd),
         { key: '?', glyph: '?', span: 1, cls: 'kbd' }, ...'asdfghjkl'.split('').map(kbd), { key: '\r', glyph: '⏎', span: 1, cls: 'kbd' },
-        { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+        { key: ESC, glyph: 'esc', label: 'BACK', span: 2 }, { key: '(', glyph: '(', span: 1, cls: 'kbd' }, { key: ')', glyph: ')', span: 1, cls: 'kbd' }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 2, cls: 'kbd' },
       ]},
       tiles: [
       // iPhone-ish QWERTY on a fine 20-col grid (each key spans 2 units = 10 per
@@ -1296,7 +1310,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       ...'1234567890'.split('').map(kbd),
       ...'qwertyuiop'.split('').map(kbd),
       spacer(1), ...'asdfghjkl'.split('').map(kbd), spacer(1),
-      spacer(3), ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 3, cls: 'kbd' },
+      { key: '(', glyph: '(', span: 2, cls: 'kbd' }, { key: ')', glyph: ')', span: 2, cls: 'kbd' }, ...'zxcvbnm'.split('').map(kbd), { key: '\u007f', glyph: '⌫', span: 2, cls: 'kbd' },
       { key: ESC, glyph: 'esc', label: 'BACK', span: 3 }, { key: ' ', glyph: '␣', label: 'SPACE', span: 11 }, { key: '?', glyph: '?', label: 'HELP', span: 3 }, { key: '\r', glyph: '⏎', label: 'ENTER', span: 3 },
     ]},
   ];
