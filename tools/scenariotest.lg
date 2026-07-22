@@ -10,11 +10,10 @@
    Run (needs a TTY, except --check):
      lg tools/scenariotest.lg tools/scenarios/water-burning.edn
      lg tools/scenariotest.lg --check tools/scenarios/water-burning.edn
-     just scenariotest tools/scenarios/water-burning.edn
 
    Default scenario when no path is given: tools/scenarios/water-burning.edn
 
-   In-game keys are the normal ones (. wait, hjkl/arrows move, q quit).
+   In-game keys are the normal ones (. wait, hjkl/arrows move, Esc/Ctrl-C quit).
    Unhandled menu screens are dismissed so the draft stays focused on the
    arena; open a follow-up if inventory/help need full loops here.
 
@@ -33,7 +32,7 @@
 
 (defn- init-terminal []
   (when (nil? (term/size))
-    (println "scenariotest needs a real terminal — run it natively (just scenariotest).")
+    (println "scenariotest needs a real terminal — run it natively with lg tools/scenariotest.lg.")
     (os/exit 1))
   (term/raw-mode!)
   (term/alternate-screen)

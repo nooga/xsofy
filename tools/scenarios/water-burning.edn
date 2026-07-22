@@ -4,7 +4,6 @@
 ;; On main (#162): water becomes fire and the player catches :burning.
 ;; With fix/water-burning: water stays water and burning is refused.
 ;;
-;;   just scenariotest tools/scenarios/water-burning.edn
 ;;   lg tools/scenariotest.lg tools/scenarios/water-burning.edn
 {:name "water-burning"
  :desc "Wait for the fire-imp to shoot. You are in water — you should not burn (#162)."

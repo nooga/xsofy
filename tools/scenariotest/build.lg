@@ -51,9 +51,10 @@
     (throw "scenariotest: creature entry needs :species"))
   (when (nil? pos)
     (throw (str "scenariotest: creature " species " needs :pos")))
-  (let [w (ent/spawn world species pos)
-        e (ent/creature-at w pos)
-        id (:id e)]
+  (let [before-ids (set (keys (:entities world)))
+        w (ent/spawn world species pos)
+        id (first (filter (fn [id] (not (contains? before-ids id)))
+                          (keys (:entities w))))]
     (when (nil? id)
       (throw (str "scenariotest: spawn of " species " at " pos " produced no creature")))
     (cond-> w

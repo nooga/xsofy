@@ -20,6 +20,7 @@
             [xsofy.test.replay-test]
             [xsofy.test.ui-test]
             [xsofy.test.play-test]
+            [xsofy.test.scenariotest-test]
             [xsofy.test.menu-dispatch-test]
             [xsofy.test.input-test]
             [xsofy.test.console-test]))
