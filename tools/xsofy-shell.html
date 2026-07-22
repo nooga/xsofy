@@ -742,19 +742,89 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 `;
 
-  // Registry: ?shader=<name> picks one (default crt). Only the selected source
-  // is compiled, so the shaders can't collide with each other. nearest/repeat
-  // control how the terminal texture is sampled.
+  // Bloom — 24-tap golden-spiral glow, from the same qwerasd gist the CRT
+  // adaptation ships in (ghostty-shaders bloom.glsl). Two ES 3.00 ports: the
+  // array initializer uses constructor syntax, and `step` is renamed `stp`
+  // (it shadows the GLSL builtin).
+  const BLOOM_GLSL = `
+const vec3 samples[24] = vec3[24](
+  vec3(0.1693761725038636, 0.9855514761735895, 1.0),
+  vec3(-1.333070830962943, 0.4721463328627773, 0.7071067811865475),
+  vec3(-0.8464394909806497, -1.51113870578065, 0.5773502691896258),
+  vec3(1.554155680728463, -1.2588090085709776, 0.5),
+  vec3(1.681364377589461, 1.4741145918052656, 0.4472135954999579),
+  vec3(-1.2795157692199817, 2.088741103228784, 0.4082482904638631),
+  vec3(-2.4575847530631187, -0.9799373355024756, 0.3779644730092272),
+  vec3(0.5874641440200847, -2.7667464429345077, 0.35355339059327373),
+  vec3(2.997715703369726, 0.11704939884745152, 0.3333333333333333),
+  vec3(0.41360842451688395, 3.1351121305574803, 0.31622776601683794),
+  vec3(-3.167149933769243, 0.9844599011770256, 0.30151134457776363),
+  vec3(-1.5736713846521535, -3.0860263079123245, 0.2886751345948129),
+  vec3(2.888202648340422, -2.1583061557896213, 0.2773500981126146),
+  vec3(2.7150778983300325, 2.5745586041105715, 0.2672612419124244),
+  vec3(-2.1504069972377464, 3.2211410627650165, 0.2581988897471611),
+  vec3(-3.6548858794907493, -1.6253643308191343, 0.25),
+  vec3(1.0130775986052671, -3.9967078676335834, 0.24253562503633297),
+  vec3(4.229723673607257, 0.33081361055181563, 0.23570226039551587),
+  vec3(0.40107790291173834, 4.340407413572593, 0.22941573387056174),
+  vec3(-4.319124570236028, 1.159811599693438, 0.22360679774997896),
+  vec3(-1.9209044802827355, -4.160543952132907, 0.2182178902359924),
+  vec3(3.8639122286635708, -2.6589814382925123, 0.21320071635561041),
+  vec3(3.3486228404946234, 3.4331800232609, 0.20851441405707477),
+  vec3(-2.8769733643574344, 3.9652268864187157, 0.20412414523193154)
+);
+
+float lum(vec4 c) {
+  return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord.xy / iResolution.xy;
+  vec4 color = texture(iChannel0, uv);
+  vec2 stp = vec2(1.414) / iResolution.xy;
+  for (int i = 0; i < 24; i++) {
+    vec3 s = samples[i];
+    vec4 c = texture(iChannel0, uv + s.xy * stp);
+    float l = lum(c);
+    if (l > 0.2) {
+      color += l * s.z * c * 0.2;
+    }
+  }
+  fragColor = color;
+}
+`;
+
+  // Registry: ?shader=<name> picks the base shader (default crt). Shaders
+  // compile lazily on first activation, so entries can't collide with each
+  // other. nearest/repeat control how the terminal texture is sampled.
   const FX_SHADERS = {
     crt:   { src: CRT_GLSL },
     water: { src: WATER_GLSL },
+    bloom: { src: BLOOM_GLSL },
     mode7: { src: MODE7_GLSL, nearest: true, repeat: true },
   };
 
+  // Game→shell FX signals (demo/PoC): render.lg emits a private OSC 7777
+  // ("water=1,hurt=42") whenever the signal set changes; real terminals
+  // discard the unknown OSC, so only the web shell reacts. water swaps the
+  // active shader to the water effect while swimming; hurt (integer percent,
+  // ramping in below 35% health) drives a red pulse applied over whichever
+  // shader is active. window-exposed for manual poking on the demo build.
+  const fxSignals = { water: 0, hurt: 0 };
+  window.xsofyFxSignals = fxSignals;
+  term.parser.registerOscHandler(7777, (data) => {
+    fxSignals._n = (fxSignals._n || 0) + 1; // receive counter (demo diagnostics)
+    for (const kv of String(data).split(',')) {
+      const [k, v] = kv.split('=');
+      if (k === 'water') fxSignals.water = +v ? 1 : 0;
+      else if (k === 'hurt') fxSignals.hurt = Math.max(0, Math.min(1, (+v || 0) / 100));
+    }
+    return true;
+  });
+
   function startCrtOverlay() {
     if (!glAddon || fxParams.get('crt') === 'off') return;
-    const fx = FX_SHADERS[fxParams.get('shader')] || FX_SHADERS.crt;
-    const fxSource = fx.src;
+    const baseName = FX_SHADERS[fxParams.get('shader')] ? fxParams.get('shader') : 'crt';
     const overlay = document.createElement('canvas');
     overlay.style.cssText =
       'position:fixed;left:0;top:0;pointer-events:none;z-index:10;display:none;';
@@ -777,10 +847,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     let crtScale = parseFloat(fxParams.get('crtscale'));
     if (!(crtScale >= 0.2 && crtScale <= 1)) crtScale = dpr >= 2 ? 0.5 : 0.66666666;
     const crtScaleLit = crtScale.toFixed(8); // GLSL float literal (never a bare int)
-    const wrapFS = '#version 300 es\nprecision highp float;\n' +
-      'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\nuniform float iTime;\n' +
-      'out vec4 xsofyFragColor;\n' + fxSource.replace(/__CRT_SCALE__/g, crtScaleLit) +
-      '\nvoid main() { mainImage(xsofyFragColor, gl_FragCoord.xy); }\n';
     function compile(type, src) {
       const s = gl.createShader(type);
       gl.shaderSource(s, src); gl.compileShader(s);
@@ -788,33 +854,68 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         throw new Error(gl.getShaderInfoLog(s));
       return s;
     }
-    let prog;
-    try {
-      prog = gl.createProgram();
-      gl.attachShader(prog, compile(gl.VERTEX_SHADER, wrapVS));
-      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, wrapFS));
-      gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-        throw new Error(gl.getProgramInfoLog(prog));
-    } catch (e) { console.warn('CRT shader failed to build:', e); return; }
+    // Program cache: shaders compile lazily on first activation (fx signals
+    // can swap the active effect at runtime); a failed build caches null so
+    // it isn't retried every frame. The wrapper appends the low-health red
+    // throb after mainImage, so hurt composes over any shader.
+    const progCache = {};
+    function ensureProgram(name) {
+      if (name in progCache) return progCache[name];
+      let entry = null;
+      try {
+        const fsrc = '#version 300 es\nprecision highp float;\n' +
+          'uniform sampler2D iChannel0;\nuniform vec3 iResolution;\n' +
+          'uniform float iTime;\nuniform float iHurt;\n' +
+          'out vec4 xsofyFragColor;\n' +
+          FX_SHADERS[name].src.replace(/__CRT_SCALE__/g, crtScaleLit) +
+          '\nvoid main() {\n' +
+          '  mainImage(xsofyFragColor, gl_FragCoord.xy);\n' +
+          '  float hp = iHurt * (0.55 + 0.45 * sin(iTime * 7.0));\n' +
+          '  xsofyFragColor.rgb = mix(xsofyFragColor.rgb, vec3(0.75, 0.03, 0.02), hp * 0.55);\n' +
+          '}\n';
+        const prog = gl.createProgram();
+        gl.attachShader(prog, compile(gl.VERTEX_SHADER, wrapVS));
+        gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsrc));
+        gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+          throw new Error(gl.getProgramInfoLog(prog));
+        gl.useProgram(prog);
+        gl.uniform1i(gl.getUniformLocation(prog, 'iChannel0'), 0);
+        entry = { prog, def: FX_SHADERS[name],
+          uRes: gl.getUniformLocation(prog, 'iResolution'),
+          uTime: gl.getUniformLocation(prog, 'iTime'),
+          uHurt: gl.getUniformLocation(prog, 'iHurt') };
+      } catch (e) { console.warn('shader "' + name + '" failed to build:', e); }
+      progCache[name] = entry;
+      return entry;
+    }
+    if (!ensureProgram(baseName)) return; // no base shader, no overlay
     document.body.appendChild(overlay);
-    gl.useProgram(prog);
-    const uRes = gl.getUniformLocation(prog, 'iResolution');
-    const uTime = gl.getUniformLocation(prog, 'iTime');
-    gl.uniform1i(gl.getUniformLocation(prog, 'iChannel0'), 0);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    // WebGL2 supports REPEAT on non-power-of-two textures, so tiling works.
-    const wrap = fx.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
-    const filt = fx.nearest ? gl.NEAREST : gl.LINEAR;
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
     // Canvas rows are top-down, GL texture space is bottom-up; flipping on
     // upload keeps gl_FragCoord and iChannel0 in the same orientation, which is
     // what Shadertoy-convention shaders assume.
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    let activeName = null;
+    function activate(name) {
+      let entry = ensureProgram(name);
+      if (!entry) { name = baseName; entry = ensureProgram(baseName); }
+      if (!entry) return null;
+      if (name !== activeName) {
+        activeName = name;
+        gl.useProgram(entry.prog);
+        // Sampling params live on the texture, not the program — re-set per
+        // shader. WebGL2 supports REPEAT on non-power-of-two textures.
+        const wrap = entry.def.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+        const filt = entry.def.nearest ? gl.NEAREST : gl.LINEAR;
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+      }
+      return entry;
+    }
 
     function frame(t) {
       if (!glAddon) {
@@ -832,6 +933,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         requestAnimationFrame(frame);
         return;
       }
+      // Swim signal swaps to the water shader; base shader otherwise.
+      const entry = activate(fxSignals.water ? 'water' : baseName);
+      if (!entry) { overlay.remove(); return; }
       // Track the source canvas' on-screen box (letterbox padding, refits).
       const r = src.getBoundingClientRect();
       overlay.style.display = 'block';
@@ -841,10 +945,12 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       if (overlay.width !== src.width || overlay.height !== src.height) {
         overlay.width = src.width; overlay.height = src.height;
         gl.viewport(0, 0, overlay.width, overlay.height);
-        gl.uniform3f(uRes, overlay.width, overlay.height, 1.0);
       }
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
-      gl.uniform1f(uTime, t / 1000);
+      // Uniforms every frame — program switches would leave sticky values.
+      gl.uniform3f(entry.uRes, overlay.width, overlay.height, 1.0);
+      gl.uniform1f(entry.uTime, t / 1000);
+      gl.uniform1f(entry.uHurt, fxSignals.hurt);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       requestAnimationFrame(frame);
     }

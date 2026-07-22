@@ -1421,10 +1421,31 @@
     (term/write msg)
     (term/flush)))
 
+;; --- Shell FX signals (demo/PoC) ---
+;; One-way hints to the web shell's post-process shaders: a private OSC 7777
+;; escape carrying k=v pairs, emitted only when the signal set changes. Real
+;; terminals discard unknown OSC silently, so the native TUI is unaffected;
+;; output-only, so determinism/replay are untouched. hurt is an integer
+;; percent (0-100) ramping in below 35% health.
+(def shell-fx-state (atom nil))
+
+(defn emit-shell-fx! [world]
+  (let [player (get-in world [:entities :player])
+        hp (or (get-in player [:body :hp]) 0)
+        max-hp (max 1 (or (get-in player [:body :max-hp]) 1))
+        ratio (/ (* 1.0 hp) max-hp)
+        hurt (if (< ratio 0.35) (int (+ 0.5 (* 100.0 (/ (- 0.35 ratio) 0.35)))) 0)
+        fx {:water (if (status/has-status? world :player :swimming) 1 0)
+            :hurt hurt}]
+    (when (not= fx @shell-fx-state)
+      (reset! shell-fx-state fx)
+      (term/write (str "\u001b]7777;water=" (:water fx) ",hurt=" (:hurt fx) "\u0007")))))
+
 (defn render-full [world]
   (let [[tw th] (term-dims)
         panels (ui/layout tw th)
         mr (with-camera world (:map panels))]
+    (emit-shell-fx! world)
     ;; blank entire terminal with bg color
     (ui/apply-bg ui/bg)
     (ui/apply-fg ui/bg)
@@ -1456,6 +1477,7 @@
         old-fov  (:fov prev-world)
         new-fov  (:fov world)
         prev-cam (or @last-camera mr)]
+    (emit-shell-fx! world)
     (if (or (not= (:cx prev-cam) (:cx mr))
             (not= (:cy prev-cam) (:cy mr)))
       ;; Camera shifted — viewport contents moved; redraw map fully.
