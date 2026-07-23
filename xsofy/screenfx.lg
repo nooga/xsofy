@@ -50,12 +50,32 @@
         v (if (< t 30) t (- 60 t))]
     (/ (float v) 30.0)))
 
+;; --- Synchronized output (DEC private mode 2026) ---
+;; Shared with every full-screen frame emitter — the game render (xsofy.render),
+;; the title/descent screens (xsofy.title), and clear-screen below — so a frame
+;; presents atomically instead of tearing mid-draw. Lives here (the shared
+;; screen-effects ns) rather than in render so title can use it without reaching
+;; into core. Mode 2026 is a boolean (never nest — a single ESU closes it), so
+;; wrap only top-level frames, one pair each. No feature detection: unsupported
+;; terminals ignore the sequences. sync-output? is a source opt-out (the web
+;; target wants it on). The terminal owns the release timeout.
+(def sync-output? true)
+(def begin-sync (str (char 27) "[?2026h"))
+(def end-sync   (str (char 27) "[?2026l"))
+(defn sync-begin! [] (when sync-output? (term/write begin-sync)))
+;; End a synchronized frame: ESU then flush. Use in place of a bare (term/flush)
+;; at a frame boundary, paired with a preceding (sync-begin!).
+(defn flush-frame! []
+  (when sync-output? (term/write end-sync))
+  (term/flush))
+
 (defn clear-screen
-  "Paint the whole tw×th screen the dark background colour."
+  "Paint the whole tw×th screen the dark background colour, as one synced frame."
   [tw th]
+  (sync-begin!)
   (term/set-bg 10 10 10)
   (term/set-fg 10 10 10)
   (dotimes [y th]
     (term/move-cursor 1 (inc y))
     (term/write (apply str (repeat tw " "))))
-  (term/flush))
+  (flush-frame!))
