@@ -69,13 +69,31 @@
   (when sync-output? (term/write end-sync))
   (term/flush))
 
+(defmacro with-frame
+  "Run body as one synchronized (DEC 2026) frame: open the sync on entry, then
+   always close it (end-sync + flush) on exit via finally — even if body throws
+   — so a frame can never leave the sync mode dangling on the terminal. Prefer
+   this over a hand-written (sync-begin!) … (flush-frame!) pair: the begin/end
+   can't drift apart or be skipped by an early return.
+
+   Not nesting-safe: mode 2026 is a boolean, so an inner with-frame's finally
+   would close the outer frame early. Wrap only top-level frames, one per paint.
+
+   Emitted symbols are fully namespace-qualified to xsofy.screenfx/* to work
+   around let-go's syntax-quote ns-qualification gap (see let-go#48)."
+  [& body]
+  `(do
+     (xsofy.screenfx/sync-begin!)
+     (try
+       ~@body
+       (finally (xsofy.screenfx/flush-frame!)))))
+
 (defn clear-screen
   "Paint the whole tw×th screen the dark background colour, as one synced frame."
   [tw th]
-  (sync-begin!)
-  (term/set-bg 10 10 10)
-  (term/set-fg 10 10 10)
-  (dotimes [y th]
-    (term/move-cursor 1 (inc y))
-    (term/write (apply str (repeat tw " "))))
-  (flush-frame!))
+  (with-frame
+    (term/set-bg 10 10 10)
+    (term/set-fg 10 10 10)
+    (dotimes [y th]
+      (term/move-cursor 1 (inc y))
+      (term/write (apply str (repeat tw " "))))))
