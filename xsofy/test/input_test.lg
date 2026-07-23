@@ -13,3 +13,15 @@
 (deftest unbound-keys-resolve-to-unknown
   (testing "a nearby unbound key is :unknown, not a stray action"
     (is (= :unknown (input/parse-key "Q")))))
+
+(deftest plan9-arrow-runes-resolve-to-movement
+  (testing "Plan 9's bare-console arrow runes (rio sends these, not ANSI ESC[) map to movement"
+    (is (= :up    (input/parse-key (str (char 0xf00e)))))   ; Kup
+    (is (= :down  (input/parse-key (str (char 0xf800)))))   ; Kdown (= Kview)
+    (is (= :left  (input/parse-key (str (char 0xf011)))))   ; Kleft
+    (is (= :right (input/parse-key (str (char 0xf012))))))  ; Kright
+  (testing "the ANSI arrow escapes still resolve — this is additive"
+    (is (= :up    (input/parse-key (str (char 27) "[A"))))
+    (is (= :down  (input/parse-key (str (char 27) "[B"))))
+    (is (= :left  (input/parse-key (str (char 27) "[D"))))
+    (is (= :right (input/parse-key (str (char 27) "[C"))))))
