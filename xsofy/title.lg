@@ -103,7 +103,7 @@
 ;; screen.
 
 (defn draw-frame [runes title subtitle tw th frame seed]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [cx (quot tw 2)
         cy (quot th 2)
         tx (max 1 (- cx (quot (count title) 2)))
@@ -161,8 +161,7 @@
       (term/move-cursor ssx (+ cy 4))
       (term/set-fg 90 85 70)
       (term/set-bg 10 10 10)
-      (term/write sline))
-    (sfx/flush-frame!)))
+      (term/write sline)))))
 
 (defn show-title-screen [rng]
   (let [seed (:seed rng)   ;; capture before picks advance the rng — this is the run seed
@@ -230,7 +229,7 @@
     (sfx/clear-screen tw th)
     ;; animate — runes drift upward, erase old position each frame
     (dotimes [frame 15]
-      (sfx/sync-begin!)
+      (sfx/with-frame
       (doseq [r runes]
         (let [;; current y drifts upward (subtract), wrap around
               cur-y (rem (+ th (:y r) (- (quot frame 2))) th)
@@ -264,6 +263,5 @@
         (term/move-cursor mx (+ cy 1))
         (term/set-fg (int (* 120 mfade)) (int (* 110 mfade)) (int (* 90 mfade)))
         (term/set-bg 10 10 10)
-      (term/write msg))
-      (sfx/flush-frame!)
+      (term/write msg)))
       (sfx/pause! 60)))))

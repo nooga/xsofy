@@ -102,7 +102,9 @@
       (swap! sgr-pen assoc :bg c))))
 
 ;; Synchronized output (DEC 2026) lives in xsofy.screenfx now (shared with the
-;; title/descent screens), used here as sfx/sync-begin! and sfx/flush-frame!.
+;; title/descent screens). Full-screen frames wrap their emit body in
+;; (sfx/with-frame ...), which opens the sync and always closes it (end-sync +
+;; flush) via finally — so a frame can't leave the sync mode dangling.
 
 ;; --- Appearance buffer (render-perf: skip frame-to-frame unchanged cells) ---
 ;; The real per-move waste isn't redundant same-color runs (SGR elision above
@@ -825,21 +827,20 @@
         (let [cur-dirty (vfx-dirty-cells vfx)
               ;; restore cells from previous frame that aren't in current frame
               to-restore (core/into prev-dirty cur-dirty)]
-          ;; restore all previously dirty cells first
-          (sfx/sync-begin!)
-          (when (seq prev-dirty)
-            (restore-dirty-cells! world r prev-dirty))
-          ;; render current vfx overlay
-          (render-vfx-frame (assoc world :vfx vfx) r)
-          (sfx/flush-frame!)
+          ;; restore all previously dirty cells first, then paint this frame's
+          ;; overlay — all inside one synced frame
+          (sfx/with-frame
+            (when (seq prev-dirty)
+              (restore-dirty-cells! world r prev-dirty))
+            ;; render current vfx overlay
+            (render-vfx-frame (assoc world :vfx vfx) r))
           (sfx/pause! (vfx-frame-delay vfx))
           (let [next-vfx (tick-vfx vfx)]
             (if (seq next-vfx)
               (recur next-vfx cur-dirty)
               ;; final frame — restore all dirty cells in one more synced pass
-              (do (sfx/sync-begin!)
-                  (restore-dirty-cells! world r cur-dirty)
-                  (sfx/flush-frame!)))))))))
+              (sfx/with-frame
+                (restore-dirty-cells! world r cur-dirty)))))))))
 
 ;; --- Item Display Helpers ---
 
@@ -924,7 +925,7 @@
         inv)))))
 
 (defn render-quick-menu [world]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         action (or (:menu-action world) :equip)
         items (menu-filter world action)
@@ -956,13 +957,12 @@
                          fg bg))))
     (ui/write-line inner (dec (:h inner))
                    " [a-z] select  [enter] confirm  [esc] cancel"
-                   [60 60 60] [20 18 16])
-    (sfx/flush-frame!)))
+                   [60 60 60] [20 18 16]))))
 
 ;; --- Message Log Screen (modal) ---
 
 (defn render-messages-screen [world]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Message Log" [180 170 140] ui/bg)
@@ -988,8 +988,7 @@
                           (str (inc (:start window)) "-" (:end window) "/" (:count window))
                           "0/0")
                         "  [k/up older  j/down newer  PgUp/PgDn  g/G  Esc]")
-                   [80 80 80] ui/bg)
-    (sfx/flush-frame!)))
+                   [80 80 80] ui/bg))))
 
 ;; --- Help Screen (modal) ---
 
@@ -1018,7 +1017,7 @@
         (swap! row inc)))))
 
 (defn render-help-screen [world]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Keybindings" [180 170 140] ui/bg)
@@ -1028,8 +1027,7 @@
     (render-help-column right (subvec help-categories 2))
     (ui/write-line inner (dec (:h inner))
                    " [press any key to close]"
-                   [80 80 80] ui/bg)
-    (sfx/flush-frame!)))
+                   [80 80 80] ui/bg))))
 
 ;; --- Inventory Screen (modal) ---
 
@@ -1091,7 +1089,7 @@
             (ui/write-line r (inc @rune-row) cmds [120 120 100] ui/bg)))))))
 
 (defn render-inventory-screen [world]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Inventory" [180 170 140] ui/bg)
@@ -1148,8 +1146,7 @@
     ;; controls at bottom
     (ui/write-line inner (- (:h inner) 1)
                    " [a-z/jk] select  [esc/i] close"
-                   [60 60 60] ui/bg)
-    (sfx/flush-frame!)))
+                   [60 60 60] ui/bg))))
 
 ;; --- Death Screen ---
 
@@ -1180,7 +1177,7 @@
   (sfx/scatter-runes tw th 30 [200 50 30]))  ;; crimson runes
 
 (defn render-death-screen [world runes scroll-offset frame]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         cx (quot tw 2)
         cy (quot th 2)
@@ -1323,13 +1320,12 @@
       (term/move-cursor (max 1 (- cx (quot (count prompt) 2))) (dec th))
       (term/set-fg 80 70 60)
       (term/set-bg 10 10 10)
-      (term/write prompt))
-    (sfx/flush-frame!)))
+      (term/write prompt)))))
 
 ;; --- Rune Codex Screen ---
 
 (defn render-rune-codex [world]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Rune Codex" [170 140 220] ui/bg)
@@ -1356,13 +1352,12 @@
                            [100 80 140] ui/bg)))))
     (ui/write-line inner (dec (:h inner))
                    " [press any key to close]"
-                   [80 80 80] ui/bg)
-    (sfx/flush-frame!)))
+                   [80 80 80] ui/bg))))
 
 ;; --- Inscription Screen ---
 
 (defn render-inscribe-screen [world]
-  (sfx/sync-begin!)
+  (sfx/with-frame
   (let [[tw th] (term-dims)
         r (ui/rect 1 1 tw th)
         inner (ui/box r "Inscribe Runes" [200 160 240] ui/bg)
@@ -1416,8 +1411,7 @@
     ;; controls
     (ui/write-line inner (- (:h inner) 1)
                    " [jk] select  [space] add  [x] remove last  [enter] confirm  [esc] cancel"
-                   [80 80 80] ui/bg)
-    (sfx/flush-frame!)))
+                   [80 80 80] ui/bg))))
 
 ;; --- Public API ---
 
@@ -1438,7 +1432,7 @@
   (let [[tw th] (term-dims)
         panels (ui/layout tw th)
         mr (with-camera world (:map panels))]
-    (sfx/sync-begin!)
+    (sfx/with-frame
     ;; blank entire terminal with bg color
     (ui/apply-bg ui/bg)
     (ui/apply-fg ui/bg)
@@ -1451,8 +1445,7 @@
     (render-topbar world (:topbar panels))
     (render-sidebar world (:sidebar panels))
     (render-log world (:log panels))
-    (render-status world (:status panels))
-    (sfx/flush-frame!)
+    (render-status world (:status panels)))
     (commit-camera! world mr)))
 
 (defn render-dirty [world prev-world]
@@ -1470,7 +1463,7 @@
         old-fov  (:fov prev-world)
         new-fov  (:fov world)
         prev-cam (or @last-camera mr)]
-    (sfx/sync-begin!)
+    (sfx/with-frame
     (if (or (not= (:cx prev-cam) (:cx mr))
             (not= (:cy prev-cam) (:cy mr)))
       ;; Camera shifted — viewport contents moved; redraw map fully.
@@ -1479,9 +1472,7 @@
           (render-topbar world (:topbar panels))
           (render-sidebar world (:sidebar panels))
           (render-log world (:log panels))
-          (render-status world (:status panels))
-          (sfx/flush-frame!)
-          (commit-camera! world mr))
+          (render-status world (:status panels)))
       ;; Camera held — FOV-delta path. map-cell handles visibility check;
       ;; no outer bounds guard needed because x,y are world coords.
       (let [lights (or (:lights world) [])
@@ -1526,6 +1517,5 @@
         (render-topbar world (:topbar panels))
         (render-sidebar world (:sidebar panels))
         (render-log world (:log panels))
-        (render-status world (:status panels))
-        (sfx/flush-frame!)
-        (commit-camera! world mr)))))
+        (render-status world (:status panels)))))
+    (commit-camera! world mr)))

@@ -18,6 +18,20 @@
     (is (= screenfx/begin-sync (with-out-str (screenfx/sync-begin!))))
     (is (= screenfx/end-sync (with-out-str (screenfx/flush-frame!))))))
 
+(deftest with-frame-wraps-body-in-one-balanced-pair
+  (testing "with-frame opens the sync, runs the body, then closes with end-sync"
+    (is (= (str screenfx/begin-sync "frame" screenfx/end-sync)
+           (with-out-str (screenfx/with-frame (print "frame")))))))
+
+(deftest with-frame-closes-sync-even-when-body-throws
+  ;; The whole point of the finally: a frame that throws mid-emit must still
+  ;; emit end-sync, so the terminal never stays stuck in synchronized mode.
+  (testing "end-sync is still emitted when the body throws"
+    (let [out (with-out-str
+                (try (screenfx/with-frame (print "partial") (throw "boom"))
+                     (catch e nil)))]
+      (is (= (str screenfx/begin-sync "partial" screenfx/end-sync) out)))))
+
 (deftest message-log-window-shows-newest-entries-by-default
   (testing "newest entries are visible when scroll is zero"
     (let [window (render/message-log-window ["a" "b" "c" "d"] 2 0)]
