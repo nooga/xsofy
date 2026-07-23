@@ -15,6 +15,7 @@
             [xsofy.test.dag-test]
             [xsofy.test.container-trigger-test]
             [xsofy.test.fire-test]
+            [xsofy.test.status-test]
             [xsofy.test.seed-test]
             [xsofy.test.mapgen-audit-test]
             [xsofy.test.replay-test]
