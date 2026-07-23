@@ -462,20 +462,24 @@
          :death
          (let [[tw th] (term/size)
                _ (sfx/clear-screen tw th)  ;; initial clear; the loop re-clears + re-scatters on resize
-               ;; Dev repro capture of this organic run's replay code. Trigger is
-               ;; per-platform: ?dump-replay= URL param on web (js/url-param),
-               ;; XSOFY_DUMP_REPLAY env var natively. Gated so players never see it.
+               ;; Capture this organic run's replay code at its final state. On
+               ;; web this always fires: the shell's config pane renders the emit
+               ;; as a player-facing ?replay= link (the live per-10-turn capture
+               ;; in ui-bridge can lag a few turns; death re-emits exactly).
+               ;; Natively it stays opt-in via XSOFY_DUMP_REPLAY (or the
+               ;; ?dump-replay= param for parity).
                ;; Sink differs because *err* aliases *out* in WASM (one host writer
                ;; for both — let-go rendermain), so writing *err* there paints the
                ;; game screen. On web route the dump off-terminal via a js/emit host
                ;; event; natively keep stderr (redirect 2>file to capture past the TUI).
                _ (when-let [trig (or (js/url-param "dump-replay")
-                                     (os/getenv "XSOFY_DUMP_REPLAY"))]
+                                     (os/getenv "XSOFY_DUMP_REPLAY")
+                                     (when (= (os/os-name) "js") "web"))]
                    (when (> (count trig) 0)
                      (let [code (replay/encode-run-safe world)
                            payload (or code "(unavailable: run has parameterized actions)")]
                        (if (= (os/os-name) "js")
-                         (js/emit "xsofy/replay-dump" {:code payload})
+                         (js/emit "xsofy/replay-dump" {:code payload :turn (or (:turn world) 0)})
                          (do (write! *err* (str "replay-code: " payload "\n"))
                              (flush! *err*))))))
                ;; Animate the death screen via the poll-based event loop: a

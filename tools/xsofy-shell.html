@@ -309,6 +309,10 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
    shrunk info bar. */
 #xsofy-shell .font-cycle { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 0.25rem; min-height: 2.2rem; min-width: 0; padding: 0.15rem 0.6rem; border-radius: 5px; font-size: 11px; line-height: 1.2; color: var(--bar-dim); }
 #xsofy-shell .font-cycle .glyph { font-size: 12px; color: var(--bar-fg); }
+/* Anchor chips (the replay link) borrow the button chip look — anchors don't
+   get the #xsofy-shell button rules. */
+#xsofy-shell a.font-cycle { display: flex; background: rgba(245, 176, 65, 0.06); border: 1px solid var(--bar-rule); text-decoration: none; }
+#xsofy-shell a.font-cycle:active { background: rgba(245, 176, 65, 0.22); border-color: var(--bar-accent); }
 
 /* Phone landscape (short viewport) — split the shell to the RIGHT instead of
    stacking it below the terminal (which leaves a phone only ~130px of game).
@@ -409,6 +413,14 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     <button class="font-cycle dev-only" id="xs-touch-toggle" title="Force touch controls visible (overrides the landscape auto-hide)">
       <span class="glyph">▦</span><span class="seg-label">touch</span><span id="xs-touch-state">auto</span>
     </button>
+    <!-- Replay link — appears once the run's first capture lands (the game
+         emits xsofy/replay-dump live every ~10 turns and at death). Tapping
+         it replays the run; long-press for the OS copy/share sheet. A player
+         feature (not tier-gated); hidden until a code arrives and reset on
+         each new run so it can never link a stale run. -->
+    <a class="font-cycle stat-hidden" id="xs-replay-link" title="Reproduce this run">
+      <span class="glyph">▶</span><span class="seg-label">replay</span><span id="xs-replay-code"></span>
+    </a>
     <!-- Build provenance — ungated (bug reports need it, nooga/xsofy#44).
          Populated from build-info.json: tools/write-build-info.sh in CI/make
          wasm, serve.sh locally; absent = ad-hoc bundle, chip stays empty. -->
@@ -923,6 +935,36 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   });
   cycleEl?.addEventListener('mousedown', (e) => e.preventDefault());
   initFontSize();
+
+  // --- Replay link: the game's capture (ui_bridge emits xsofy/replay-dump
+  // live every ~10 turns, main.lg exactly at death) becomes a reproducible
+  // link in the config pane. Unavailable codes (parameterized-action runs)
+  // stay hidden rather than rendering a dead link. Reset on every new run
+  // (xsofy/startup) so the chip can never link a previous run. ---
+  const replayLinkEl = $('xs-replay-link'), replayCodeEl = $('xs-replay-code');
+  window.addEventListener('xsofy/startup', () => {
+    if (!replayLinkEl) return;
+    replayLinkEl.classList.add('stat-hidden');
+    replayLinkEl.removeAttribute('href');
+    if (replayCodeEl) replayCodeEl.textContent = '';
+  });
+  window.addEventListener('xsofy/replay-dump', (e) => {
+    const code = e.detail?.code;
+    if (!replayLinkEl || !code || code.startsWith('(unavailable')) return;
+    // Carry the session context (mode/dpad/…) into the replay URL — dropping
+    // ?mode=dev made the link land in a chrome-less play tier that read as
+    // "nothing happened". The code carries its own seed.
+    const qs = new URLSearchParams(location.search);
+    qs.delete('seed');
+    qs.set('replay', code);
+    replayLinkEl.href = location.pathname + '?' + qs.toString();
+    // Label with the capture turn — meaningful to a human, unlike a code
+    // prefix. Falls back to the code snippet if the emit predates :turn.
+    if (replayCodeEl) replayCodeEl.textContent =
+      (e.detail.turn != null) ? ('t' + e.detail.turn)
+                              : (code.length > 9 ? code.slice(0, 8) + '…' : code);
+    replayLinkEl.classList.remove('stat-hidden');
+  });
 
   // --- Force-touch: capability OR the persisted dev override sets
   // body.force-touch (reveals the touch UI in every orientation). The class
