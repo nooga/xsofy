@@ -1,0 +1,53 @@
+(ns xsofy.test.scenariotest-test
+  (:require [test :refer [deftest is testing]]
+            [tools.scenariotest.build :as build]
+            [xsofy.terrain :as terrain]))
+
+(deftest creature-patches-target-the-newly-spawned-entity
+  (testing "an overlapping player is not mistaken for the spawned creature"
+    (let [w (build/build-world
+              {:w 8 :h 8 :seed 1
+               :player {:pos [3 3]}
+               :creatures [{:species :fire-imp
+                            :pos [3 3]
+                            :ai {:state :hunt}
+                            :merge {:body {:hp 99}}}]})
+          player (get-in w [:entities :player])
+          imp (first (filter (fn [e] (= :fire-imp (:template e)))
+                             (vals (:entities w))))]
+      (is (not= :hunt (get-in player [:ai :state]))
+          "the player did not receive the creature's AI patch")
+      (is (some? imp) "the requested creature was spawned")
+      (is (= :hunt (get-in imp [:ai :state]))
+          "the spawned creature received the AI patch")
+      (is (= 99 (get-in imp [:body :hp]))
+          "the spawned creature received the deep merge patch"))))
+
+(deftest bundled-web-trample-scenario-stages-issue-161
+  (testing "the web scenario starts in a 2/3/2 patch with two struggles left"
+    (let [scenario (build/load-scenario "tools/scenarios/web-trample.edn")
+          w (build/build-world scenario)
+          [px py] (get-in w [:entities :player :pos])
+          web-pos [[5 3] [6 3]
+                   [4 4] [5 4] [6 4]
+                   [5 5] [6 5]]]
+      (is (= "web-trample" (:name scenario)))
+      (is (= [5 4] [px py]))
+      (is (every? (fn [[x y]]
+                    (= 19 (terrain/tget (:terrain w) (:width w) x y)))
+                  web-pos)
+          "the full 2/3/2 patch is intact")
+      (is (= 2 (get-in w [:entities :player :statuses :webbed :ttl]))
+          "two movement attempts are required to break free"))))
+
+(deftest bundled-water-burning-scenario-stages-issue-162
+  (testing "the water scenario starts in a 2x2 shallow-water pool"
+    (let [scenario (build/load-scenario "tools/scenarios/water-burning.edn")
+          w (build/build-world scenario)
+          water-pos [[5 4] [6 4] [5 5] [6 5]]]
+      (is (= "water-burning" (:name scenario)))
+      (is (= [5 4] (get-in w [:entities :player :pos])))
+      (is (every? (fn [[x y]]
+                    (= 3 (terrain/tget (:terrain w) (:width w) x y)))
+                  water-pos)
+          "the full 2x2 pool is shallow water"))))

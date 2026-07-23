@@ -1,0 +1,139 @@
+(ns scenariotest
+  "Dev-scoped scenario → play-loop harness.
+
+   Loads a handcrafted EDN arena (see tools/scenarios/), builds a real xsofy
+   world (no dungeon gen), and drives it through xsofy.play/run-play-loop —
+   the same dispatch / update-world / render path as the game. Use this to
+   interactively review interaction bugs (water+burning, webs, …) without
+   hunting for the right seed in a full dungeon.
+
+   Run (needs a TTY, except --check):
+     lg tools/scenariotest.lg tools/scenarios/water-burning.edn
+     lg tools/scenariotest.lg tools/scenarios/web-trample.edn
+     lg tools/scenariotest.lg --check tools/scenarios/water-burning.edn
+     lg tools/scenariotest.lg --check tools/scenarios/web-trample.edn
+
+   Default scenario when no path is given: tools/scenarios/water-burning.edn
+
+   In-game keys are the normal ones (. wait, hjkl/arrows move, Esc/Ctrl-C quit).
+   Unhandled menu screens are dismissed so the draft stays focused on the
+   arena; open a follow-up if inventory/help need full loops here.
+
+   Sibling of tools/lighttest.lg (interactive, isolated), but lighttest stops
+   at terrain/lighting — this one boots the real play loop on purpose."
+  (:require [term]
+            [os]
+            [tools.scenariotest.build :as build]
+            [xsofy.play :as play]
+            [xsofy.render :as render]
+            [xsofy.world :as world]))
+
+(def default-scenario "tools/scenarios/water-burning.edn")
+
+;; --- terminal lifecycle (mirrors lighttest / main) ---
+
+(defn- init-terminal []
+  (when (nil? (term/size))
+    (println "scenariotest needs a real terminal — run it natively with lg tools/scenariotest.lg.")
+    (os/exit 1))
+  (term/raw-mode!)
+  (term/alternate-screen)
+  (term/hide-cursor)
+  (term/clear))
+
+(defn- shutdown-terminal []
+  (term/reset-style)
+  (term/show-cursor)
+  (term/main-screen)
+  (term/flush)
+  (term/restore-mode!))
+
+(defn- read-key! []
+  (term/read-key))
+
+;; --- thin screen handling (play-loop returns when :screen is set) ---
+
+(defn- handle-hazard [world]
+  (render/render-full world)
+  (let [prompt (or (:hazard-prompt world) "Are you sure?")
+        _ (render/render-hazard-prompt world prompt)
+        k (read-key!)]
+    (if (= k "y")
+      (world/confirm-hazard-step world)
+      (world/cancel-hazard-step world))))
+
+(defn- handle-quit [world]
+  (render/render-full world)
+  (render/render-hazard-prompt world "Leave scenariotest?")
+  (if (= (read-key!) "y")
+    (assoc world :running false)
+    (dissoc world :screen)))
+
+(defn- dismiss-screen [world]
+  "Draft stub: drop unsupported menus and keep playing the arena."
+  (let [scr (or (:screen world) :unknown)]
+    (-> world
+        (dissoc :screen)
+        (world/log-msg (str "scenariotest: dismissed :" (name scr)
+                            " (not wired in this draft)")))))
+
+(defn- step-screens [world]
+  (case (:screen world)
+    nil world
+    :confirm-hazard (handle-hazard world)
+    :confirm-quit   (handle-quit world)
+    ;; A dead arena cannot resume: dismissing :death just makes update-world
+    ;; reopen it after the next action, trapping the harness in a loop.
+    :death          (assoc world :running false)
+    ;; title/inventory/help/console/… — out of scope for the draft
+    (dismiss-screen world)))
+
+(defn- run-play [world]
+  (init-terminal)
+  (try
+    (render/render-full world)
+    (loop [world world
+           prev-size (term/size)]
+      (cond
+        (not (:running world)) world
+
+        (:screen world)
+        (let [w (step-screens world)]
+          (when (:running w)
+            (render/render-full w))
+          (recur w (term/size)))
+
+        :else
+        (let [result (play/run-play-loop world prev-size)]
+          (recur result (term/size)))))
+    (finally
+      (shutdown-terminal))))
+
+;; --- CLI ---
+
+(defn- parse-args [args]
+  (let [args (vec (or args []))]
+    (cond
+      (empty? args)
+      {:check? false :scenario-arg default-scenario}
+
+      (= (first args) "--check")
+      {:check? true :scenario-arg (or (second args) default-scenario)}
+
+      :else
+      {:check? false :scenario-arg (first args)})))
+
+(defn -main []
+  (let [{:keys [check? scenario-arg]} (parse-args *command-line-args*)
+        scenario (build/load-scenario scenario-arg)
+        world (build/build-world scenario)
+        summary (build/summarize world scenario)]
+    (println summary)
+    (if check?
+      (do (println "scenariotest --check ok")
+          (os/exit 0))
+      (do (run-play world)
+          (println "scenariotest done.")))))
+
+(when-not *compiling-aot*
+  (-main))
