@@ -335,7 +335,9 @@
    Verify clip-space projection with two test points: cell (0,0) and cell (0,29)."
   [world tex-id atlas dump? frame vfx perf*]
   (let [map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
-        cells (bridge/grid-cells world map-rect)
+        ;; Cull never-seen cells: they painted black-on-black. gl-render clears
+        ;; top-down to black so the result is the same pixels, minus the work.
+        cells (bridge/grid-cells world map-rect true)
         {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
         bg-count (quot (count bg) 9)
         glyph-count (quot (count glyphs) 9)
@@ -718,7 +720,12 @@
   (let [{:keys [world pres vfx frame]} st
         t (glplat/Time)
         elapsed (- t start-time)]
-    (glplat/BeginFrame 0.1 0.1 0.15)
+    ;; Top-down culls its never-seen cells, which used to paint the backdrop
+    ;; black themselves. Clear to black there so culling is invisible; the
+    ;; other modes still paint or show the original slate.
+    (if (= (:mode pres) :top-down)
+      (glplat/BeginFrame 0.0 0.0 0.0)
+      (glplat/BeginFrame 0.1 0.1 0.15))
     (case (:mode pres)
       :title (render-title world title-runes elapsed tex-id atlas)
       :top-down (render-top-down world tex-id atlas dump? frame vfx perf*)
