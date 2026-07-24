@@ -139,7 +139,10 @@
 
    Returns: {:bg <flat float vector> :glyphs <flat float vector>}"
   [cells atlas opts]
-  (let [bg-quads (mapv #(cell-bg-quad % (dissoc opts :fallback))
+  ;; Hoist the dissoc: it does not depend on the cell, and inside the lambda it
+  ;; rebuilt the opts map once per cell.
+  (let [bg-opts (dissoc opts :fallback)
+        bg-quads (mapv #(cell-bg-quad % bg-opts)
                        cells)
         glyph-quads (mapv #(cell-quad % atlas opts)
                           cells)]
