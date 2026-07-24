@@ -123,20 +123,44 @@
 ;; Input Parsing
 ;; ==========================================================
 
+(defn arrow-seq
+  "The ANSI sequence input/parse-key binds for an arrow key name, else nil."
+  [name]
+  (case name
+    "up" "\u001b[A"
+    "down" "\u001b[B"
+    "left" "\u001b[D"
+    "right" "\u001b[C"
+    nil))
+
 (defn parse-glplat-event
-  "Parse a glplat event string (e.g., 'key:w', 'key:escape', 'char:x') to a key string
-   that input/parse-key can consume."
+  "Parse a glplat event string (e.g., 'key:w', 'key:escape', 'char:x') to a key
+   string that input/parse-key can consume. nil means ignore this event.
+
+   Two things this has to get right, and originally got neither:
+
+   Arrows need the ESC prefix. input/parse-key compares whole strings against
+   bindings like \"\\u001b[A\", so a bare \"[A\" matched nothing and the arrow
+   keys did not move the player at all.
+
+   A printable key arrives twice. GLFW fires the key callback (key:k) and the
+   char callback (char:k) for one physical press, and dispatching both moved
+   the player two tiles per keystroke. The char: event is the one to keep — it
+   is the only one carrying shift state, and xsofy binds shifted keys (K/J/H/L
+   run, > descend, ? help) that key: reports only as their lowercase name. So a
+   key:/key-repeat: event naming a single printable character is dropped here
+   and its char: twin does the work."
   [event-str]
   (cond
-    (string/starts-with? event-str "key:escape") ""
-    (string/starts-with? event-str "key:") (let [key (subs event-str 4)]
-                                             (case key
-                                               "up" "[A"
-                                               "down" "[B"
-                                               "left" "[D"
-                                               "right" "[C"
-                                               key))  ;; fallback to raw key
-    (string/starts-with? event-str "key-repeat:") (subs event-str 11)
+    (string/starts-with? event-str "key:escape") ""
+    (string/starts-with? event-str "key:")
+    (let [name (subs event-str 4)]
+      (or (arrow-seq name)
+          (when (> (count name) 1) name)))
+    (string/starts-with? event-str "key-repeat:")
+    (let [name (subs event-str 11)]
+      (or (arrow-seq name)
+          (when (> (count name) 1) name)))
     (string/starts-with? event-str "char:") (subs event-str 5)
     :else nil))
 
