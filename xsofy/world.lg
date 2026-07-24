@@ -187,6 +187,47 @@
 
 ;; --- World Creation ---
 
+(defn empty-world
+  "Bare world skeleton: the fields a world carries from construction
+   onward, at their zero values. No terrain, no entities — not playable
+   until a caller fills :terrain and :entities.
+
+   This is the one place that shape is written down. generate-floor
+   builds on it, and so should any harness that needs a world without
+   dungeon gen (property-test generators, scenario builders). Adding a
+   world field is then one edit here, not an audit of every literal that
+   ever spelled the shape out by hand.
+
+   Fields a later system owns and adds on its own (:rooms-cache from
+   worldgen, :next-id from entity spawning, :scheme from the palette)
+   are deliberately absent — the skeleton is the construction-time
+   shape, not the union of everything a world can hold.
+
+   :terrain is nil rather than a zero-size grid: a caller that forgets to
+   fill it should fail at the first tget, not read plausible garbage out
+   of a grid that disagrees with :width/:height."
+  [w h seed]
+  {:terrain nil
+   :width w
+   :height h
+   :entities {}
+   :fov #{}
+   :memory {}
+   :lights nil
+   :stains {}
+   :gases {}
+   :fire-ttl {}
+   :log []
+   :turn 0
+   :depth 1
+   :floors {}
+   :gold 0
+   :rune-table {}
+   :running true
+   :seed seed
+   :seed-input seed
+   :action-log []})
+
 (defn generate-floor [w h depth player seed-input]
   (dbg/log "generate-floor" w h "depth:" depth "seed-input:" seed-input)
   (let [;; Floor layout is path-independent: derive a construction seed from
@@ -200,23 +241,18 @@
         [px py] (first rooms)]
     (dbg/log "  rooms:" (count rooms) "player-pos:" [px py])
     (let [lights (light/collect-terrain-lights grid w h)
-          ;; merge gameplay fields onto the terrain-advanced world.
-          ;; :seed from world-after-terrain is preserved (assoc doesn't drop existing keys
-          ;; we don't override).
-          world (assoc world-after-terrain
-                       :terrain grid
-                       :width w
-                       :height h
-                       :entities {:player (assoc player :pos [px py])}
-                       :fov #{}
-                       :memory {}
-                       :lights lights
-                       :stains {}
-                       :gases {}
-                       :log []
-                       :turn 0
-                       :depth depth
-                       :running true)
+          ;; Start from the canonical skeleton, then let world-after-terrain
+          ;; win: its :seed is the terrain-advanced floor lineage, and it
+          ;; carries whatever bookkeeping terrain gen left behind. The
+          ;; skeleton's :seed-input stays the origin seed, which is what it
+          ;; means. Both callers reset :seed afterward to continue the
+          ;; gameplay chain.
+          world (-> (empty-world w h seed-input)
+                    (merge world-after-terrain)
+                    (assoc :terrain grid
+                           :entities {:player (assoc player :pos [px py])}
+                           :lights lights
+                           :depth depth))
           world (det/with-context world [:worldgen :floor depth])]
       (dbg/log "  populating rooms")
       (let [;; spawn creatures per room (each call returns world')
@@ -272,10 +308,12 @@
         world (second rune-pair)]
     (-> world
         give-starting-items
-        (assoc :floors {} :gold 0 :rune-table rune-table)
+        ;; :floors/:gold/:seed-input/:action-log already carry their zero
+        ;; values from empty-world via generate-floor.
+        (assoc :rune-table rune-table)
         spawn-runestones
         ;; final step: start the continuous gameplay chain at the origin seed
-        (assoc :seed seed :seed-input seed :action-log []))))
+        (assoc :seed seed))))
 
 ;; --- Floor Transition ---
 ;; Saves current floor, extracts player + inventory items,

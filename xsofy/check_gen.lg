@@ -29,6 +29,7 @@
   (:require [xsofy.check :as c]
             [xsofy.terrain :as terrain]
             [xsofy.entities :as ent]
+            [xsofy.world :as world]
             ;; Load template registries (defcreature / defitem populate
             ;; the shared @ent/templates atom).
             [xsofy.bestiary]
@@ -41,19 +42,19 @@
 ;; --- Minimal world for spell/world properties ---
 
 (defn minimal-stone-room
-  "Build a 10x10 stone-floor room with stone walls. No entities."
+  "Build a 10x10 stone-floor room with stone walls. No entities.
+
+   Shape comes from world/empty-world so these generated worlds stay
+   structurally identical to the ones the game builds — a property test
+   run against a world missing a key the code under test reads covers
+   less than it appears to. Seed 0 matches what det/advance already
+   defaults to when :seed is absent, so rolls are unchanged."
   []
   (let [w 10
         h 10
         t (terrain/make-terrain w h)]
     (terrain/carve-room! t w 1 1 (- w 2) (- h 2))
-    {:terrain t
-     :width w
-     :height h
-     :entities {}
-     :turn 0
-     :gold 0
-     :rune-table {}}))
+    (assoc (world/empty-world w h 0) :terrain t)))
 
 ;; --- Player ---
 
@@ -149,8 +150,7 @@
     (loop [i 0
            fires []]
       (if (= i (* inner-w inner-h))
-        {:world {:terrain t :width w :height h
-                 :entities {} :turn 0 :gold 0 :rune-table {}}
+        {:world (assoc (world/empty-world w h 0) :terrain t)
          :fire-cells fires}
         (let [x (+ 1 (mod i inner-w))
               y (+ 1 (quot i inner-w))
@@ -251,8 +251,9 @@
         (assoc-in [:entities :player] player)
         (spawn-creatures creature-spawns)
         (spawn-items item-spawns)
-        ;; depth + floors map needed by save/restore code paths
-        (assoc :depth 1 :floors {} :fire-ttl fire-ttls))))
+        ;; :depth/:floors come from the skeleton; :fire-ttl is real
+        ;; generated data, one entry per fire tile in the room.
+        (assoc :fire-ttl fire-ttls))))
 
 ;; --- Picking two distinct entities from a world (for combat properties) ---
 ;; A combat property needs an attacker-id and a target-id. We pick the

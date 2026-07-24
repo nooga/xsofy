@@ -79,26 +79,11 @@
                         [(str "scenariotest: " (or (:name sc) "scenario"))]
                         (or (:log sc) [])
                         (when (:desc sc) [(:desc sc)])))
-        base {:terrain terrain
-              :width w
-              :height h
-              :entities {:player player}
-              :fov #{}
-              :memory {}
-              :lights nil
-              :stains {}
-              :gases {}
-              :fire-ttl {}
-              :log boot-log
-              :turn 0
-              :depth depth
-              :floors {}
-              :gold 0
-              :rune-table {}
-              :running true
-              :seed seed
-              :seed-input seed
-              :action-log []}
+        base (assoc (world/empty-world w h seed)
+                    :terrain terrain
+                    :entities {:player player}
+                    :log boot-log
+                    :depth depth)
         w0 (reduce spawn-creature base creatures)
         w1 (if gear? (world/give-starting-items w0) w0)]
     (world/update-fov w1)))

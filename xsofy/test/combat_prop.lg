@@ -118,8 +118,8 @@
   [world g/gen-rich-world]
   (let [[player items] (w/extract-player-items world)
         ;; inject into a fresh empty world at original pos
-        fresh {:entities {} :turn 0 :width (:width world) :height (:height world)
-               :terrain (:terrain world) :gold 0 :rune-table {}}
+        fresh (assoc (w/empty-world (:width world) (:height world) 0)
+                     :terrain (:terrain world))
         restored (w/inject-player fresh player items (:pos player))
         rp (get-in restored [:entities :player])]
     (and (some? rp)
