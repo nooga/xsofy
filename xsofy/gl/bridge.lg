@@ -102,8 +102,20 @@
 (defn grid-cells
   "Extract all visible cells from world as a vector of {:col :row :glyph :fg :bg}.
    Composition: terrain base, entity overlay, with full FOV/memory/lighting logic.
-   Returns cells in row-major order."
-  [world map-rect]
+   Returns cells in row-major order.
+
+   `cull-unseen?` drops cells that are neither in FOV nor remembered. Those
+   render as a space glyph on a black background — nothing — but still cost a
+   map, a bg quad and a glyph quad each, and on a typical floor they are the
+   overwhelming majority of the grid.
+
+   It is opt-in rather than the default because 'draws nothing' is only true
+   against a black clear colour. The top-down view qualifies. The first-person
+   view does not: there the unseen floor quads are the black ground plane you
+   see under the horizon, and dropping them would show the clear colour through
+   the floor."
+  ([world map-rect] (grid-cells world map-rect false))
+  ([world map-rect cull-unseen?]
   (let [{:keys [terrain width height fov memory]} world
         lights (or (:lights world) [])
         stains (or (:stains world) {})
@@ -125,22 +137,23 @@
     (dotimes [y (min height (:h map-rect))]
       (dotimes [x (min width (:w map-rect))]
         (let [visible (contains? fov [x y])
-              remembered (get memory [x y])
-              tile (when visible (terrain/tget terrain width x y))
-              lv (when visible (light/light-at x y lights))
-              stain (when visible (get stains [x y]))
-              gas (when visible (get gases [x y]))
-              ;; Start with terrain or memory or unseen
-              terrain-data (cond
-                             visible (terrain-cell tile visible remembered lv stain gas)
-                             remembered (memory-cell remembered)
-                             :else (unseen-cell))
-              ;; Overlay entity if present and visible
-              entity-data (when visible (entity-cell-overlay world entity-map x y))
-              final-data (if entity-data
-                           (assoc terrain-data :glyph (:glyph entity-data)
-                             :fg (:fg entity-data)
-                             :bg (:bg entity-data))
-                           terrain-data)]
-          (swap! cells conj (assoc final-data :col x :row y)))))
-    @cells))
+              remembered (get memory [x y])]
+          (when (or visible remembered (not cull-unseen?))
+            (let [tile (when visible (terrain/tget terrain width x y))
+                  lv (when visible (light/light-at x y lights))
+                  stain (when visible (get stains [x y]))
+                  gas (when visible (get gases [x y]))
+                  ;; Start with terrain or memory or unseen
+                  terrain-data (cond
+                                 visible (terrain-cell tile visible remembered lv stain gas)
+                                 remembered (memory-cell remembered)
+                                 :else (unseen-cell))
+                  ;; Overlay entity if present and visible
+                  entity-data (when visible (entity-cell-overlay world entity-map x y))
+                  final-data (if entity-data
+                               (assoc terrain-data :glyph (:glyph entity-data)
+                                 :fg (:fg entity-data)
+                                 :bg (:bg entity-data))
+                               terrain-data)]
+              (swap! cells conj (assoc final-data :col x :row y)))))))
+    @cells)))

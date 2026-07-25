@@ -123,20 +123,44 @@
 ;; Input Parsing
 ;; ==========================================================
 
+(defn arrow-seq
+  "The ANSI sequence input/parse-key binds for an arrow key name, else nil."
+  [name]
+  (case name
+    "up" "\u001b[A"
+    "down" "\u001b[B"
+    "left" "\u001b[D"
+    "right" "\u001b[C"
+    nil))
+
 (defn parse-glplat-event
-  "Parse a glplat event string (e.g., 'key:w', 'key:escape', 'char:x') to a key string
-   that input/parse-key can consume."
+  "Parse a glplat event string (e.g., 'key:w', 'key:escape', 'char:x') to a key
+   string that input/parse-key can consume. nil means ignore this event.
+
+   Two things this has to get right, and originally got neither:
+
+   Arrows need the ESC prefix. input/parse-key compares whole strings against
+   bindings like \"\\u001b[A\", so a bare \"[A\" matched nothing and the arrow
+   keys did not move the player at all.
+
+   A printable key arrives twice. GLFW fires the key callback (key:k) and the
+   char callback (char:k) for one physical press, and dispatching both moved
+   the player two tiles per keystroke. The char: event is the one to keep — it
+   is the only one carrying shift state, and xsofy binds shifted keys (K/J/H/L
+   run, > descend, ? help) that key: reports only as their lowercase name. So a
+   key:/key-repeat: event naming a single printable character is dropped here
+   and its char: twin does the work."
   [event-str]
   (cond
-    (string/starts-with? event-str "key:escape") ""
-    (string/starts-with? event-str "key:") (let [key (subs event-str 4)]
-                                             (case key
-                                               "up" "[A"
-                                               "down" "[B"
-                                               "left" "[D"
-                                               "right" "[C"
-                                               key))  ;; fallback to raw key
-    (string/starts-with? event-str "key-repeat:") (subs event-str 11)
+    (string/starts-with? event-str "key:escape") ""
+    (string/starts-with? event-str "key:")
+    (let [name (subs event-str 4)]
+      (or (arrow-seq name)
+          (when (> (count name) 1) name)))
+    (string/starts-with? event-str "key-repeat:")
+    (let [name (subs event-str 11)]
+      (or (arrow-seq name)
+          (when (> (count name) 1) name)))
     (string/starts-with? event-str "char:") (subs event-str 5)
     :else nil))
 
@@ -158,6 +182,58 @@
                :quest-item (:item quest)
                :running true)
         (#(reduce world/log-msg % (:messages quest))))))
+
+;; ==========================================================
+;; Frame-time instrumentation (XSOFY_GL_PERF)
+;; ==========================================================
+
+;; Two clocks, because they answer different questions and only one of them
+;; responds to render work. `cpu` is BeginFrame → just-before-EndFrame: the
+;; segment we actually control (bridge → grid-verts → SubmitTriangles).
+;; `interval` is render-entry to render-entry, which includes EndFrame's vsync
+;; block. A change that halves vertex work moves `cpu` and leaves `interval`
+;; pinned near the refresh period — so reading only wall-clock frame time would
+;; report every optimization as a no-op.
+
+(defn new-perf-acc []
+  {:n 0 :cpu-sum 0.0 :cpu-min 1.0e9 :cpu-max 0.0
+   :int-sum 0.0 :last-t nil :bg 0 :glyphs 0 :total 0})
+
+(defn perf-note-verts!
+  "Record the batch sizes the current frame emitted, so a culling change shows
+   up as vertices, not only as milliseconds."
+  [perf* bg glyphs]
+  (when perf*
+    (swap! perf* assoc :bg bg :glyphs glyphs)))
+
+(defn perf-record!
+  "Fold one frame's timings in; emit a line every `every` frames and reset."
+  [perf* every t-entry cpu-ms]
+  (when perf*
+    (let [a (swap! perf* (fn [a]
+                           (-> a
+                               (assoc :n (inc (:n a))
+                                      :total (inc (:total a))
+                                      :last-t t-entry)
+                               (assoc :cpu-sum (+ (:cpu-sum a) cpu-ms))
+                               (assoc :cpu-min (min (:cpu-min a) cpu-ms))
+                               (assoc :cpu-max (max (:cpu-max a) cpu-ms))
+                               (assoc :int-sum (+ (:int-sum a)
+                                                  (if (:last-t a)
+                                                    (* 1000.0 (- t-entry (:last-t a)))
+                                                    0.0))))))]
+      (when (>= (:n a) every)
+        (let [n (:n a)]
+          (print (str "XSOFY_GL_PERF: frames " (- (:total a) n) "-" (dec (:total a))
+                      "  cpu mean " (format "%.2f" (/ (:cpu-sum a) n)) "ms"
+                      " min " (format "%.2f" (:cpu-min a)) "ms"
+                      " max " (format "%.2f" (:cpu-max a)) "ms"
+                      "  interval mean " (format "%.2f" (/ (:int-sum a) n)) "ms"
+                      "  verts bg " (:bg a) " glyph " (:glyphs a) "\n")))
+        (swap! perf* (fn [a]
+                       (merge (new-perf-acc)
+                              {:total (:total a) :last-t (:last-t a)
+                               :bg (:bg a) :glyphs (:glyphs a)})))))))
 
 ;; ==========================================================
 ;; Matrix Helpers
@@ -281,12 +357,15 @@
 (defn render-top-down
   "Render top-down view with ortho projection (xz-ground mapped to screen via rotate-x).
    Verify clip-space projection with two test points: cell (0,0) and cell (0,29)."
-  [world tex-id atlas dump? frame vfx]
+  [world tex-id atlas dump? frame vfx perf*]
   (let [map-rect {:x 0 :y 0 :w (:width world) :h (:height world)}
-        cells (bridge/grid-cells world map-rect)
+        ;; Cull never-seen cells: they painted black-on-black. gl-render clears
+        ;; top-down to black so the result is the same pixels, minus the work.
+        cells (bridge/grid-cells world map-rect true)
         {:keys [bg glyphs]} (grid/grid-verts cells atlas {:cell-w 0.5 :cell-h 1.0})
         bg-count (quot (count bg) 9)
         glyph-count (quot (count glyphs) 9)
+        _ (perf-note-verts! perf* bg-count glyph-count)
 
         ;; Build correct MVP
         mvp (build-top-down-mvp)
@@ -411,7 +490,7 @@
 
 (defn render-first-person
   "Render first-person view: perspective camera, billboarded entities."
-  [world pres-state tex-id atlas dump? frame vfx]
+  [world pres-state tex-id atlas dump? frame vfx perf*]
   (let [;; Player position
         [px py] (get-in world [:entities :player :pos])
         facing (:facing pres-state)
@@ -439,7 +518,11 @@
         bg-count (quot (count bg) 9)
         glyph-count (quot (count glyphs) 9)
         wall-count (quot (count wall-verts) 9)
-        entity-count (quot (count entity-verts) 9)]
+        entity-count (quot (count entity-verts) 9)
+        ;; FP reports floors+walls as "bg": both are terrain geometry, so the
+        ;; culling delta stays comparable with the top-down line.
+        _ (perf-note-verts! perf* (+ bg-count wall-count)
+                            (+ glyph-count entity-count))]
 
     (glplat/SetMatrix mvp)
 
@@ -656,17 +739,23 @@
 (defn gl-render
   "Paint one frame from loop state (render subscriber — presents itself,
    the loop core never flushes)."
-  [st {:keys [tex-id atlas dump? title-runes start-time shot-path shot-at shot-done*]}]
+  [st {:keys [tex-id atlas dump? title-runes start-time shot-path shot-at shot-done*
+              perf* perf-every]}]
   (let [{:keys [world pres vfx frame]} st
         t (glplat/Time)
         elapsed (- t start-time)]
-    (glplat/BeginFrame 0.1 0.1 0.15)
+    ;; Top-down culls its never-seen cells, which used to paint the backdrop
+    ;; black themselves. Clear to black there so culling is invisible; the
+    ;; other modes still paint or show the original slate.
+    (if (= (:mode pres) :top-down)
+      (glplat/BeginFrame 0.0 0.0 0.0)
+      (glplat/BeginFrame 0.1 0.1 0.15))
     (case (:mode pres)
       :title (render-title world title-runes elapsed tex-id atlas)
-      :top-down (render-top-down world tex-id atlas dump? frame vfx)
+      :top-down (render-top-down world tex-id atlas dump? frame vfx perf*)
       :falling (render-falling world pres t tex-id atlas dump? vfx)
-      :fp (render-first-person world pres tex-id atlas dump? frame vfx)
-      (render-top-down world tex-id atlas dump? frame vfx))
+      :fp (render-first-person world pres tex-id atlas dump? frame vfx perf*)
+      (render-top-down world tex-id atlas dump? frame vfx perf*))
     (when (not= (:mode pres) :title)
       (render-hud world tex-id atlas))
     ;; Screenshot hook: capture the composed back buffer once, before
@@ -677,6 +766,9 @@
       (when dump?
         (print (str "XSOFY_GL_DUMP: screenshot " shot-path
                     " at " (format "%.2f" elapsed) "s\n"))))
+    ;; Sample before EndFrame: past this point we are measuring the driver's
+    ;; vsync wait, not our own work.
+    (perf-record! perf* perf-every t (* 1000.0 (- (glplat/Time) t)))
     (glplat/EndFrame)))
 
 (defn -main []
@@ -697,6 +789,10 @@
         shot-path (getenv-str "XSOFY_GL_SHOT")
         shot-at (parse-number (getenv-str "XSOFY_GL_SHOT_AT") 1.0)
         skip-title? (boolean (getenv-str "XSOFY_GL_SKIP_TITLE"))
+        ;; XSOFY_GL_PERF=N reports frame timings every N frames (N<=0 disables).
+        perf-every (let [n (parse-number (getenv-str "XSOFY_GL_PERF") 0)]
+                     (when (> n 0) (int n)))
+        perf* (when perf-every (atom (new-perf-acc)))
         force-fall-str (getenv-str "XSOFY_GL_FORCE_FALL")
         force-fall-secs (when force-fall-str
                           (parse-number force-fall-str -1.0))
@@ -731,7 +827,9 @@
                  :title-runes title-runes
                  :shot-path shot-path
                  :shot-at shot-at
-                 :shot-done* (atom false)}]
+                 :shot-done* (atom false)
+                 :perf* perf*
+                 :perf-every perf-every}]
         (ui/run-loop
           {:sources [(glplat-input-source) (ui/clock-source 0)]
            :state {:world world
