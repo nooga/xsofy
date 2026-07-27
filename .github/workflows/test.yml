@@ -39,6 +39,14 @@ jobs:
           # the lg-binary cache below is what saves the compile.
           cache: false
 
+      # Ask Go where it installs rather than restating the default. `~/go` is
+      # correct on today's ubuntu-latest runners, but nothing here declares
+      # that; a runner or a job-level GOPATH that disagreed would leave the
+      # cache pointing somewhere `go install` never writes, and the only
+      # symptom would be a permanent silent miss.
+      - name: Resolve GOPATH
+        run: echo "GOPATH=$(go env GOPATH)" >> "$GITHUB_ENV"
+
       # The pinned lane reads .let-go-version; the latest lane resolves the
       # moving `latest` to its concrete version so the binary cache below can
       # key on it. One source of truth for the floor, shared with the deploy.
@@ -59,7 +67,7 @@ jobs:
         id: lgcache
         uses: actions/cache@v4
         with:
-          path: ~/go/bin/let-go
+          path: ${{ env.GOPATH }}/bin/let-go
           key: lg-bin-${{ runner.os }}-go1.26-${{ steps.letgo.outputs.version }}
 
       - name: Install let-go ${{ steps.letgo.outputs.version }}

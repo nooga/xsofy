@@ -43,11 +43,20 @@ jobs:
           # inert module cache.
           cache: false
 
+      # Ask the tools where they install rather than restating their defaults.
+      # Both values are what the runner already uses; declaring them means the
+      # cache path and the install target cannot drift apart, and neither has
+      # to be re-verified against a run to know it is right.
+      - name: Resolve cache paths
+        run: |
+          echo "GOPATH=$(go env GOPATH)" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright" >> "$GITHUB_ENV"
+
       - name: Cache lg binary
         id: lgcache
         uses: actions/cache@v4
         with:
-          path: ~/go/bin/let-go
+          path: ${{ env.GOPATH }}/bin/let-go
           key: lg-bin-${{ runner.os }}-go1.26-${{ steps.letgo.outputs.version }}
 
       - name: Install let-go
@@ -73,7 +82,7 @@ jobs:
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ms-playwright
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: pw-${{ runner.os }}-${{ hashFiles('tests/browser/package-lock.json', 'tests/e2e/package-lock.json') }}
 
       - name: Install smoke dependencies
