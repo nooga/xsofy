@@ -192,16 +192,24 @@
    onward, at their zero values. No terrain, no entities — not playable
    until a caller fills :terrain and :entities.
 
-   This is the one place that shape is written down. generate-floor
-   builds on it, and so should any harness that needs a world without
-   dungeon gen (property-test generators, scenario builders). Adding a
-   world field is then one edit here, not an audit of every literal that
-   ever spelled the shape out by hand.
+   This is the one place that shape is written down. generate-floor,
+   restore-floor, and any harness needing a world without dungeon gen
+   (property-test generators, scenario builders) all build on it. Adding
+   a construction-time field is one edit here.
 
-   Fields a later system owns and adds on its own (:rooms-cache from
-   worldgen, :next-id from entity spawning, :scheme from the palette)
-   are deliberately absent — the skeleton is the construction-time
-   shape, not the union of everything a world can hold.
+   Its companion is run-scoped-keys, which answers the other question a
+   world field raises: does it survive a floor transition? The two sets
+   overlap on purpose — :turn and :gold are created here and carried
+   there, while :terrain and :entities are created here and rebuilt per
+   floor. A new field needs an answer in both places, and #177 is what
+   it costs when one of them is a hand-rolled assoc list instead.
+
+   :rooms-cache is deliberately absent: it is per-floor derived data
+   that worldgen rebuilds and every reader guards for nil.
+
+   :terrain is nil rather than a zero-size grid: a caller that forgets to
+   fill it should fail at the first tget, not read plausible garbage out
+   of a grid that disagrees with :width/:height.
 
    :terrain is nil rather than a zero-size grid: a caller that forgets to
    fill it should fail at the first tget, not read plausible garbage out
@@ -228,6 +236,32 @@
    :seed-input seed
    :action-log []})
 
+(def run-scoped-keys
+  "Fields owned by the run, not the floor: they must survive a floor
+   transition. Everything else a world holds is floor-scoped — rebuilt by
+   generate-floor or read back out of the saved floor map.
+
+   :title, :scheme, and :quest-item are set by main.lg after make-world
+   rather than by empty-world, because they belong to the framing of a
+   run (its name, palette, and quest) rather than to the world engine.
+   They still have to survive a descent, which is what put them here:
+   before #177 only :scheme was hand-carried, so dying below depth 1
+   produced a tombstone with no game title (render.lg reads :title).
+
+   :seed is deliberately NOT in this set. It is the head of the RNG
+   chain, and both callers restore it as their final step so that any
+   rolling they do in between (spawn-runestones) consumes the floor
+   lineage rather than the gameplay one. Carrying it here would move
+   that restore earlier and shift every subsequent roll."
+  [:log :turn :gold :rune-table :floors :seed-input :action-log :running
+   :title :scheme :quest-item])
+
+(defn carry-run-state
+  "Copy the run-scoped fields of `from` onto `to`. Keys absent from
+   `from` are left alone rather than nil-ed out."
+  [to from]
+  (merge to (select-keys from run-scoped-keys)))
+
 (defn generate-floor [w h depth player seed-input]
   (dbg/log "generate-floor" w h "depth:" depth "seed-input:" seed-input)
   (let [;; Floor layout is path-independent: derive a construction seed from
@@ -241,15 +275,16 @@
         [px py] (first rooms)]
     (dbg/log "  rooms:" (count rooms) "player-pos:" [px py])
     (let [lights (light/collect-terrain-lights grid w h)
-          ;; Start from the canonical skeleton, then let world-after-terrain
-          ;; win: its :seed is the terrain-advanced floor lineage, and it
-          ;; carries whatever bookkeeping terrain gen left behind. The
-          ;; skeleton's :seed-input stays the origin seed, which is what it
-          ;; means. Both callers reset :seed afterward to continue the
-          ;; gameplay chain.
+          ;; Start from the canonical skeleton. :seed is taken across
+          ;; explicitly rather than by merging world-after-terrain wholesale:
+          ;; the advanced floor lineage is the only thing terrain gen owns
+          ;; here, and a blanket merge would silently hand it every other key
+          ;; the day it starts threading more state. The skeleton's
+          ;; :seed-input stays the origin seed, which is what it means; both
+          ;; callers reset :seed afterward to continue the gameplay chain.
           world (-> (empty-world w h seed-input)
-                    (merge world-after-terrain)
-                    (assoc :terrain grid
+                    (assoc :seed (:seed world-after-terrain)
+                           :terrain grid
                            :entities {:player (assoc player :pos [px py])}
                            :lights lights
                            :depth depth))
@@ -397,27 +432,19 @@
         terrain (:terrain floor)
         w (:width floor)
         h (:height floor)]
-    (-> {:terrain terrain
-         :width w
-         :height h
-         :entities (:entities floor)
-         :fov #{}
-         :memory (:memory floor)
-         :lights (:lights floor)
-         :stains (:stains floor)
-         :gases (:gases floor)
-         :fire-ttl (or (:fire-ttl floor) {})
-         :log (:log world)
-         :turn (:turn world)
-         :gold (or (:gold world) 0)
-         :rune-table (:rune-table world)
-         :depth depth
-         :floors (:floors world)
-         :scheme (:scheme world)
-         :seed (:seed world)
-         :seed-input (:seed-input world)
-         :action-log (or (:action-log world) [])
-         :running true}
+    (-> (empty-world w h (:seed-input world))
+        ;; floor-scoped: everything the saved floor owns
+        (assoc :terrain terrain
+               :entities (:entities floor)
+               :memory (:memory floor)
+               :lights (:lights floor)
+               :stains (:stains floor)
+               :gases (:gases floor)
+               :fire-ttl (or (:fire-ttl floor) {})
+               :depth depth)
+        ;; run-scoped: everything that outlives the floor
+        (carry-run-state world)
+        (assoc :seed (:seed world))
         (inject-player player items nil)
         rebase-creature-ticks)))
 
@@ -692,14 +719,7 @@
             ;; reset player ticks to 0 so they act first on new floor
             (let [player (assoc player :ticks 0 :last-arrival-pos spawn-pos)]
               (-> new-world
-                  (assoc :log (:log saved)
-                         :turn (:turn saved)
-                         :gold (or (:gold saved) 0)
-                         :rune-table (:rune-table saved)
-                         :floors (:floors saved)
-                         :scheme (:scheme world)
-                         :seed-input (:seed-input saved)
-                         :action-log (or (:action-log saved) []))
+                  (carry-run-state saved)
                   (inject-player player items spawn-pos)
                   spawn-runestones
                   ;; final step: continue the gameplay chain from the saved world

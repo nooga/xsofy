@@ -1,0 +1,72 @@
+(ns xsofy.test.world-shape-test
+  "Pins the world map's shape across construction and floor transitions.
+
+   world/empty-world declares what a world holds; world/run-scoped-keys
+   declares what survives a descent. Neither is enforced by anything the
+   compiler can see, so these tests are the enforcement: a field added to
+   the skeleton and forgotten in the transition path fails here rather
+   than three months later as a nil on depth 2 (#177)."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.world :as w]))
+
+(def ^:private skeleton-keys
+  (set (keys (w/empty-world 10 10 0))))
+
+(defn- missing-keys
+  "Skeleton keys absent from world. Absent, not nil-valued: :terrain and
+   :lights are legitimately nil on a live world."
+  [world]
+  (vec (sort (filter (fn [k] (not (contains? world k))) skeleton-keys))))
+
+;; A small world keeps floor generation cheap; the shape doesn't depend on size.
+(defn- run-world []
+  (-> (w/make-world 40 20 7)
+      (assoc :title "The Chasms"
+             :scheme [1 2 3]
+             :quest-item :amulet)))
+
+(deftest make-world-carries-the-whole-skeleton
+  (testing "a constructed world holds every key empty-world declares"
+    (is (= [] (missing-keys (w/make-world 40 20 7))))))
+
+(deftest descending-carries-the-whole-skeleton
+  (testing "a newly generated floor holds every key empty-world declares"
+    (is (= [] (missing-keys (w/change-floor (run-world) 2))))))
+
+(deftest revisiting-carries-the-whole-skeleton
+  (testing "a restored floor holds every key empty-world declares"
+    (let [d2 (w/change-floor (run-world) 2)]
+      (is (= [] (missing-keys (w/change-floor d2 1)))))))
+
+;; --- Run-scoped fields survive a transition (#177) ---
+
+(deftest run-scoped-fields-survive-descending
+  (testing ":title, :scheme and :quest-item outlive the floor they were set on"
+    (let [d2 (w/change-floor (run-world) 2)]
+      (is (= "The Chasms" (:title d2)))
+      (is (= [1 2 3] (:scheme d2)))
+      (is (= :amulet (:quest-item d2))))))
+
+(deftest run-scoped-fields-survive-revisiting
+  (testing "and a restored floor keeps them too"
+    (let [d1 (-> (run-world) (w/change-floor 2) (w/change-floor 1))]
+      (is (= "The Chasms" (:title d1)))
+      (is (= [1 2 3] (:scheme d1)))
+      (is (= :amulet (:quest-item d1))))))
+
+(deftest gameplay-seed-chain-survives-a-transition
+  (testing "seed-input is the origin seed on every floor, not the floor lineage"
+    (let [w0 (run-world)
+          d2 (w/change-floor w0 2)
+          d1 (w/change-floor d2 1)]
+      (is (= 7 (:seed-input w0)))
+      (is (= 7 (:seed-input d2)))
+      (is (= 7 (:seed-input d1))))))
+
+(deftest depth-and-floors-track-the-transition
+  (testing "descending records the departed floor and advances :depth"
+    (let [w0 (run-world)
+          d2 (w/change-floor w0 2)]
+      (is (= 1 (:depth w0)))
+      (is (= 2 (:depth d2)))
+      (is (contains? (:floors d2) 1)))))
