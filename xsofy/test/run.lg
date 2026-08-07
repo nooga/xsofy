@@ -11,6 +11,7 @@
             [xsofy.test.det-test]
             [xsofy.test.world-seed-test]
             [xsofy.test.world-shape-test]
+            [xsofy.test.percept-test]
             [xsofy.test.dispatch-test]
             [xsofy.test.serialize-test]
             [xsofy.test.dag-test]

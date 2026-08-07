@@ -60,7 +60,11 @@
         pos (:pos entity)]
     (cond
       (nil? pos) #{}
-      (and (= entity-id :player) (some? (:fov world))) (:fov world)
+      ;; Non-empty, not merely present: world/empty-world seeds :fov to #{},
+      ;; so a world that hasn't been through update-fov yet carries the key
+      ;; with nothing in it. fov/compute-fov always includes the origin cell,
+      ;; so an empty set can only mean "not computed" — never a real result.
+      (and (= entity-id :player) (seq (:fov world))) (:fov world)
       :else
       (let [[x y] pos
             radius (or (:fov-radius opts) default-fov-radius)

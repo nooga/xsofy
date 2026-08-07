@@ -1,0 +1,51 @@
+(ns xsofy.test.percept-test
+  "entity-fov's cache sentinel.
+
+   The player's FOV is precomputed on the world by update-fov; NPCs get it
+   computed on demand. entity-fov decides which case it's in by looking at
+   :fov, so what an empty :fov means is load-bearing — and since #176 gave
+   empty-world a :fov of #{}, a world that hasn't been through update-fov
+   carries the key with nothing in it."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.percept :as percept]
+            [xsofy.terrain :as terrain]
+            [xsofy.world :as w]))
+
+(defn- room-world
+  "A 10x10 stone room with the player at [2 2] and no FOV computed yet —
+   the shape a property-test generator or scenario builder produces."
+  []
+  (let [t (terrain/make-terrain 10 10)]
+    (terrain/carve-room! t 10 1 1 8 8)
+    (-> (w/empty-world 10 10 0)
+        (assoc :terrain t)
+        (assoc-in [:entities :player]
+                  {:id :player :template :player :pos [2 2]
+                   :body {:hp 10 :max-hp 10}}))))
+
+(deftest player-fov-is-computed-when-the-world-has-none-yet
+  (testing "an empty :fov means not-computed, not an empty result"
+    (let [fov (percept/entity-fov (room-world) :player {})]
+      (is (seq fov))
+      (is (contains? fov [2 2])))))
+
+(deftest player-fov-uses-the-precomputed-set-when-there-is-one
+  (testing "a populated :fov is trusted, not recomputed"
+    (let [world (assoc (room-world) :fov #{[9 9]})]
+      (is (= #{[9 9]} (percept/entity-fov world :player {}))))))
+
+(deftest update-fov-populates-what-entity-fov-then-returns
+  (testing "the real path: update-fov fills :fov and entity-fov hands it back"
+    (let [world (w/update-fov (room-world))]
+      (is (seq (:fov world)))
+      (is (= (:fov world) (percept/entity-fov world :player {}))))))
+
+(deftest npc-fov-is-always-computed
+  (testing "NPCs never read the player's cached set"
+    (let [world (-> (w/update-fov (room-world))
+                    (assoc-in [:entities :rat-1]
+                              {:id :rat-1 :template :rat :pos [7 7]
+                               :body {:hp 3} :ai {:state :idle}}))
+          rat-fov (percept/entity-fov world :rat-1 {})]
+      (is (contains? rat-fov [7 7]))
+      (is (not= (:fov world) rat-fov)))))
