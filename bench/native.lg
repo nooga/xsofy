@@ -36,11 +36,13 @@
   (println "=== xsofy native engine benchmark ===")
   (println (format "trials per fixture: %d (each a distinct seed); turns vary — see n" TRIALS))
   (println)
-  (println (format "%-12s %6s %6s %6s %6s %6s" "fixture" "n" "avg" "p50" "p95" "max"))
-  (println (format "%-12s %6s %6s %6s %6s %6s" "--------" "------" "------" "------" "------" "------"))
+  (println (format "%-12s %6s %9s %9s %9s %9s" "fixture" "n" "avg-ms" "p50-ms" "p95-ms" "max-ms"))
+  (println (format "%-12s %6s %9s %9s %9s %9s" "--------" "------" "------" "------" "------" "------"))
   (doseq [f fixtures]
-    (let [s (perf/run-fixture f seeds 1)]   ; :per-seed ignored here
-      (println (format "%-12s %6d %5dms %5dms %5dms %5dms"
-                       (str (:name s)) (:n s) (:avg s) (:p50 s) (:p95 s) (:max s))))))
+    (let [s  (perf/run-fixture f seeds 1)   ; :per-seed ignored here
+          ms (fn [us] (/ (double us) 1000.0))]
+      (println (format "%-12s %6d %9.3f %9.3f %9.3f %9.3f"
+                       (str (:name s)) (:n s)
+                       (ms (:avg s)) (ms (:p50 s)) (ms (:p95 s)) (ms (:max s)))))))
 
 (-main)
