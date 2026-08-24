@@ -1,5 +1,7 @@
 # Xs of Y
 
+> 💬 Come talk about Xs of Y in `#xsofy` on [The Fixpoint](https://discord.gg/Ky535CQ9pj) Discord.
+
 A roguelike written in my [lisp](https://github.com/nooga/let-go), where the magic system is a lisp. 
 
 > Note: This is not finished! It's playable but mild peril and unscheduled explosions are to be expected.
