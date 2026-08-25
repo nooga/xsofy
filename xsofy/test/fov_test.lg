@@ -1,0 +1,104 @@
+(ns xsofy.test.fov-test
+  "Occlusion: the part of sight that a wall is supposed to take away.
+
+   compute-fov (recursive shadowcasting) and terrain/has-clear-line?
+   (Bresenham) are the two answers to 'can this point see that one', and
+   both were untested before #184 — every FOV test ran in an open room, so
+   an implementation that ignored walls outright would have passed.
+
+   The base fixture is one room split by a solid column, which makes the
+   assertions independent of the casting order: the two halves share no
+   open cell, so nothing on the far side is reachable by any route. Opening
+   a single gap in that column then pins the harder half of shadowcasting,
+   where sight passes through the gap but not around it."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.fov :as fov]
+            [xsofy.terrain :as terrain]
+            [xsofy.world :as w]))
+
+(def ^:private size 10)
+(def ^:private radius 12) ; larger than the room: reach never limits these tests
+
+(defn- room
+  "A 10x10 stone room carved to a 8x8 floor. With `divided?`, a column of
+   wall-stone at x=5 spans the full interior height, sealing [1..4] off
+   from [6..8]."
+  [divided?]
+  (let [t (terrain/make-terrain size size)]
+    (terrain/carve-room! t size 1 1 8 8)
+    (when divided?
+      (doseq [y (range 1 9)]
+        (terrain/tset! t size 5 y 8)))
+    t))
+
+(defn- room-with-doorway
+  "The divided room, but with one open cell at [5 4] — the only way through."
+  []
+  (let [t (terrain/make-terrain size size)]
+    (terrain/carve-room! t size 1 1 8 8)
+    (doseq [y (range 1 9)]
+      (when (not= y 4)
+        (terrain/tset! t size 5 y 8)))
+    t))
+
+(defn- world-with [terrain]
+  (assoc (w/empty-world size size 0) :terrain terrain))
+
+(defn- visible-from [terrain x y]
+  (fov/compute-fov terrain size size x y radius))
+
+(deftest a-wall-is-visible-but-does-not-let-sight-past-it
+  (testing "the blocking tile is lit; the cells in its shadow are not"
+    (let [seen (visible-from (room true) 2 2)]
+      (is (contains? seen [2 2]) "the origin is always included")
+      (is (contains? seen [4 2]) "open floor short of the wall")
+      (is (contains? seen [5 2]) "the wall itself, which is what you look at")
+      (is (not (contains? seen [6 2])) "immediately behind the wall")
+      (is (not (contains? seen [7 2])) "further behind it")
+      (is (not (contains? seen [7 7])) "diagonally behind it"))))
+
+(deftest an-open-room-sees-across
+  (testing "control: the same room without the column hides nothing"
+    (let [seen (visible-from (room false) 2 2)]
+      (is (contains? seen [7 2]))
+      (is (contains? seen [7 7])))))
+
+(deftest occlusion-is-symmetric
+  (testing "the far side is equally blind looking back"
+    (let [divided (room true)]
+      (is (not (contains? (visible-from divided 2 2) [7 2])))
+      (is (not (contains? (visible-from divided 7 2) [2 2]))))))
+
+(deftest a-doorway-admits-sight-only-along-its-own-line
+  (testing "level with the gap, the far side is lit through it and nowhere else"
+    (let [seen (fov/compute-fov (room-with-doorway) size size 2 4 radius)]
+      (is (contains? seen [5 4]) "the gap itself")
+      (is (contains? seen [7 4]) "through the gap, straight ahead")
+      (is (contains? seen [8 4]) "as far as the far wall")
+      (is (not (contains? seen [6 3])) "one row up, already in shadow")
+      (is (not (contains? seen [6 5])) "one row down, likewise")
+      (is (not (contains? seen [7 7])) "the rest of the far half stays dark"))))
+
+(deftest radius-bounds-sight-by-euclidean-distance
+  (testing "reach is a circle, not a square: the diagonal runs out first"
+    (let [open (room false)
+          r2 (fov/compute-fov open size size 2 2 2)
+          r3 (fov/compute-fov open size size 2 2 3)]
+      (is (contains? r2 [4 2]) "two cells along the row is within radius 2")
+      (is (not (contains? r2 [5 2])) "three is not")
+      (is (contains? r3 [5 2]) "and is once the radius grows")
+      (is (not (contains? r2 [4 4]))
+          "the diagonal is 2.83 away, so radius 2 excludes it")
+      (is (contains? r3 [4 4]) "radius 3 reaches it"))))
+
+(deftest has-clear-line-stops-at-an-obstruction
+  (testing "Bresenham agrees with the shadowcaster about the same wall"
+    (let [divided (world-with (room true))]
+      (is (terrain/has-clear-line? divided 2 2 4 2)
+          "both endpoints on the near side")
+      (is (not (terrain/has-clear-line? divided 2 2 7 2))
+          "the column sits between them"))))
+
+(deftest has-clear-line-is-clear-in-an-open-room
+  (testing "control: without the column the same pair has a line"
+    (is (terrain/has-clear-line? (world-with (room false)) 2 2 7 2))))

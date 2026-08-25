@@ -1,11 +1,17 @@
 (ns xsofy.test.percept-test
-  "entity-fov's cache sentinel.
+  "entity-fov's cache sentinel, and what it returns once an obstruction
+   is in the way.
 
    The player's FOV is precomputed on the world by update-fov; NPCs get it
    computed on demand. entity-fov decides which case it's in by looking at
    :fov, so what an empty :fov means is load-bearing — and since #176 gave
    empty-world a :fov of #{}, a world that hasn't been through update-fov
-   carries the key with nothing in it."
+   carries the key with nothing in it.
+
+   The occlusion tests below cover the other half (#184): every cache case
+   here runs in an open room where everything can see everything, so they
+   would pass just as well against an FOV that ignored walls. The geometry
+   itself is pinned in xsofy.test.fov-test."
   (:require [test :refer [deftest is testing]]
             [xsofy.percept :as percept]
             [xsofy.terrain :as terrain]
@@ -22,6 +28,22 @@
         (assoc-in [:entities :player]
                   {:id :player :template :player :pos [2 2]
                    :body {:hp 10 :max-hp 10}}))))
+
+(defn- rat-at
+  "room-world's rat: enough of an entity for entity-fov to place it."
+  [pos]
+  {:id :rat-1 :template :rat :pos pos :body {:hp 3} :ai {:state :idle}})
+
+(defn- divided-room-world
+  "room-world with a stone column at x=5 spanning the full interior, sealing
+   the player at [2 2] into the left half and a rat at [7 2] into the right.
+   The two halves share no open cell, so neither entity has a line to the
+   other by any route."
+  []
+  (let [world (room-world)]
+    (doseq [y (range 1 9)]
+      (terrain/tset! (:terrain world) 10 5 y 8))
+    (assoc-in world [:entities :rat-1] (rat-at [7 2]))))
 
 (deftest player-fov-is-computed-when-the-world-has-none-yet
   (testing "an empty :fov means not-computed, not an empty result"
@@ -49,3 +71,23 @@
           rat-fov (percept/entity-fov world :rat-1 {})]
       (is (contains? rat-fov [7 7]))
       (is (not= (:fov world) rat-fov)))))
+
+(deftest an-obstruction-truncates-the-fov-at-the-wall
+  (testing "the wall itself is seen; nothing behind it is"
+    (let [fov (percept/entity-fov (divided-room-world) :player {})]
+      (is (contains? fov [4 2]) "open floor on the player's side")
+      (is (contains? fov [5 2]) "the blocking tile is visible, being lit")
+      (is (not (contains? fov [6 2])) "first cell in the wall's shadow")
+      (is (not (contains? fov [7 2])) "the far side of the room"))))
+
+(deftest entities-on-opposite-sides-of-an-obstruction-cannot-see-each-other
+  (testing "occlusion holds in both directions, not just from the player"
+    (let [world (divided-room-world)]
+      (is (not (contains? (percept/entity-fov world :player {}) [7 2])))
+      (is (not (contains? (percept/entity-fov world :rat-1 {}) [2 2]))))))
+
+(deftest the-same-room-without-the-obstruction-is-mutually-visible
+  (testing "control: the blindness above is the wall, not an empty FOV"
+    (let [world (assoc-in (room-world) [:entities :rat-1] (rat-at [7 2]))]
+      (is (contains? (percept/entity-fov world :player {}) [7 2]))
+      (is (contains? (percept/entity-fov world :rat-1 {}) [2 2])))))
