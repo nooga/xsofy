@@ -16,17 +16,20 @@
 ;; their seed strategy (spread of worlds vs a pinned world) via run-fixture args.
 
 (defn time-turn
-  "Run one turn; return [new-world ms]."
+  "Run one turn; return [new-world µs]. Microseconds because whole-ms
+   sampling floor-quantizes a ~9ms turn to 9, hiding sub-ms deltas from
+   every downstream stat; µs keeps samples as small ints (a 32-bit int
+   still holds ~35min)."
   [w key-str]
   (let [k  (input/parse-key key-str)
-        t0 (System/currentTimeMillis)
+        t0 (System/nanoTime)
         w' (world/update-world w k)
-        dt (- (System/currentTimeMillis) t0)]
+        dt (quot (- (System/nanoTime) t0) 1000)]
     [w' dt]))
 
 (defn run-trial
   "One trial: fresh world at `seed`, up to n turns (stops early on player
-   death). Returns a vector of per-turn ms."
+   death). Returns a vector of per-turn µs."
   [keystroke-fn n seed]
   (loop [w (world/make-world 79 30 seed)
          i 0
@@ -49,11 +52,12 @@
   ;; trials, or a zero-turn fixture).
   (let [n (count samples)]
     (if (zero? n)
-      {:n 0 :avg 0 :p50 0 :p95 0 :max 0}
+      {:n 0 :avg 0 :p50 0 :p95 0 :max 0 :unit :us}
       (let [sorted (vec (sort samples))
             sum (reduce + samples)]
-        {:n   n
-         :avg (quot sum n)
+        {:n    n
+         :unit :us
+         :avg  (quot sum n)
          :p50 (percentile sorted 0.50)
          :p95 (percentile sorted 0.95)
          :max (last sorted)}))))
