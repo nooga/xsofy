@@ -2,7 +2,7 @@
   "Deterministic randomness via a rolling hash chain over world :seed.
 
    Model: the world IS the RNG state. Every det/* helper:
-     1. Folds the operation's signature into (:seed world) via xxh3-64,
+     1. Folds the operation's signature into (:seed world) via seed-hash,
         producing a new seed.
      2. Derives a return value from the new seed.
      3. Returns [value world'] where world' has :seed advanced.

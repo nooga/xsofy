@@ -13,11 +13,11 @@
   (testing "same seed → same title; known golden for 12345"
     (is (= (first (title/generate-title {:seed 12345}))
            (first (title/generate-title {:seed 12345}))))
-    (is (= "Chasms of Infinity" (first (title/generate-title {:seed 12345}))))))
+    (is (= "Cells of Nil" (first (title/generate-title {:seed 12345}))))))
 
 (deftest seeded-quest-is-deterministic
   (testing "quest threads from the post-title-and-scheme rng (matches new-game order)"
     (let [[_ r] (title/generate-title {:seed 12345})
           [_ r] (title/pick-scheme r)
           [quest _] (title/generate-quest r)]
-      (is (= "Spatula of Unmatched Delimiters" (:item quest))))))
+      (is (= "Comb of Forgotten Knowledge" (:item quest))))))

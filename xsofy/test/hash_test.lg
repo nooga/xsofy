@@ -328,66 +328,70 @@
      (h/combine seed [:combat :hit id])))
 
 ;; ============================================================================
-;; Native xxh3 parity — pre-swap golden values
+;; Seed-hash goldens and the width-portability guard
 ;; ============================================================================
 ;;
-;; These tests pin the output of the primitive xxh3-64 function before and
-;; after swapping from pure-Lisp to native xxh3 interop. The values are
-;; captured from the current pure-Lisp implementation and must remain
-;; identical after the swap to ensure value parity end-to-end.
+;; These pin seed-hash's output so an accidental change to the hash — or to the
+;; salt encoding feeding it — fails loudly instead of silently regenerating
+;; every world.
+;;
+;; They no longer double as a canonical-algorithm proof. The previous matrix
+;; cross-checked three values against `xxh3sum` to show the implementation was
+;; real XXH3 rather than merely self-consistent. seed-hash is now backed by
+;; let-go's `murmur3` namespace, and reference verification for that algorithm
+;; lives upstream in let-go's hash_murmur3_test.go (checked against Austin
+;; Appleby's reference and twmb/murmur3). What xsofy needs to guard here is
+;; different and is covered by seed-hash-is-width-portable below: every value
+;; must fit in 31 bits, because that is what makes one seed produce one world
+;; on 64-bit native and 32-bit wasm alike.
 
-(deftest native-xxh3-preserves-values
-  (testing "primitive + combine match the pre-swap goldens"
-    (is (= -7685981735718036227 (h/xxh3-64 (.getBytes "hello") 0)))
-    (is (= 2970350411872380904 (h/combine 0 [:int-in 0 5])))
-    (is (= -7208530052248696174 (h/combine 12345 [:worldgen :rooms 3])))))
+(deftest seed-hash-preserves-values
+  (testing "primitive + combine match pinned goldens"
+    (is (= 1102945026 (h/seed-hash (.getBytes "hello") 0)))
+    (is (= 1477838201 (h/combine 0 [:int-in 0 5])))
+    (is (= 1764233100 (h/combine 12345 [:worldgen :rooms 3])))))
 
-;; --- XXH3-64 parity matrix (#64 coverage) ---
-;; The native xxh3 swap claims bit-identical output. Exercise every length
-;; regime (0, 1-3, 4-8, 9-16, 17-128, 129-240, >=241), four seeds (incl. -1 and
-;; the i64-min high-bit seed), over a byte pattern spanning 0..255 (incl.
-;; high-bit bytes). Goldens are pinned from the native impl as a regression
-;; guard; the seed-0 ASCII lengths are ALSO cross-checked against the xxhsum
-;; reference (xxh3-64-canonical-anchor) — proving canonical XXH3, not just
-;; self-consistency.
+;; Exercise every length regime (0, 1-3, 4-8, 9-16, 17-128, 129-240, >=241) and
+;; four seeds (including -1 and the i64-min high-bit seed) over a byte pattern
+;; spanning 0..255.
 
 (defn- parity-bytes [len]
   (vec (map (fn [i] (mod (+ (* i 7) 3) 256)) (range len))))
 
-(def xxh3-goldens   ;; [len seed expected-signed-i64]
-  [[0 0 3244421341483603138] [0 42 -5752995443491633966] [0 -1 5478965906984379733] [0 -9223372036854775808 2295502664846295223] 
-   [1 0 1433843135270481901] [1 42 -3402403221918120053] [1 -1 6486654747916874149] [1 -9223372036854775808 -2606653793733551104] 
-   [2 0 2058273368586827884] [2 42 -5210129542793068912] [2 -1 -5903463594907183358] [2 -9223372036854775808 6747505709522398102] 
-   [3 0 -6266602912829716452] [3 42 4210504606188645505] [3 -1 -7624902215710904990] [3 -9223372036854775808 1061310388000669572] 
-   [4 0 7895465118229274323] [4 42 6741285316129405867] [4 -1 8409064119237577299] [4 -9223372036854775808 8254836980709382567] 
-   [8 0 6941064856527638883] [8 42 6028232796883888945] [8 -1 273030086515015694] [8 -9223372036854775808 221608830687774098] 
-   [9 0 -72226354546400344] [9 42 4895441352443361382] [9 -1 -2968380293691030347] [9 -9223372036854775808 7065379985857066712] 
-   [16 0 -5131753158909839995] [16 42 7717855803529579625] [16 -1 1030787158843406597] [16 -9223372036854775808 1364655214839888083] 
-   [17 0 8163341949877205007] [17 42 1480235673439454685] [17 -1 1891129883818647979] [17 -9223372036854775808 4601837806337283379] 
-   [32 0 1873302701886544469] [32 42 -2587171663894638234] [32 -1 -8924407327520019911] [32 -9223372036854775808 5811813631123090432] 
-   [33 0 4486878507168070088] [33 42 -6972151545539212926] [33 -1 -7144504100572290867] [33 -9223372036854775808 6410234748670810304] 
-   [64 0 2917965298538373825] [64 42 3125120894686401078] [64 -1 3697033526171034958] [64 -9223372036854775808 4134844064752092582] 
-   [65 0 -9038134159117547962] [65 42 -4347535536489798336] [65 -1 4849313835616472578] [65 -9223372036854775808 6499079443599995228] 
-   [96 0 -1115511928276236477] [96 42 1714530176466982915] [96 -1 -5085466951200874187] [96 -9223372036854775808 6127883859940681279] 
-   [97 0 2137665177113230204] [97 42 -1772853288913263733] [97 -1 -1409706316387374559] [97 -9223372036854775808 6378570833728503333] 
-   [128 0 7440608504995537343] [128 42 -1227684708551495651] [128 -1 7987159134263394587] [128 -9223372036854775808 2351904518086223117] 
-   [129 0 -4150982730466284604] [129 42 5618612244330248389] [129 -1 -1742298305579290365] [129 -9223372036854775808 6562292499258687125] 
-   [240 0 7229805477010515663] [240 42 8226217213501205987] [240 -1 -5411215479245381783] [240 -9223372036854775808 -3659482295142451899] 
-   [241 0 -8364630114420064745] [241 42 6484558177976692455] [241 -1 8445542943928349547] [241 -9223372036854775808 -2099098092811495501] 
-   [256 0 4339360625268998362] [256 42 8379074611694872873] [256 -1 -3005765564630975547] [256 -9223372036854775808 4744833402987608771] 
-   [1024 0 -7241394453710343503] [1024 42 6923646769576009997] [1024 -1 1252174458504800494] [1024 -9223372036854775808 -9167332650469432381] 
-   ])
+(def seed-hash-goldens   ;; [len seed expected]
+  [[0 0 0] [0 42 2048623907] [0 -1 1180423917] [0 -9223372036854775808 791782547]
+   [1 0 812269145] [1 42 1653194851] [1 -1 624502834] [1 -9223372036854775808 183230779]
+   [2 0 1073152866] [2 42 483187259] [2 -1 436717354] [2 -9223372036854775808 1684988327]
+   [3 0 1941257678] [3 42 998077824] [3 -1 10270814] [3 -9223372036854775808 1694072933]
+   [4 0 1590733318] [4 42 72867839] [4 -1 804486275] [4 -9223372036854775808 1351446852]
+   [8 0 288543677] [8 42 873782369] [8 -1 574969514] [8 -9223372036854775808 786176798]
+   [9 0 184212406] [9 42 78849358] [9 -1 594119228] [9 -9223372036854775808 92551885]
+   [16 0 797920929] [16 42 295367446] [16 -1 800840997] [16 -9223372036854775808 1995503981]
+   [17 0 2119414055] [17 42 1321438816] [17 -1 1900455638] [17 -9223372036854775808 306590319]
+   [32 0 134628351] [32 42 2014317476] [32 -1 809399995] [32 -9223372036854775808 203888421]
+   [33 0 1157050138] [33 42 1751178403] [33 -1 679542310] [33 -9223372036854775808 1491804407]
+   [64 0 543030435] [64 42 101683436] [64 -1 943549494] [64 -9223372036854775808 1162923379]
+   [65 0 1052191487] [65 42 1001989942] [65 -1 1181681864] [65 -9223372036854775808 1588954233]
+   [96 0 488561389] [96 42 1251759458] [96 -1 709136814] [96 -9223372036854775808 1169070725]
+   [97 0 650579318] [97 42 1593085744] [97 -1 270062831] [97 -9223372036854775808 1223768939]
+   [128 0 1432411458] [128 42 883972198] [128 -1 1572073821] [128 -9223372036854775808 1385975622]
+   [129 0 255229977] [129 42 52644376] [129 -1 634545434] [129 -9223372036854775808 749502140]
+   [240 0 1457894864] [240 42 726143504] [240 -1 1074963988] [240 -9223372036854775808 547549501]
+   [241 0 447451310] [241 42 1410016103] [241 -1 127730934] [241 -9223372036854775808 1431023887]
+   [256 0 1124160281] [256 42 1851978619] [256 -1 465928355] [256 -9223372036854775808 2095511004]
+   [1024 0 1256754526] [1024 42 606337897] [1024 -1 933692235] [1024 -9223372036854775808 1704686599]])
 
-(deftest xxh3-64-parity-matrix
-  (testing "native xxh3-64 matches pinned goldens across length/seed/byte regimes"
-    (doseq [g xxh3-goldens]
+(deftest seed-hash-parity-matrix
+  (testing "seed-hash matches pinned goldens across length/seed/byte regimes"
+    (doseq [g seed-hash-goldens]
       (let [len (nth g 0) seed (nth g 1) expected (nth g 2)]
-        (is (= expected (h/xxh3-64 (parity-bytes len) seed))
-            (str "xxh3-64 len=" len " seed=" seed))))))
+        (is (= expected (h/seed-hash (parity-bytes len) seed))
+            (str "seed-hash len=" len " seed=" seed))))))
 
-(deftest xxh3-64-canonical-anchor
-  (testing "seed-0 ASCII lengths match the xxhsum XXH3_64 reference (canonical proof,
-            not just self-consistency). Reference: printf '<parity-bytes len>' | xxh3sum"
-    (is (= 3244421341483603138 (h/xxh3-64 (parity-bytes 0) 0))  "len 0  == xxh3sum 2d06800538d394c2")
-    (is (= 1433843135270481901 (h/xxh3-64 (parity-bytes 1) 0))  "len 1  == xxh3sum 13e608bc156defed")
-    (is (= 8163341949877205007 (h/xxh3-64 (parity-bytes 17) 0)) "len 17 == xxh3sum 714a04408e79b80f")))
+(deftest seed-hash-is-width-portable
+  (testing "every seed-hash value is non-negative and fits in 31 bits, so a seed
+            produces the same world on 64-bit native and 32-bit wasm"
+    (doseq [g seed-hash-goldens]
+      (let [v (nth g 2)]
+        (is (and (>= v 0) (< v 2147483648))
+            (str "value " v " escapes the 31-bit range at len=" (nth g 0) " seed=" (nth g 1)))))))

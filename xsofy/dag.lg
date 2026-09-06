@@ -27,19 +27,19 @@
 
 (defn commit-id
   "Per-turn content address of a world: its rolling :seed hash. det/advance
-   folds every action into :seed via xxh3-64, so :seed already identifies a
+   folds every action into :seed via seed-hash, so :seed already identifies a
    world within a game (same seed-input + action-log ⇒ same :seed). O(1)."
   [world]
   (or (:seed world) 0))
 
 (defn checkpoint-hash
-  "OPTIONAL full content hash: xxh3-64 of the world's canonical bytes (~65ms on
+  "OPTIONAL full content hash: seed-hash of the world's canonical bytes (~65ms on
    a full floor — see tools/). NOT for per-turn identity (that's commit-id).
    Compute only when non-history-derived state is merged into a world (save/load
    reconstruction, external injection) to re-anchor/verify content :seed can't
    account for."
   [world]
-  (hash/xxh3-64 (ser/canonical-bytes world)))
+  (hash/seed-hash (ser/canonical-bytes world)))
 
 (defn make-game-state
   "Wrap an initial world as a fresh game-state. The world becomes the replay

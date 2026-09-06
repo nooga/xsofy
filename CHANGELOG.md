@@ -6,6 +6,16 @@ player sees from the previous release; intra-cycle churn (introduced and fixed
 between tags) is omitted. Web-only items are marked `(web)`; everything else
 applies to both builds.
 
+## Unreleased
+
+- **Seeds from v0.0.2 and earlier no longer reproduce their old worlds.** The
+  deterministic seed hash moved from xxh3 to murmur3 so the game can build for
+  TinyGo, which has no xxh3 namespace at all. A given seed is still fully
+  deterministic and now produces the *same* world on 64-bit native and 32-bit
+  wasm alike, which it did not before; but the world a pre-existing seed names
+  has changed. Accepted knowingly: seed sharing predates any released run
+  worth preserving, and re-pinning seeds is deferred rather than solved.
+
 ## v0.0.2
 
 - Runes render in the browser terminal — v0.0.1 showed tofu/overflow, because the

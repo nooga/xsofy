@@ -1,5 +1,5 @@
 (ns xsofy.hash
-  "xxh3-64 hash function via native let-go xxh3 interop, plus a canonical
+  "64-bit seed hash via let-go's native murmur3 interop, plus a canonical
    byte encoder for salt-keys (v1 encoding) and a three-layer macro pipeline
    for compile-time folding of constant salt-key prefixes.
 
@@ -85,18 +85,25 @@
 
 
 ;; ============================================================================
-;; xxh3-64 public API (native interop)
+;; seed-hash public API (native interop)
 ;; ============================================================================
 
-(defn xxh3-64
-  "xxh3-64 of a byte vector with optional seed (default 0). Backed by let-go's
-   native xxh3 interop (github.com/zeebo/xxh3) — bit-identical to the former
-   pure-Lisp implementation (verified at seed 0 and nonzero)."
-  ([input] (xxh3-64 input 0))
+(defn seed-hash
+  "64-bit seed hash of a byte vector with optional seed (default 0). Backed by
+   let-go's native `murmur3` namespace.
+
+   murmur3 rather than xxh3 because xxh3's bindings are reflect-boxed and its
+   implementation is assembly-only on arm64/amd64, so a TinyGo build has no
+   `xxh3` namespace at all and any call returns nil. murmur3 is registered on
+   every let-go build and masks its results to 31 bits, so a value is identical
+   on 64-bit native and 32-bit wasm — which is what lets one seed produce one
+   world across every target. Reference verification for the algorithm lives
+   upstream in let-go's hash_murmur3_test.go."
+  ([input] (seed-hash input 0))
   ([input seed]
    (let [len (count input)
          ba  (if (zero? len) (byte-array 0) (byte-array input))]
-     (xxh3/HashSeed ba seed))))
+     (murmur3/HashSeed ba seed))))
 
 ;; ============================================================================
 ;; Salt-key encoding (v1)
@@ -220,13 +227,13 @@
      (mod (xsofy.hash/combine (:seed world) [:combat :hit a t]) (- hi lo))
 
    plus lo. The salt-key passes through encode-salt to canonical bytes, then
-   xxh3-64 mixes those bytes against the seed.
+   seed-hash mixes those bytes against the seed.
 
    For salt-keys with constant prefixes the with-folded-salt macro folds
-   the prefix at compile time and calls xxh3-64 directly on a precomputed
+   the prefix at compile time and calls seed-hash directly on a precomputed
    byte buffer; combine itself stays a plain hot-path runtime call."
   [seed salt-key]
-  (xxh3-64 (encode-salt salt-key) seed))
+  (seed-hash (encode-salt salt-key) seed))
 
 ;; ============================================================================
 ;; Macro Layer 1 — compile-time fold of constant salt-key prefix
@@ -235,7 +242,7 @@
 ;; with-folded-salt wraps (combine seed salt-key). At expansion time it
 ;; inspects the salt-key:
 ;;
-;;   * fully-literal vector  -> emit (xxh3-64 <precomputed-bytes> seed)
+;;   * fully-literal vector  -> emit (seed-hash <precomputed-bytes> seed)
 ;;   * partial-literal vector -> emit code that encodes only the variable
 ;;                               tail at runtime and prepends the precomputed
 ;;                               prefix bytes before hashing
@@ -283,7 +290,7 @@
 
    This eliminates encode-salt overhead for the literal prefix on every
    call. For salt-keys with no variable elements, the whole prefix-encoding
-   step is constant-folded (only the xxh3-64 mix runs at call time, since
+   step is constant-folded (only the seed-hash mix runs at call time, since
    seed is still a runtime value).
 
    For salt-keys that aren't vector literals (e.g. a symbol referring to
@@ -294,12 +301,12 @@
   [seed salt-key]
   (cond
     ;; Fully-literal vector: precompute the entire byte buffer at expansion
-    ;; time and emit a direct xxh3-64 call. The seed is still a runtime
+    ;; time and emit a direct seed-hash call. The seed is still a runtime
     ;; value (it's whatever expression the caller wrote), so we can't fold
     ;; the hash itself — only the input bytes.
     (and (vector? salt-key) (every? salt-literal? salt-key))
     (let [bytes-literal (encode-salt salt-key)]
-      `(xsofy.hash/xxh3-64 ~bytes-literal ~seed))
+      `(xsofy.hash/seed-hash ~bytes-literal ~seed))
 
     ;; Partially-literal vector: fold the leading literal prefix, emit
     ;; runtime code for the variable tail.
@@ -330,7 +337,7 @@
                                      ~(vec tail))
                  full-bytes# (into (into [4 ~full-len] ~prefix-elements-bytes)
                                    tail-bytes#)]
-             (xsofy.hash/xxh3-64 full-bytes# ~seed)))))
+             (xsofy.hash/seed-hash full-bytes# ~seed)))))
 
     ;; salt-key is not a vector literal — must be a symbol or other expression
     ;; whose value is only known at runtime. Defer to the plain combine call.
@@ -360,6 +367,6 @@
 ;;     for known shapes) is a further perf win but adds significant
 ;;     compile-time machinery. Same YAGNI argument.
 ;;
-;; Trigger to revisit: profile xxh3-64 in the deterministic-world balance
+;; Trigger to revisit: profile seed-hash in the deterministic-world balance
 ;; harness. If salt-encoding shows up as a hot path, build Layer 2 first
 ;; (it's the smaller of the two and has narrower scope).
