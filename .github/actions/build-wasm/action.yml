@@ -24,11 +24,27 @@ runs:
   steps:
     # 1. Shell-less bundle: -w-shell none emits glue-only HTML exposing
     #    window.LetGoHost, so a project can inject its own client shell (#245).
+    #
+    #    -w-wasm external emits main.wasm alongside a small index.html and
+    #    boots it with instantiateStreaming, instead of baking a gzip-base64
+    #    payload into the HTML.
+    #
+    #    This is a boot-CPU win, not a bytes win. The inline path re-runs atob
+    #    + DecompressionStream + instantiate on every load; streaming compiles
+    #    during the download. Measured on two GitHub Pages deploys differing
+    #    only by this flag, 10 scored rounds each, time to the xterm grid:
+    #
+    #      cold  952ms -> 272ms  (0.286x)
+    #      warm  331ms ->  45ms  (0.136x)
+    #
+    #    External ships 3.7% MORE on the wire (5,866,730 B in one request
+    #    against 6,085,397 B in two, both gzipped by Pages) and still finishes
+    #    in a seventh of the time warm.
     - name: Build WASM (shell-less)
       shell: bash
       run: |
         if [ -n "${{ inputs.letgo-src }}" ]; then export LETGO_SRC="${{ inputs.letgo-src }}"; fi
-        let-go -w "${{ inputs.dist }}" -w-shell none main.lg
+        let-go -w "${{ inputs.dist }}" -w-shell none -w-wasm external main.lg
 
     # 2. Inject xsofy's own shell: rune font (Fairfax HD, OFL) + ?font=system.
     #    Without this the bundle ships let-go's generic shell (no rune face,
