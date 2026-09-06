@@ -1,14 +1,23 @@
 # let-go version for building xsofy — single source of truth.
 # deploy-pages.yml and the test.yml floor lane both resolve the version from here.
 #
-# Pinned to a commit (not a v-tag) because the shell now binds the #app host
-# mount from nooga/let-go#378, which no release carries yet:
+# Pinned to a commit (not a v-tag) because the pieces xsofy needs keep landing
+# ahead of let-go's release cadence:
 #   - #378 renames the -w-shell none host mount #terminal -> #app and ships it
 #     visible; the shell (tools/xsofy-shell.html) binds #app.
+#   - #522 adds the `murmur3` namespace, which xsofy.hash/seed-hash calls. It
+#     merged 2026-07-23, three days after v1.12.2 (2026-07-20), so no release
+#     tag carries it. This is the constraint that moved the pin.
 # Still includes #245 (client-owned shell) and #339 (js/url-param host seam)
 # from v1.11.1.
 #
+# This commit is the one xsofy was verified against on 2026-09-05: full test
+# suite green (328 tests, 2942 assertions), stock-Go and TinyGo wasm bundles
+# both built via the shipping three-step (-w-shell none -> inject_shell.lg ->
+# patch_wasm_coi.lg), both boot and play, and the two produce byte-identical
+# worlds at a fixed seed.
+#
 # NOTE: this is a SHA, not a release tag, so the build must check out + build
 # let-go at this commit — a stale prebuilt `lg` silently emits the old #terminal
-# frame. Re-pin to a release tag once let-go ships #378.
-cf195a67fd8aa43286319519c2512363caa96a52
+# frame. Re-pin to a release tag once let-go ships a release containing #522.
+091111861106b48b008fcf7ac3c4ed451410821b
