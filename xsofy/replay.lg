@@ -33,7 +33,11 @@
    ABI — action keywords (and map-action :type/:id names) are wire-format ABI.
    Renaming one breaks all existing replay codes; the format does not migrate.")
 
-(def ^:private VERSION 1)
+;; v2: the seed hash moved from xxh3-64 to murmur3 (31-bit), so a v1 code's
+;; (seed, action-log) replays into a different world than it recorded. The
+;; bytes still decode, which is why the version has to reject them — otherwise
+;; an old link silently plays back a game that never happened.
+(def ^:private VERSION 2)
 
 ;; --- url-safe base64 (RFC 4648 §5, no padding) ---
 

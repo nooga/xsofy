@@ -67,7 +67,7 @@ test('seed 12345 reproduces the title (proves ?seed bridge + wasm hash parity)',
 
 // Replay code for seed 12345 + [:wait :wait :down :wait] (xsofy.replay/encode).
 // Regenerate with: lg -e '(require (quote [xsofy.replay :as r])) (println (r/encode 12345 [...]))'
-const REPLAY_CODE = 'AQAAAAAAADA5AgR3YWl0BGRvd24AAAADAAIBAQAB';
+const REPLAY_CODE = 'AgAAAAAAADA5AgR3YWl0BGRvd24AAAADAAIBAQAB';
 
 test('?replay= plays back the run (decode + animated playback + hash parity)', async ({ page }) => {
   const srv = serve();
