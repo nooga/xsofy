@@ -74,9 +74,10 @@
 (defn int-in
   "Integer in [lo, hi). Returns [lo world] if hi <= lo.
 
-   Maps a u64 hash to the requested span via (mod h span). For non-power-of-2
-   spans this is slightly biased, which is fine for game randomness — the bias
-   is bounded by span / 2^64 and invisible at the scale of die rolls.
+   Maps a hash (masked to 31 bits by seed-hash, see xsofy.hash) to the
+   requested span via (mod h span). For non-power-of-2 spans this is slightly
+   biased, which is fine for game randomness — the bias is bounded by
+   span / 2^31 and invisible at the scale of die rolls.
 
    Relies on let-go's `mod` returning non-negative for positive divisor
    (Clojure parity): (mod -5 7) = 2, not -5."

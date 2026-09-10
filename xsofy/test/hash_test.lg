@@ -1,5 +1,5 @@
 (ns xsofy.test.hash-test
-  "Tests for xsofy.hash — xxh3-64, salt encoding, macro folding."
+  "Tests for xsofy.hash — murmur3-backed seed-hash, salt encoding, macro folding."
   (:require [test :refer [deftest is testing]]
             [xsofy.check :as c]
             [xsofy.hash :as h]))
@@ -208,34 +208,6 @@
            (h/encode-salt [:combat :hit :rat-3 :player])))))
 
 ;; ============================================================================
-;; xxh3-64 published vectors
-;; ============================================================================
-;;
-;; Reference values computed with Python's xxhash 3.7.0 (which wraps the
-;; official Cyan4973/xxHash C library), seed=0 unless noted. The fixture
-;; covers every short- and medium-input branch:
-;;
-;;   len  0     : empty-input avalanche of (seed XOR secret-mix)
-;;   len  1-3  : 1to3 path, 32-bit combined byte + LE32 secret diff
-;;   len  4-8  : 4to8 path, rrmxmx finalizer
-;;   len  9-16 : 9to16 path, mul-fold + XXH3_avalanche
-;;   len 17-32 : 17to128 path, 2 mix16B rounds
-;;   len 33-64 : 17to128 path, 4 mix16B rounds
-;;   len 65-96 : 17to128 path, 6 mix16B rounds
-;;   len 97-128: 17to128 path, 8 mix16B rounds
-;;
-;; Each row: [byte-vector seed expected-u64]. Negative literals are the
-;; signed-int64 representation of the upper-half u64.
-
-(defn- str->bytes
-  "Encode a let-go string as a vector of int byte values, ASCII-only, for the
-   purposes of building reference vectors. ASCII-only because the test inputs
-   here are all printable ASCII; we deliberately don't go through utf8-bytes
-   so the encoder under test never feeds itself."
-  [s]
-  (mapv int s))
-
-;; ============================================================================
 ;; hash/combine — the public API for det
 ;; ============================================================================
 ;;
@@ -249,9 +221,10 @@
 ;;   seed sensitivity — different seeds must produce different hashes, or
 ;;                      different worlds replay identically
 ;;   bit-spread       — across 100 distinct salts at one seed, all hashes
-;;                      must be distinct. xxh3-64's published collision rate
-;;                      is far below 100/2^64, so any collision here means
-;;                      the encode-then-hash pipeline has lost entropy (e.g.
+;;                      must be distinct. Over seed-hash's 31-bit domain the
+;;                      birthday bound for 100 draws is 100*99/(2*2^31), or
+;;                      about 2.3e-6, so a collision here means the
+;;                      encode-then-hash pipeline has lost entropy (e.g.
 ;;                      truncated to a smaller domain) and the dice are
 ;;                      effectively biased.
 
@@ -271,8 +244,11 @@
               (h/combine 2 [:combat :hit])))))
 
 (c/defprop combine-bit-spread
-  ;; 100 (seed, salt) combinations should produce 100 distinct hashes
-  ;; (collision probability ≈ 100/2^64 ≈ 0).
+  ;; 100 (seed, salt) combinations should produce 100 distinct hashes. The
+  ;; birthday bound per draw-set is ~2.3e-6 over the 31-bit domain and defprop
+  ;; runs 100 sets, so this is expected to fail spuriously about once in 4000
+  ;; suite runs — narrower than it was at 64 bits, and the price of a hash
+  ;; value that survives a 32-bit target.
   [seed (c/gen-int 1 100000)]
   (let [salts (mapv (fn [i] [:test i]) (range 100))
         hashes (map #(h/combine seed %) salts)]
@@ -392,6 +368,7 @@
   (testing "every seed-hash value is non-negative and fits in 31 bits, so a seed
             produces the same world on 64-bit native and 32-bit wasm"
     (doseq [g seed-hash-goldens]
-      (let [v (nth g 2)]
+      (let [len (nth g 0) seed (nth g 1)
+            v (h/seed-hash (parity-bytes len) seed)]
         (is (and (>= v 0) (< v 2147483648))
-            (str "value " v " escapes the 31-bit range at len=" (nth g 0) " seed=" (nth g 1)))))))
+            (str "value " v " escapes the 31-bit range at len=" len " seed=" seed))))))

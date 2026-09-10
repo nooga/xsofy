@@ -1,7 +1,8 @@
 (ns xsofy.hash
-  "64-bit seed hash via let-go's native murmur3 interop, plus a canonical
-   byte encoder for salt-keys (v1 encoding) and a three-layer macro pipeline
-   for compile-time folding of constant salt-key prefixes.
+  "Seed hash via let-go's native murmur3 interop (masked to 31 bits so the
+   result is width-portable — see seed-hash), plus a canonical byte encoder
+   for salt-keys (v1 encoding) and a three-layer macro pipeline for
+   compile-time folding of constant salt-key prefixes.
 
    All hash state is held in int64 cells interpreted as the lower 64 bits of
    an unsigned integer. The u64-* helpers wrap let-go primitives chosen for
@@ -33,8 +34,8 @@
 ;; reads coherently).
 ;;
 ;; Note: let-go's bit-xor is strictly binary (unlike Clojure's variadic
-;; clojure.core/bit-xor). u64-xor inherits that 2-ary contract. Multi-term
-;; XOR chains in xxh3 mixers must use nested calls.
+;; clojure.core/bit-xor). u64-xor inherits that 2-ary contract. Any future
+;; multi-term XOR chain (e.g. in a hash mixer) must use nested calls.
 (def u64-xor bit-xor)
 
 (defn u64-shr
@@ -89,8 +90,8 @@
 ;; ============================================================================
 
 (defn seed-hash
-  "64-bit seed hash of a byte vector with optional seed (default 0). Backed by
-   let-go's native `murmur3` namespace.
+  "Seed hash of a byte vector with optional seed (default 0), masked to 31
+   bits for width portability. Backed by let-go's native `murmur3` namespace.
 
    murmur3 rather than xxh3 because xxh3's bindings are reflect-boxed and its
    implementation is assembly-only on arm64/amd64, so a TinyGo build has no

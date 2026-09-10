@@ -2,7 +2,16 @@
   "Run seed. Precedence: explicit override (tests / *boot-seed*), then the
    boot environment — the ?seed= URL param in the browser (js/url-param) or the
    XSOFY_SEED env var natively — then random. A fixed seed reproduces an entire
-   run — title, quest, scheme, and world."
+   run — title, quest, scheme, and world.
+
+   A seed read from the boot environment is normalized modulo 2^31 — the same
+   width-portable domain seed-hash produces (see xsofy.hash). A raw seed
+   outside that domain hashes fine on 64-bit native but cannot survive a
+   32-bit wasm build intact, so one ?seed= would name two different worlds
+   depending on the target. Normalizing at the boundary means the seed the
+   game prints is always one that replays the same run everywhere. In-range
+   seeds are untouched; only a negative or >= 2^31 seed is remapped, and
+   *boot-seed* is a test hook that bypasses this entirely."
   (:require [os]
             [js]))
 
@@ -17,6 +26,15 @@
   (or (js/url-param url-key)
       (os/getenv env-key)))
 
+(defn- normalize-seed
+  "Constrain a boot-environment seed to [0, 2^31), the width-portable domain
+   every derived hash already lives in. mod is non-negative for a positive
+   divisor (Clojure parity), so any integer maps into range — an out-of-range
+   seed is remapped, never rejected and never silently swapped for a random
+   one, which would misrepresent an explicit request as a fresh run."
+  [n]
+  (mod n 2147483648)) ;; 2^31
+
 (defn boot-seed []
   (or *boot-seed*
       ;; Validate at the boundary: a malformed seed (e.g. ?seed=foo / 12.5 /
@@ -25,7 +43,7 @@
       (let [s (boot-param "seed" "XSOFY_SEED")]
         (when (and s (> (count s) 0))
           (let [n (read-string s)]
-            (when (integer? n) n))))
+            (when (integer? n) (normalize-seed n)))))
       (rand-int 1000000000)))
 
 (def ^:dynamic *boot-replay* nil)

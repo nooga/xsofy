@@ -41,6 +41,34 @@
     (is (= (dag/commit-id w) (dag/commit-id w-fov))
         "...while commit-id (:seed) does NOT — which is why the full hash is a checkpoint")))
 
+;; --- commit: collision protection (commit-id is only a 31-bit hash) ---
+
+(deftest commit-detects-hash-collision
+  (let [g0 (gs0)
+        w1 (dispatch/dispatch (dag/head-world g0) :up)
+        id (dag/commit-id w1)
+        ;; Simulate a genuine collision: plant an existing node at `id` with
+        ;; different (parent/action/turn) metadata than committing :up from
+        ;; g0's HEAD would write.
+        forged (assoc-in g0 [:nodes id] {:parent :other-parent
+                                          :action :other-action
+                                          :turn -1})]
+    (is (thrown? Exception (dag/commit forged :up w1))
+        "a colliding commit-id with different metadata fails loudly")))
+
+(deftest commit-allows-recommitting-identical-metadata
+  (let [g0     (gs0)
+        w1     (dispatch/dispatch (dag/head-world g0) :up)
+        id     (dag/commit-id w1)
+        parent (:head g0)
+        turn   (:turn w1)
+        ;; A node already at `id` with exactly the metadata this commit would
+        ;; write is not a collision — it's the same node — so it must not
+        ;; throw.
+        pre-populated (assoc-in g0 [:nodes id] {:parent parent :action :up :turn turn})
+        result (dag/commit pre-populated :up w1)]
+    (is (= id (:head result)))))
+
 ;; --- game-state wrapper ---
 
 (deftest make-game-state-wraps-initial-world

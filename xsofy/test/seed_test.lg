@@ -1,5 +1,6 @@
 (ns xsofy.test.seed-test
   (:require [test :refer [deftest is testing]]
+            [os]
             [xsofy.seed :as seed]))
 
 (deftest boot-seed-prefers-dynamic-override
@@ -10,3 +11,25 @@
 (deftest boot-seed-defaults-to-an-integer
   (testing "unbound, no env → a random integer (still usable)"
     (is (integer? (seed/boot-seed)))))
+
+(deftest boot-seed-normalizes-out-of-range-env-seed
+  (testing "an explicit seed outside [0, 2^31) is normalized, not passed
+            through raw or dropped to random"
+    (let [prior (or (os/getenv "XSOFY_SEED") "")]
+      (try
+        (os/setenv "XSOFY_SEED" "5000000000") ;; > 2^31
+        (is (= (mod 5000000000 2147483648) (seed/boot-seed)))
+        (finally
+          (os/setenv "XSOFY_SEED" prior))))))
+
+(deftest boot-seed-normalizes-negative-env-seed
+  (testing "a negative explicit seed is normalized into [0, 2^31) rather
+            than surfacing a negative world seed"
+    (let [prior (or (os/getenv "XSOFY_SEED") "")]
+      (try
+        (os/setenv "XSOFY_SEED" "-1")
+        (let [n (seed/boot-seed)]
+          (is (>= n 0))
+          (is (< n 2147483648)))
+        (finally
+          (os/setenv "XSOFY_SEED" prior))))))
