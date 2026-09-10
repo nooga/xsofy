@@ -41,9 +41,10 @@ function watchConsole(page) {
 
 // Golden title for seed 12345 (computed natively from the word lists). Seeing
 // it render in-browser proves the whole determinism chain: ?seed= reached the
-// game via go.env, AND wasm-xxh3 == native-xxh3 (a divergence in either would
-// produce a different title).
-const TITLE = 'Chasms of Infinity';
+// game via go.env, AND the wasm seed hash == the native one (a divergence in
+// either would produce a different title). Must match the golden in
+// xsofy/test/title_test.lg — both move together when the seed hash changes.
+const TITLE = 'Cells of Nil';
 
 function waitForTermText(page, needle, timeout = 30000) {
   return page.waitForFunction(
@@ -51,7 +52,7 @@ function waitForTermText(page, needle, timeout = 30000) {
     needle, { timeout, polling: 200 });
 }
 
-test('seed 12345 reproduces the title (proves ?seed bridge + wasm xxh3 parity)', async ({ page }) => {
+test('seed 12345 reproduces the title (proves ?seed bridge + wasm hash parity)', async ({ page }) => {
   const srv = serve();
   const errors = watchConsole(page);
   try {
@@ -68,7 +69,7 @@ test('seed 12345 reproduces the title (proves ?seed bridge + wasm xxh3 parity)',
 // Regenerate with: lg -e '(require (quote [xsofy.replay :as r])) (println (r/encode 12345 [...]))'
 const REPLAY_CODE = 'AQAAAAAAADA5AgR3YWl0BGRvd24AAAADAAIBAQAB';
 
-test('?replay= plays back the run (decode + animated playback + xxh3 parity)', async ({ page }) => {
+test('?replay= plays back the run (decode + animated playback + hash parity)', async ({ page }) => {
   const srv = serve();
   const errors = watchConsole(page);
   try {
