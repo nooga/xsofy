@@ -51,10 +51,15 @@
         ;; different (parent/action/turn) metadata than committing :up from
         ;; g0's HEAD would write.
         forged (assoc-in g0 [:nodes id] {:parent :other-parent
-                                          :action :other-action
-                                          :turn -1})]
-    (is (thrown? Exception (dag/commit forged :up w1))
-        "a colliding commit-id with different metadata fails loudly")))
+                                         :action :other-action
+                                         :turn -1})
+        ;; try/catch rather than (is (thrown? ...)): thrown? postdates v1.12.2,
+        ;; which is what the "latest" CI lane still resolves.
+        threw? (try
+                 (dag/commit forged :up w1)
+                 false
+                 (catch Exception _ true))]
+    (is threw? "a colliding commit-id with different metadata fails loudly")))
 
 (deftest commit-allows-recommitting-identical-metadata
   (let [g0     (gs0)
