@@ -49,15 +49,18 @@ jobs:
       # to be re-verified against a run to know it is right.
       - name: Resolve cache paths
         run: |
-          echo "GOPATH=$(go env GOPATH)" >> "$GITHUB_ENV"
-          echo "PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright" >> "$GITHUB_ENV"
+          {
+            echo "GOPATH=$(go env GOPATH)"
+            echo "LG_CACHE_GO_VERSION=$(go env GOVERSION)"
+            echo "PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright"
+          } >> "$GITHUB_ENV"
 
       - name: Cache lg binary
         id: lgcache
         uses: actions/cache@v4
         with:
           path: ${{ env.GOPATH }}/bin/let-go
-          key: lg-bin-${{ runner.os }}-go1.26-${{ steps.letgo.outputs.version }}
+          key: lg-bin-${{ runner.os }}-${{ env.LG_CACHE_GO_VERSION }}-${{ steps.letgo.outputs.version }}
 
       - name: Install let-go
         if: steps.lgcache.outputs.cache-hit != 'true'
