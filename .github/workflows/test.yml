@@ -39,10 +39,14 @@ jobs:
           # the lg-binary cache below is what saves the compile.
           cache: false
 
-      # Ask Go where it installs and which exact toolchain is active rather
+      # Ask Go where it installs and which toolchain setup-go activated rather
       # than restating either default. GOPATH keeps the cache aligned with
       # `go install`; GOVERSION keeps a binary built by one patch release from
       # being restored after setup-go has moved to the next patch release.
+      # GOVERSION is the runner's toolchain, not necessarily the one that
+      # builds the binary: under GOTOOLCHAIN=auto, `go install` switches to a
+      # newer `toolchain` line in let-go's go.mod. Inert while that line stays
+      # at or below the runner's Go (go1.26.5 on let-go main as of 2026-09-10).
       - name: Resolve Go cache identity
         run: |
           {

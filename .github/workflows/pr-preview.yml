@@ -69,7 +69,9 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # pull_request_target runs may restore default-branch caches but cannot
-      # save a miss. Trusted deploy/manual runs seed this cache.
+      # save a miss. Trusted deploy/manual runs seed this cache. After a Go
+      # patch bump the new key is empty until test.yml on main or a deploy run
+      # writes it; this lane rebuilds from source in the meantime.
       - name: Restore lg binary cache
         id: lgcache
         uses: actions/cache/restore@v4
