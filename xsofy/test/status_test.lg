@@ -1,0 +1,40 @@
+(ns xsofy.test.status-test
+  (:require [test :refer [deftest is testing]]
+            [xsofy.terrain :as terrain]
+            [xsofy.fire :as fire]
+            [xsofy.status :as status]
+            [xsofy.world :as world]))
+
+;; Regression tests for #161: webs no longer trampled.
+;;
+;; :webbed ttl is decremented by the movement struggle branches, which
+;; trample the web on the last struggle. The generic status tick also
+;; decremented it, so the ttl drained twice per turn and expired inside
+;; the tick — which removes the status silently, without trampling. The
+;; struggle branch then never saw ttl <= 1 and the web survived every
+;; escape. :webbed is now :no-decay: the struggle branches own its ttl.
+
+(deftest generic-tick-leaves-webbed-alone
+  (testing ":no-decay statuses keep their ttl through the generic tick"
+    (let [w {:entities {:e {:id :e :pos [1 1]}}}
+          w (status/apply-status w :e :webbed 2)
+          w (status/apply-status w :e :confused 2)
+          w (status/tick-entity-statuses w :e)]
+      ;; still webbed, ttl untouched
+      (is (= 2 (get-in w [:entities :e :statuses :webbed :ttl])))
+      ;; the normal decay path still works
+      (is (= 1 (get-in w [:entities :e :statuses :confused :ttl])))
+      (let [w (status/tick-entity-statuses w :e)]
+        (is (status/has-status? w :e :webbed))
+        (is (not (status/has-status? w :e :confused)))))))
+
+(deftest webbed-player-break-free-tramples-web
+  (testing "player struggling free of a web leaves ash, not an intact web"
+    (let [w (world/make-world 30 20 1)
+          [px py] (get-in w [:entities :player :pos])
+          _ (terrain/tset! (:terrain w) (:width w) px py fire/web-tile)
+          w (status/apply-status w :player :webbed 2)
+          w (world/player-move w 1 0)   ;; struggle: ttl 2 -> 1
+          w (world/player-move w 1 0)]  ;; final struggle: break free + trample
+      (is (not (status/has-status? w :player :webbed)))
+      (is (= fire/ash-tile (terrain/tget (:terrain w) (:width w) px py))))))
