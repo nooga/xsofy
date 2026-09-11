@@ -24,11 +24,15 @@ runs:
   steps:
     # 1. Shell-less bundle: -w-shell none emits glue-only HTML exposing
     #    window.LetGoHost, so a project can inject its own client shell (#245).
+    #    -w-wasm external emits main.wasm beside the HTML so the loader streams
+    #    and compiles it, rather than re-running atob + DecompressionStream +
+    #    instantiate on every load. A boot-CPU win, not a size win; external is
+    #    slightly larger on the wire. Timings in nooga/xsofy#191.
     - name: Build WASM (shell-less)
       shell: bash
       run: |
         if [ -n "${{ inputs.letgo-src }}" ]; then export LETGO_SRC="${{ inputs.letgo-src }}"; fi
-        let-go -w "${{ inputs.dist }}" -w-shell none main.lg
+        let-go -w "${{ inputs.dist }}" -w-shell none -w-wasm external main.lg
 
     # 2. Inject xsofy's own shell: rune font (Fairfax HD, OFL) + ?font=system.
     #    Without this the bundle ships let-go's generic shell (no rune face,

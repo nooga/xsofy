@@ -9,7 +9,7 @@ const DIST = process.env.DIST || path.join(__dirname, 'dist');
 const PORT = Number(process.env.PORT || 8123);
 const COI = process.env.COI === '1';
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm' };
 
 http.createServer((req, res) => {
   const urlPath = req.url.split('?')[0];
