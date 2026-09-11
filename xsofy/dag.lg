@@ -121,15 +121,25 @@
   "Record HEAD --action--> world' as a new metadata node and advance HEAD. No
    world is stored (only HEAD's live :world). Returns game-state'.
 
-   Two different commits can address the same id from two directions:
-   commit-id is only a 31-bit hash (see xsofy.hash/seed-hash), and dispatch
-   folds only the action TYPE into the seed, so two parameterized actions of
-   one type taken from the same parent at the same turn collide with no hash
-   collision at all. Either way, overwriting the existing node's metadata
-   would corrupt whatever replay chain depended on it, so fail loudly. No
-   current call site can reach this — forward play commits from the live HEAD,
-   and the unwind branch carries the current chain's seed — but branch/undo
-   wired to a player action would."
+   Two different commits can address the same id, by two separate routes.
+
+   (1) commit-id is a 31-bit hash (see xsofy.hash/seed-hash) and :nodes keeps
+   every commit in a run — nothing prunes a linear chain, and default-budget
+   is not enforced — so each turn writes a new id into a growing set. That is
+   a birthday problem against every earlier turn, 1 - exp(-T^2/2^32) over T
+   turns: ~2% at 10k turns, ~9% at 20k. Ordinary forward play reaches this.
+
+   (2) dispatch folds only the action TYPE into the seed, so two parameterized
+   actions of one type from the same parent at the same turn collide with no
+   hash collision at all. Not reachable today (forward play commits from the
+   live HEAD, and the unwind branch carries the current chain's seed), but
+   branch/undo wired to a player action would do it.
+
+   Either way, overwriting the existing node's metadata would corrupt whatever
+   replay chain depended on it, so fail loudly. The durable fix for (1) is the
+   identity, not the hash — 31 bits is forced by let-go's boxHash, but keying
+   nodes on something wider (a [turn seed] pair, or a counter) removes the
+   class without touching determinism."
   [gs action world']
   (let [id (commit-id world')
         parent (:head gs)
