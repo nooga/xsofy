@@ -80,10 +80,6 @@
 
 
 
-
-
-
-
 ;; ============================================================================
 ;; xxh3-64 public API (native interop)
 ;; ============================================================================
@@ -121,11 +117,90 @@
 (def ^:private salt-tag-str 3)
 (def ^:private salt-tag-vec 4)
 
+(defn- conj-int->8-be
+  "Append the low 64 bits of n to acc as 8 big-endian byte values, most
+   significant first.
+
+   The accumulator form is the one the hot path uses: every caller
+   immediately concatenates these 8 bytes onto a longer byte vector, so
+   returning a fresh vector meant allocating one per integer and then
+   copying it through `into`. Written as loop/recur rather than
+   (mapv f (range 8)) for the same reason — the higher-order form
+   allocates a range seq and a closure, and neither the IR optimizer nor
+   the Go lowerer can see through `mapv` to remove them."
+  [acc n]
+  (loop [i 0 acc acc]
+    (if (< i 8)
+      (recur (inc i) (conj acc (bit-and (u64-shr n (* (- 7 i) 8)) 0xFF)))
+      acc)))
+
 (defn- int->8-be
   "Big-endian byte encoding of the low 64 bits of n as a length-8 vector
-   of int byte values [0, 255]. Index 0 holds the most significant byte."
+   of int byte values [0, 255]. Index 0 holds the most significant byte.
+
+   Kept as a named function because the JVM cross-validation twin in
+   test/hash_test_jvm.clj mirrors it directly."
   [n]
-  (mapv #(bit-and (u64-shr n (* (- 7 %) 8)) 0xFF) (range 8)))
+  (conj-int->8-be [] n))
+
+(defn- valid-codepoint!
+  "Assert cp is a legal scalar value: in range and not a surrogate half."
+  [cp]
+  (assert (and (>= cp 0) (<= cp 0x10FFFF)
+               (not (and (>= cp 0xD800) (<= cp 0xDFFF))))
+          (str "codepoint->utf8: invalid codepoint " cp)))
+
+(defn- codepoint->utf8-len
+  "How many UTF-8 bytes cp encodes to, without building them. Lets a caller
+   write the length byte that precedes the bytes in the v1 salt format
+   without materializing the bytes first."
+  [cp]
+  (valid-codepoint! cp)
+  (cond (< cp 0x80) 1 (< cp 0x800) 2 (< cp 0x10000) 3 :else 4))
+
+(defn- conj-codepoint->utf8
+  "Append cp's UTF-8 bytes to acc. Accumulator twin of codepoint->utf8,
+   and the form the hot path uses: the vector codepoint->utf8 returns is
+   copied onto a longer vector and discarded at every call site."
+  [acc cp]
+  (valid-codepoint! cp)
+  (cond
+    (< cp 0x80)
+    (conj acc cp)
+
+    (< cp 0x800)
+    (conj acc
+          (bit-or 0xC0 (bit-and (u64-shr cp 6) 0x1F))
+          (bit-or 0x80 (bit-and cp 0x3F)))
+
+    (< cp 0x10000)
+    (conj acc
+          (bit-or 0xE0 (bit-and (u64-shr cp 12) 0x0F))
+          (bit-or 0x80 (bit-and (u64-shr cp 6) 0x3F))
+          (bit-or 0x80 (bit-and cp 0x3F)))
+
+    :else
+    (conj acc
+          (bit-or 0xF0 (bit-and (u64-shr cp 18) 0x07))
+          (bit-or 0x80 (bit-and (u64-shr cp 12) 0x3F))
+          (bit-or 0x80 (bit-and (u64-shr cp 6) 0x3F))
+          (bit-or 0x80 (bit-and cp 0x3F)))))
+
+;; Named rather than inline closures: a closure passed to reduce allocates,
+;; and neither the IR optimizer nor the Go lowerer sees through the
+;; higher-order call to remove it.
+(defn- add-utf8-len [n c] (+ n (codepoint->utf8-len (int c))))
+(defn- conj-utf8-char [acc c] (conj-codepoint->utf8 acc (int c)))
+
+(defn- utf8-len
+  "Byte length of s encoded as UTF-8, allocating nothing."
+  [s]
+  (reduce add-utf8-len 0 s))
+
+(defn- conj-utf8
+  "Append s's UTF-8 bytes to acc."
+  [acc s]
+  (reduce conj-utf8-char acc s))
 
 (defn- codepoint->utf8
   "Encode a single Unicode codepoint as a vector of 1-4 int byte values
@@ -134,27 +209,7 @@
    each codepoint explicitly. This matches what the JVM's
    String.getBytes(\"UTF-8\") produces for the cross-validation harness."
   [cp]
-  (assert (and (>= cp 0) (<= cp 0x10FFFF)
-               (not (and (>= cp 0xD800) (<= cp 0xDFFF))))
-          (str "codepoint->utf8: invalid codepoint " cp))
-  (cond
-    (< cp 0x80)
-    [cp]
-
-    (< cp 0x800)
-    [(bit-or 0xC0 (bit-and (u64-shr cp 6) 0x1F))
-     (bit-or 0x80 (bit-and cp 0x3F))]
-
-    (< cp 0x10000)
-    [(bit-or 0xE0 (bit-and (u64-shr cp 12) 0x0F))
-     (bit-or 0x80 (bit-and (u64-shr cp 6) 0x3F))
-     (bit-or 0x80 (bit-and cp 0x3F))]
-
-    :else
-    [(bit-or 0xF0 (bit-and (u64-shr cp 18) 0x07))
-     (bit-or 0x80 (bit-and (u64-shr cp 12) 0x3F))
-     (bit-or 0x80 (bit-and (u64-shr cp 6) 0x3F))
-     (bit-or 0x80 (bit-and cp 0x3F))]))
+  (conj-codepoint->utf8 [] cp))
 
 (defn- utf8-bytes
   "Convert a let-go string to its UTF-8 byte representation as a vector of
@@ -163,7 +218,44 @@
    any (.getBytes ...) Java-interop call (which is not implemented for
    let-go's String type)."
   [s]
-  (reduce (fn [acc c] (into acc (codepoint->utf8 (int c)))) [] s))
+  (conj-utf8 [] s))
+
+(defn encode-salt-into
+  "Append the v1 encoding of salt-key term `s` to `acc`, returning the
+   extended vector. Byte-for-byte identical to (into acc (encode-salt s));
+   it exists so the hot path never materializes the per-term vector that
+   `into` would immediately copy and discard.
+
+   Declared before encode-salt and self-recursive for the vector case."
+  [acc s]
+  (cond
+    (keyword? s)
+    (let [nm (name s)
+          n  (utf8-len nm)]
+      (assert (< n 256)
+              (str "Keyword name exceeds 255 bytes: " nm))
+      (conj-utf8 (conj acc salt-tag-kw n) nm))
+
+    (integer? s)
+    (conj-int->8-be (conj acc salt-tag-int) s)
+
+    (string? s)
+    (let [n (utf8-len s)]
+      (assert (< n 256)
+              (str "String exceeds 255 bytes (len=" n ")"))
+      (conj-utf8 (conj acc salt-tag-str n) s))
+
+    (vector? s)
+    (let [n (count s)]
+      (assert (< n 256)
+              (str "Vector exceeds 255 elements (len=" n ")"))
+      (reduce encode-salt-into
+              (conj acc salt-tag-vec n)
+              s))
+
+    :else
+    (throw (ex-info "encode-salt: unsupported type"
+                    {:value s :type (type s)}))))
 
 (defn encode-salt
   "Canonical byte encoding of a salt-key (v1). Returns a vector of int byte
@@ -176,33 +268,7 @@
    sequences (event tag + a handful of entity ids), so 255 is a comfortable
    ceiling."
   [s]
-  (cond
-    (keyword? s)
-    (let [name-bytes (utf8-bytes (name s))]
-      (assert (< (count name-bytes) 256)
-              (str "Keyword name exceeds 255 bytes: " (name s)))
-      (into [salt-tag-kw (count name-bytes)] name-bytes))
-
-    (integer? s)
-    (into [salt-tag-int] (int->8-be s))
-
-    (string? s)
-    (let [b (utf8-bytes s)]
-      (assert (< (count b) 256)
-              (str "String exceeds 255 bytes (len=" (count b) ")"))
-      (into [salt-tag-str (count b)] b))
-
-    (vector? s)
-    (let [n (count s)]
-      (assert (< n 256)
-              (str "Vector exceeds 255 elements (len=" n ")"))
-      (reduce (fn [acc el] (into acc (encode-salt el)))
-              [salt-tag-vec n]
-              s))
-
-    :else
-    (throw (ex-info "encode-salt: unsupported type"
-                    {:value s :type (type s)}))))
+  (encode-salt-into [] s))
 
 ;; ============================================================================
 ;; combine — the public API for det
@@ -324,12 +390,13 @@
           (assert (< full-len 256)
                   (str "with-folded-salt: salt-key length " full-len
                        " exceeds the 255-element ceiling"))
-          `(let [tail-bytes# (reduce (fn [acc# el#]
-                                       (into acc# (xsofy.hash/encode-salt el#)))
-                                     []
-                                     ~(vec tail))
-                 full-bytes# (into (into [4 ~full-len] ~prefix-elements-bytes)
-                                   tail-bytes#)]
+          ;; Seed the accumulator with the header and the folded prefix, then
+          ;; append the tail terms directly. The older shape built a separate
+          ;; tail vector and then copied it through two `into`s; this produces
+          ;; the identical byte sequence with one accumulator.
+          `(let [full-bytes# (reduce xsofy.hash/encode-salt-into
+                                     (into [4 ~full-len] ~prefix-elements-bytes)
+                                     ~(vec tail))]
              (xsofy.hash/xxh3-64 full-bytes# ~seed)))))
 
     ;; salt-key is not a vector literal — must be a symbol or other expression
