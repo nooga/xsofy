@@ -121,11 +121,31 @@
 (def ^:private salt-tag-str 3)
 (def ^:private salt-tag-vec 4)
 
+(defn- conj-int->8-be
+  "Append the low 64 bits of n to acc as 8 big-endian byte values, most
+   significant first.
+
+   The accumulator form is the one the hot path uses: every caller
+   immediately concatenates these 8 bytes onto a longer byte vector, so
+   returning a fresh vector meant allocating one per integer and then
+   copying it through `into`. Written as loop/recur rather than
+   (mapv f (range 8)) for the same reason — the higher-order form
+   allocates a range seq and a closure, and neither the IR optimizer nor
+   the Go lowerer can see through `mapv` to remove them."
+  [acc n]
+  (loop [i 0 acc acc]
+    (if (< i 8)
+      (recur (inc i) (conj acc (bit-and (u64-shr n (* (- 7 i) 8)) 0xFF)))
+      acc)))
+
 (defn- int->8-be
   "Big-endian byte encoding of the low 64 bits of n as a length-8 vector
-   of int byte values [0, 255]. Index 0 holds the most significant byte."
+   of int byte values [0, 255]. Index 0 holds the most significant byte.
+
+   Kept as a named function because the JVM cross-validation twin in
+   test/hash_test_jvm.clj mirrors it directly."
   [n]
-  (mapv #(bit-and (u64-shr n (* (- 7 %) 8)) 0xFF) (range 8)))
+  (conj-int->8-be [] n))
 
 (defn- codepoint->utf8
   "Encode a single Unicode codepoint as a vector of 1-4 int byte values
@@ -165,6 +185,42 @@
   [s]
   (reduce (fn [acc c] (into acc (codepoint->utf8 (int c)))) [] s))
 
+(defn encode-salt-into
+  "Append the v1 encoding of salt-key term `s` to `acc`, returning the
+   extended vector. Byte-for-byte identical to (into acc (encode-salt s));
+   it exists so the hot path never materializes the per-term vector that
+   `into` would immediately copy and discard.
+
+   Declared before encode-salt and self-recursive for the vector case."
+  [acc s]
+  (cond
+    (keyword? s)
+    (let [name-bytes (utf8-bytes (name s))]
+      (assert (< (count name-bytes) 256)
+              (str "Keyword name exceeds 255 bytes: " (name s)))
+      (into (conj acc salt-tag-kw (count name-bytes)) name-bytes))
+
+    (integer? s)
+    (conj-int->8-be (conj acc salt-tag-int) s)
+
+    (string? s)
+    (let [b (utf8-bytes s)]
+      (assert (< (count b) 256)
+              (str "String exceeds 255 bytes (len=" (count b) ")"))
+      (into (conj acc salt-tag-str (count b)) b))
+
+    (vector? s)
+    (let [n (count s)]
+      (assert (< n 256)
+              (str "Vector exceeds 255 elements (len=" n ")"))
+      (reduce encode-salt-into
+              (conj acc salt-tag-vec n)
+              s))
+
+    :else
+    (throw (ex-info "encode-salt: unsupported type"
+                    {:value s :type (type s)}))))
+
 (defn encode-salt
   "Canonical byte encoding of a salt-key (v1). Returns a vector of int byte
    values in [0, 255]. Supported terms: keyword, integer, string, vector of
@@ -176,33 +232,7 @@
    sequences (event tag + a handful of entity ids), so 255 is a comfortable
    ceiling."
   [s]
-  (cond
-    (keyword? s)
-    (let [name-bytes (utf8-bytes (name s))]
-      (assert (< (count name-bytes) 256)
-              (str "Keyword name exceeds 255 bytes: " (name s)))
-      (into [salt-tag-kw (count name-bytes)] name-bytes))
-
-    (integer? s)
-    (into [salt-tag-int] (int->8-be s))
-
-    (string? s)
-    (let [b (utf8-bytes s)]
-      (assert (< (count b) 256)
-              (str "String exceeds 255 bytes (len=" (count b) ")"))
-      (into [salt-tag-str (count b)] b))
-
-    (vector? s)
-    (let [n (count s)]
-      (assert (< n 256)
-              (str "Vector exceeds 255 elements (len=" n ")"))
-      (reduce (fn [acc el] (into acc (encode-salt el)))
-              [salt-tag-vec n]
-              s))
-
-    :else
-    (throw (ex-info "encode-salt: unsupported type"
-                    {:value s :type (type s)}))))
+  (encode-salt-into [] s))
 
 ;; ============================================================================
 ;; combine — the public API for det
@@ -324,12 +354,13 @@
           (assert (< full-len 256)
                   (str "with-folded-salt: salt-key length " full-len
                        " exceeds the 255-element ceiling"))
-          `(let [tail-bytes# (reduce (fn [acc# el#]
-                                       (into acc# (xsofy.hash/encode-salt el#)))
-                                     []
-                                     ~(vec tail))
-                 full-bytes# (into (into [4 ~full-len] ~prefix-elements-bytes)
-                                   tail-bytes#)]
+          ;; Seed the accumulator with the header and the folded prefix, then
+          ;; append the tail terms directly. The older shape built a separate
+          ;; tail vector and then copied it through two `into`s; this produces
+          ;; the identical byte sequence with one accumulator.
+          `(let [full-bytes# (reduce xsofy.hash/encode-salt-into
+                                     (into [4 ~full-len] ~prefix-elements-bytes)
+                                     ~(vec tail))]
              (xsofy.hash/xxh3-64 full-bytes# ~seed)))))
 
     ;; salt-key is not a vector literal — must be a symbol or other expression
