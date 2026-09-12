@@ -186,6 +186,31 @@
     ;; "hi" → [0x03, 2, 'h', 'i'] → [3 2 104 105]
     (is (= [3 2 104 105] (h/encode-salt "hi")))))
 
+(deftest encode-salt-multibyte-utf8
+  (testing "String encodes UTF-8 at all four RFC 3629 lengths"
+    ;; The length byte counts BYTES, not codepoints, so each case also pins
+    ;; that utf8-len agrees with the bytes actually emitted. Byte values were
+    ;; cross-checked against the JVM twin's String.getBytes("UTF-8").
+    ;; 1-byte: "abc"
+    (is (= [3 3 97 98 99] (h/encode-salt "abc")))
+    ;; 2-byte: "é" = U+00E9 -> C3 A9
+    (is (= [3 2 195 169] (h/encode-salt "é")))
+    ;; 3-byte: "日" = U+65E5 -> E6 97 A5
+    (is (= [3 3 230 151 165] (h/encode-salt "日")))
+    ;; 4-byte: "😀" = U+1F600 -> F0 9F 98 80, one codepoint but four bytes
+    (is (= [3 4 240 159 152 128] (h/encode-salt "😀")))
+    ;; mixed widths in one string, to catch an encoder that only handles the
+    ;; first codepoint's width
+    (is (= [3 10 97 195 169 230 151 165 240 159 152 128]
+           (h/encode-salt "aé日😀")))
+    ;; empty string still carries its tag and a zero length
+    (is (= [3 0] (h/encode-salt "")))))
+
+(deftest encode-salt-multibyte-keyword
+  (testing "Keyword name encodes UTF-8 with a byte length"
+    ;; :é -> tag 1, length 2 (bytes, not codepoints), C3 A9
+    (is (= [1 2 195 169] (h/encode-salt (keyword "é"))))))
+
 (deftest encode-salt-vector
   (testing "Vector encodes as 0x04 | element-count | element-bytes..."
     ;; [:foo 1] → 0x04, 2, [1, 3, 'f', 'o', 'o'], [2, 0, 0, 0, 0, 0, 0, 0, 1]
