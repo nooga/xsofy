@@ -358,20 +358,70 @@
 
 ;; The shell nudges a blocked read-key with a lone BEL (0x07) on a browser
 ;; resize so the game re-renders at the new size (see xsofy-shell.html
-;; refit()). Any screen that dismisses on a bare (term/read-key) with no key
-;; filtering treats that nudge as a real keypress and closes itself — the
-;; same bug xsofy.title guarded against (a lone BEL, matched exactly: space
-;; also parses to :unknown and must still count as a real dismiss key).
-;; Screens that read a key only to discard it and dismiss unconditionally
-;; (:rune-codex, :help) should block on this instead of a raw
-;; (term/read-key) so a resize during either screen can't silently close it.
-(defn read-dismiss-key!
-  "Block for a real keypress, transparently discarding the shell's lone-BEL
-   resize nudge instead of treating it as the dismiss key."
-  []
-  (loop []
-    (let [k (term/read-key)]
-      (if (= k (str (char 7))) (recur) k))))
+;; refit()). The modal screens below no longer block, so they re-fit from
+;; their own render each frame and do not depend on the nudge — but it still
+;; arrives, and a screen that dismisses on any key would treat it as one. Both
+;; dismiss paths filter it exactly, the same bug xsofy.title guarded against
+;; (space also parses to :unknown and must still count as a real dismiss key).
+(def ^:private bel (str (char 7)))
+
+(defn dismiss-input
+  "Key reducer for screens that close on any key: clear :screen, except on the
+   shell's lone-BEL resize nudge, which is not a keypress. EOF (nil) closes,
+   matching the blocking path it replaces."
+  [world k]
+  (if (= k bel) world (dissoc world :screen)))
+
+(defn modal-loop
+  "Run a modal screen as a nested poll-based loop rather than blocking on
+   read-key, so the loop stays live while the screen is open: a resize re-fits
+   it (every render/*-screen reads term-dims itself), and under wasm the worker
+   keeps pumping instead of stalling. See #82.
+
+   `input` is the screen's own key reducer, called with the same raw key the
+   blocking path passed it, so the key-to-world mapping is unchanged and
+   replays are unaffected.
+
+   Exits when :screen changes at all, not merely when it clears: the inventory
+   and inscribe reducers hand off to each other, and the caller's `case` is what
+   dispatches to the next screen's renderer."
+  [world render! input]
+  (let [from (:screen world)]
+    (ui/run-loop
+      {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+       :state    world
+       :step     (fn [w ev]
+                   (let [[kind payload] ev]
+                     (if (= kind :action)
+                       ;; raw-key->event maps EOF to :eof; the reducers expect nil.
+                       (let [w' (input w (if (= payload :eof) nil payload))]
+                         (if (= (:screen w') from) w' (reduced w')))
+                       w)))
+       :render   render!
+       :frame-ms 30})))
+
+(defn prompt-key!
+  "Poll for one real keypress while keeping a y/n prompt painted, returning the
+   key (nil on EOF). The game screen underneath is repainted only when the
+   terminal size changes, so an open prompt costs a prompt redraw per frame
+   rather than a full-screen one."
+  [world prompt]
+  (let [painted (atom nil)]
+    (ui/run-loop
+      {:sources  [(ui/input-source ui/raw-key->event) (ui/clock-source 0)]
+       :state    nil
+       :step     (fn [st ev]
+                   (let [[kind payload] ev]
+                     (if (and (= kind :action) (not= payload bel))
+                       (reduced (if (= payload :eof) nil payload))
+                       st)))
+       :render   (fn [_]
+                   (let [size (term/size)]
+                     (when (not= size @painted)
+                       (reset! painted size)
+                       (render/render-full world)))
+                   (render/render-hazard-prompt world prompt))
+       :frame-ms 30})))
 
 (defn play-replay
   "Decode a replay code, reconstruct the run, and step through its actions with
@@ -409,55 +459,42 @@
      (let [screen (or (:screen world) :game)]
        (case screen
          :messages
-         (do (render/render-messages-screen world)
-             (let [k (term/read-key)
-                   w (messages-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do
-                   (render/render-full w)
-                   (recur w w (term/size))))))
+         (let [w (modal-loop world render/render-messages-screen messages-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :rune-codex
-         (do (render/render-rune-codex world)
-             (read-dismiss-key!)
-             (let [w (dissoc world :screen)]
-               (render/render-full w)
-               (recur w w (term/size))))
+         (let [w (modal-loop world render/render-rune-codex dismiss-input)]
+           (render/render-full w)
+           (recur w w (term/size)))
 
          :help
-         (do (render/render-help-screen world)
-             (read-dismiss-key!)
-             (let [w (dissoc world :screen)]
-               (render/render-full w)
-               (recur w w (term/size))))
+         (let [w (modal-loop world render/render-help-screen dismiss-input)]
+           (render/render-full w)
+           (recur w w (term/size)))
 
          :inventory
-         (do (render/render-inventory-screen world)
-             (let [k (term/read-key)
-                   w (inventory-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do (render/render-full w)
-                     (recur w w (term/size))))))
+         (let [w (modal-loop world render/render-inventory-screen inventory-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :inscribe
-         (do (render/render-inscribe-screen world)
-             (let [k (term/read-key)
-                   w (inscribe-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do (render/render-full w)
-                     (recur w w (term/size))))))
+         (let [w (modal-loop world render/render-inscribe-screen inscribe-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :quick-menu
-         (do (render/render-quick-menu world)
-             (let [k (term/read-key)
-                   w (quick-menu-input world k)]
-               (if (:screen w)
-                 (recur w w prev-size)
-                 (do (render/render-full w)
-                     (recur w w (term/size))))))
+         (let [w (modal-loop world render/render-quick-menu quick-menu-input)]
+           (if (:screen w)
+             (recur w w prev-size)
+             (do (render/render-full w)
+                 (recur w w (term/size)))))
 
          :death
          (let [[tw th] (term/size)
@@ -523,8 +560,7 @@
              (= result :esc)
              (if *in-wasm*
                (do
-                 (render/render-hazard-prompt world "Start a new game?")
-                 (if (= (read-dismiss-key!) "y")
+                 (if (= (prompt-key! world "Start a new game?") "y")
                    (let [w (new-game)]
                      (render/render-full w)
                      (recur w w (term/size)))
@@ -536,10 +572,8 @@
          :confirm-hazard
          (do
            ;; render the prompt on the message line
-           (render/render-full world)
            (let [prompt (or (:hazard-prompt world) "Are you sure?")
-                 k (do (render/render-hazard-prompt world prompt)
-                       (read-dismiss-key!))
+                 k (prompt-key! world prompt)
                  w (if (= k "y")
                      (world/confirm-hazard-step world)
                      (world/cancel-hazard-step world))]
@@ -548,12 +582,10 @@
 
          :confirm-quit
          (do
-           (render/render-full world)
            (let [prompt (if *in-wasm*
                           "Are you sure you want to restart?"
                           "Are you sure you want to quit?")
-                 k (do (render/render-hazard-prompt world prompt)
-                       (read-dismiss-key!))
+                 k (prompt-key! world prompt)
                  w (if (= k "y")
                      (if *in-wasm*
                        (new-game)
