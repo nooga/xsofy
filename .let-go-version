@@ -15,7 +15,8 @@
 # longer needed — and it had gone stale: a bundle built with it fails to boot,
 # dying at namespace load with
 #   error loading xsofy.input: calling dev? — bit-shift-left expected Int
-# The floor lane cannot see that, because it runs the test suite but never
-# builds or boots the WASM bundle. Nothing shipped broken: deploy-pages.yml
-# fires only on v* tags, and the last one predates the SHA pin.
+# The floor lane cannot see that: its WASM step builds the bundle but never
+# boots one, and this failure is at namespace load, not at build. Nothing
+# shipped broken: deploy-pages.yml fires only on v* tags, and the last one
+# predates the SHA pin.
 v1.13.0
