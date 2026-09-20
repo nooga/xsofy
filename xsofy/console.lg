@@ -55,7 +55,7 @@
        "  (seed)      seed-input + current rolling seed\n"
        "  (player)    player hp / position / depth\n"
        "  (location)  position / depth / turn\n"
-       "  (bench)     quick engine micro-benchmark (per-turn ms)\n"
+       "  (bench)     quick engine micro-benchmark (per-turn µs)\n"
        "  (help)      this list\n"
        "Esc or ` to close."))
 
