@@ -105,9 +105,9 @@
 ;; salt-keys are short identifier sequences by design, not bulk data).
 ;;
 ;; Format:
-;;   keyword   -> [salt-tag-kw  | utf8-len(name) | utf8-bytes(name)]
+;;   keyword   -> [salt-tag-kw  | byte-len(name) | utf8-bytes(name)]
 ;;   integer   -> [salt-tag-int | 8 big-endian bytes (signed int64)]
-;;   string    -> [salt-tag-str | utf8-len         | utf8-bytes]
+;;   string    -> [salt-tag-str | byte-len         | utf8-bytes]
 ;;   vector    -> [salt-tag-vec | element-count    | encode-salt(e0) ...]
 ;;
 ;; Result is a vector of int byte values in [0, 255].
@@ -150,14 +150,6 @@
                (not (and (>= cp 0xD800) (<= cp 0xDFFF))))
           (str "codepoint->utf8: invalid codepoint " cp)))
 
-(defn- codepoint->utf8-len
-  "How many UTF-8 bytes cp encodes to, without building them. Lets a caller
-   write the length byte that precedes the bytes in the v1 salt format
-   without materializing the bytes first."
-  [cp]
-  (valid-codepoint! cp)
-  (cond (< cp 0x80) 1 (< cp 0x800) 2 (< cp 0x10000) 3 :else 4))
-
 (defn- conj-codepoint->utf8
   "Append cp's UTF-8 bytes to acc. Accumulator twin of codepoint->utf8,
    and the form the hot path uses: the vector codepoint->utf8 returns is
@@ -189,13 +181,7 @@
 ;; Named rather than inline closures: a closure passed to reduce allocates,
 ;; and neither the IR optimizer nor the Go lowerer sees through the
 ;; higher-order call to remove it.
-(defn- add-utf8-len [n c] (+ n (codepoint->utf8-len (int c))))
 (defn- conj-utf8-char [acc c] (conj-codepoint->utf8 acc (int c)))
-
-(defn- utf8-len
-  "Byte length of s encoded as UTF-8, allocating nothing."
-  [s]
-  (reduce add-utf8-len 0 s))
 
 (defn- conj-utf8
   "Append s's UTF-8 bytes to acc."
@@ -226,24 +212,35 @@
    it exists so the hot path never materializes the per-term vector that
    `into` would immediately copy and discard.
 
-   Declared before encode-salt and self-recursive for the vector case."
+   Declared before encode-salt and self-recursive for the vector case.
+
+   The v1 format writes a term's byte length ahead of its bytes, which reads
+   as though the length has to be known first. It does not: the keyword and
+   string branches append a placeholder length, encode, and patch the byte
+   once the real length is the distance the accumulator moved. Measuring
+   first would mean decoding the same string twice, once to count its
+   UTF-8 bytes and again to emit them."
   [acc s]
   (cond
     (keyword? s)
-    (let [nm (name s)
-          n  (utf8-len nm)]
+    (let [nm    (name s)
+          start (count acc)
+          acc*  (conj-utf8 (conj acc salt-tag-kw 0) nm)
+          n     (- (count acc*) start 2)]
       (assert (< n 256)
               (str "Keyword name exceeds 255 bytes: " nm))
-      (conj-utf8 (conj acc salt-tag-kw n) nm))
+      (assoc acc* (inc start) n))
 
     (integer? s)
     (conj-int->8-be (conj acc salt-tag-int) s)
 
     (string? s)
-    (let [n (utf8-len s)]
+    (let [start (count acc)
+          acc*  (conj-utf8 (conj acc salt-tag-str 0) s)
+          n     (- (count acc*) start 2)]
       (assert (< n 256)
               (str "String exceeds 255 bytes (len=" n ")"))
-      (conj-utf8 (conj acc salt-tag-str n) s))
+      (assoc acc* (inc start) n))
 
     (vector? s)
     (let [n (count s)]
