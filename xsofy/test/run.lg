@@ -26,6 +26,7 @@
             [xsofy.test.scenariotest-test]
             [xsofy.test.menu-dispatch-test]
             [xsofy.test.input-test]
-            [xsofy.test.console-test]))
+            [xsofy.test.console-test]
+            [xsofy.test.ui-modal-test]))
 
 (run-tests)

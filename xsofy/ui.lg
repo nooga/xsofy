@@ -303,3 +303,112 @@
       (if (reduced? st')
         (deref st')
         (do (pause! frame-ms) (recur st'))))))
+
+;; --- Modal screens ---
+;; A modal runs its own nested run-loop so the caller's loop stays live while
+;; the screen is open: a resize re-fits it, and under wasm the worker keeps
+;; pumping. These live here rather than in main.lg because main.lg calls -main
+;; at load time and so cannot be required from a test.
+
+(def bel
+  "The shell's lone-BEL resize nudge (see xsofy-shell.html refit()). It arrives
+   as a keypress but is not one, so dismiss-on-any-key screens must filter it."
+  (str (char 7)))
+
+(defn single-key-source
+  "Like `input-source`, but reads at most one key per tick.
+
+   `input-source` drains every pending key into one batch and `apply-events`
+   stops folding the moment `step` returns `reduced`, so a key already read off
+   the terminal when a modal exits is discarded and the next screen never sees
+   it. Reading one at a time leaves the rest queued in the terminal, which is
+   what the blocking read-key calls these loops replaced did.
+   The 3-arity injects pending?/read! for tests."
+  ([] (single-key-source raw-key->event term/key-pending? term/read-key))
+  ([key->event] (single-key-source key->event term/key-pending? term/read-key))
+  ([key->event pending? read!]
+   (fn []
+     (if (pending?) [(key->event (read!))] []))))
+
+(defn dismiss-input
+  "Key reducer for screens that close on any key: clear :screen, except on the
+   BEL resize nudge. EOF (nil) closes, matching the blocking path it replaces."
+  [world k]
+  (if (= k bel) world (dissoc world :screen)))
+
+(defn modal-loop
+  "Run a modal screen as a nested poll loop rather than a blocking read.
+
+   `input` is the screen's own key reducer, handed the same raw key the
+   blocking path passed it, so the key-to-world mapping is unchanged.
+
+   Exits when :screen changes at all, not merely when it clears: the inventory
+   and inscribe reducers hand off to each other, and the caller's `case` is
+   what dispatches to the next screen's renderer.
+
+   `:background!` is for screens that paint less than the full terminal
+   (:quick-menu centres a small box and clears only that box). Without it a
+   resize draws the box at its new centre and leaves the old one behind. It is
+   called with the world on entry and whenever the size changes, never per
+   frame. Screens that clear the whole terminal do not need it."
+  ([world render! input] (modal-loop world render! input {}))
+  ([world render! input {:keys [background! source size-fn frame-ms]
+                         :or   {source   (single-key-source)
+                                size-fn  term/size
+                                frame-ms 30}}]
+   (let [from    (:screen world)
+         painted (atom :unpainted)]
+     (run-loop
+       {:sources  [source (clock-source 0)]
+        :state    world
+        :step     (fn [w ev]
+                    (let [[kind payload] ev]
+                      (if (= kind :action)
+                        ;; raw-key->event maps EOF to :eof; reducers expect nil.
+                        (let [w' (input w (if (= payload :eof) nil payload))]
+                          (if (= (:screen w') from) w' (reduced w')))
+                        w)))
+        :render   (fn [w]
+                    (when background!
+                      (let [size (size-fn)]
+                        (when (not= size @painted)
+                          (reset! painted size)
+                          (background! w))))
+                    (render! w))
+        :frame-ms frame-ms}))))
+
+(defn prompt-key!
+  "Poll for one real keypress while `prompt!` stays painted, returning the key
+   (nil on EOF, nil-safe on the BEL nudge, which is skipped).
+
+   `background!` repaints whatever sits behind the prompt, and only when the
+   terminal size changes rather than every frame — the confirms previously
+   painted once and then blocked, so a per-frame full repaint would cost what
+   the blocking version never did. Pass nil to paint nothing behind: the death
+   screen must not be repainted with the gameplay renderer.
+
+   The painted sentinel is `:unpainted` rather than nil because `term/size`
+   returns nil off a TTY, where `(not= nil nil)` would gate the first paint
+   away for the prompt's whole lifetime."
+  ([prompt! background!] (prompt-key! prompt! background! {}))
+  ([prompt! background! {:keys [source size-fn frame-ms]
+                         :or   {source   (single-key-source)
+                                size-fn  term/size
+                                frame-ms 30}}]
+   (let [painted (atom :unpainted)]
+     (run-loop
+       {:sources  [source (clock-source 0)]
+        :state    nil
+        :step     (fn [st ev]
+                    (let [[kind payload] ev]
+                      (if (and (= kind :action) (not= payload bel))
+                        (reduced (if (= payload :eof) nil payload))
+                        st)))
+        :render   (fn [_]
+                    (when background!
+                      (let [size (size-fn)]
+                        (when (not= size @painted)
+                          (reset! painted size)
+                          (background!))))
+                    (prompt!))
+        :frame-ms frame-ms}))))

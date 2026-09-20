@@ -1,0 +1,94 @@
+(ns xsofy.test.ui-modal-test
+  "Headless coverage for the nested modal loops. These helpers live in xsofy.ui
+   rather than main.lg precisely so they can be driven here: main.lg calls -main
+   at load time and cannot be required from a test."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.ui :as ui]))
+
+(defn- queued-source
+  "A single-key source over a mutable queue, so a test can see what was left
+   unread — which is the whole question in the handoff case below."
+  [queue]
+  (ui/single-key-source ui/raw-key->event
+                        (fn [] (boolean (seq @queue)))
+                        (fn [] (let [k (first @queue)] (swap! queue rest) k))))
+
+(deftest dismiss-input-closes-on-a-real-key
+  (testing "any key clears :screen"
+    (is (nil? (:screen (ui/dismiss-input {:screen :help} "x")))))
+  (testing "EOF closes, matching the blocking read it replaces"
+    (is (nil? (:screen (ui/dismiss-input {:screen :help} nil)))))
+  (testing "the shell's resize nudge is not a keypress"
+    (is (= :help (:screen (ui/dismiss-input {:screen :help} ui/bel))))))
+
+(deftest modal-loop-leaves-queued-keys-for-the-next-screen
+  (testing "a key behind a :screen handoff is not consumed and dropped"
+    ;; Regression for the review finding on #200: input-source drains every
+    ;; pending key into one batch and apply-events stops folding at (reduced),
+    ;; so a key already read off the terminal when a modal exits was discarded.
+    ;; Inventory hands off to inscribe on "a"; "b" must survive for inscribe.
+    (let [queue (atom ["a" "b"])
+          w (ui/modal-loop {:screen :inventory}
+                           (fn [_] nil)
+                           (fn [w k] (if (= k "a") (assoc w :screen :inscribe) w))
+                           {:source   (queued-source queue)
+                            :size-fn  (fn [] [80 24])
+                            :frame-ms 1})]
+      (is (= :inscribe (:screen w)) "exits on the screen change, not only on a clear")
+      (is (= ["b"] (vec @queue)) "b is still queued rather than read and thrown away"))))
+
+(deftest batching-source-is-what-drops-the-key
+  (testing "the same handoff through input-source loses the queued key"
+    ;; Falsification: this is the behaviour single-key-source exists to avoid.
+    ;; If this ever stops draining, the guarantee above is no longer load-bearing.
+    (let [queue (atom ["a" "b"])
+          src (ui/input-source ui/raw-key->event
+                               (fn [] (boolean (seq @queue)))
+                               (fn [] (let [k (first @queue)] (swap! queue rest) k)))]
+      (ui/modal-loop {:screen :inventory}
+                     (fn [_] nil)
+                     (fn [w k] (if (= k "a") (assoc w :screen :inscribe) w))
+                     {:source src :size-fn (fn [] [80 24]) :frame-ms 1})
+      (is (empty? @queue) "both keys were drained; b never reached a reducer"))))
+
+(deftest prompt-key-paints-the-background-off-a-tty
+  (testing "term/size is nil off a TTY; the background must still paint once"
+    ;; Regression for the review finding on #200: the repaint gate compared
+    ;; against nil, so (not= nil nil) was false every frame and the background
+    ;; was never painted for the prompt's whole lifetime off a TTY.
+    (let [queue   (atom ["y"])
+          painted (atom 0)
+          k (ui/prompt-key! (fn [] nil)
+                            (fn [] (swap! painted inc))
+                            {:source   (queued-source queue)
+                             :size-fn  (fn [] nil)
+                             :frame-ms 1})]
+      (is (= "y" k))
+      (is (>= @painted 1) "painted at least once despite a nil size"))))
+
+(deftest prompt-key-skips-the-resize-nudge
+  (testing "a lone BEL is not the answer to a y/n prompt"
+    (let [queue (atom [ui/bel "n"])
+          k (ui/prompt-key! (fn [] nil) nil
+                            {:source (queued-source queue) :frame-ms 1})]
+      (is (= "n" k)))))
+
+(deftest modal-loop-repaints-background-only-on-a-size-change
+  (testing "background paints on entry and per resize, not per frame"
+    ;; :quick-menu centres a small box and clears only that box, so after a
+    ;; resize the old box would otherwise stay on screen beside the new one.
+    (let [frames  (atom 0)
+          painted (atom 0)
+          w (ui/modal-loop {:screen :quick-menu}
+                           (fn [_] (swap! frames inc))
+                           (fn [w _] (dissoc w :screen))
+                           {:source      (ui/single-key-source
+                                           ui/raw-key->event
+                                           (fn [] (>= @frames 6))
+                                           (fn [] "q"))
+                            :size-fn     (fn [] (if (< @frames 3) [80 24] [100 30]))
+                            :background! (fn [_] (swap! painted inc))
+                            :frame-ms    1})]
+      (is (nil? (:screen w)))
+      (is (= 2 @painted) "entry plus one size change, not one per frame")
+      (is (>= @frames 6) "the loop really did run several frames"))))
