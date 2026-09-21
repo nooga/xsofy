@@ -325,6 +325,39 @@
           via-combine (h/combine 42 [:combat :hit])]
       (is (= via-macro via-combine)))))
 
+(deftest with-folded-salt-fully-literal-over-32-bytes
+  (testing "Fully literal salt-key whose precomputed buffer exceeds 32 bytes"
+    ;; Regression guard for #204 / let-go#943. The fully-literal branch splices
+    ;; its precomputed byte buffer into the emitted form as a compile-time
+    ;; constant. encode-salt builds that buffer with conj, and let-go's conj
+    ;; promotes ArrayVector -> PersistentVector above 32 elements. A
+    ;; PersistentVector constant compiles to no bytecode at all — compileForm's
+    ;; type switch has no case for it and no default — so the call panics with
+    ;; `index out of range [-1]` having compiled clean. The macro forces `vec`
+    ;; to keep the constant an ArrayVector.
+    ;;
+    ;; This guard cannot fail softly: drop the `vec` and the panic takes the
+    ;; whole suite down instead of reporting an assertion failure. That is the
+    ;; point — a silent miscompile deserves the loudest possible failure.
+    ;;
+    ;; One character of keyword name straddles the boundary, so both sides of
+    ;; it are pinned here rather than just the broken one.
+    (is (= 32 (count (h/encode-salt [:combat :hi 1 2]))))
+    (is (= 33 (count (h/encode-salt [:combat :hit 1 2]))))
+
+    ;; 32 bytes — ArrayVector, worked even before the fix.
+    (is (= (h/with-folded-salt 42 [:combat :hi 1 2])
+           (h/combine 42 [:combat :hi 1 2])))
+    ;; 33 bytes — one past the boundary; this is the case that panicked.
+    (is (= (h/with-folded-salt 42 [:combat :hit 1 2])
+           (h/combine 42 [:combat :hit 1 2])))
+    ;; Well past it, mixing string terms with keywords and ints (48 bytes).
+    (is (= (h/with-folded-salt 7 [:combat :hit "attacker-17" "target-93" 99])
+           (h/combine 7 [:combat :hit "attacker-17" "target-93" 99])))
+    ;; Multi-byte UTF-8 in a folded string term, also past the boundary.
+    (is (= (h/with-folded-salt 3 [:effect :burn "żółw-日本語" 1])
+           (h/combine 3 [:effect :burn "żółw-日本語" 1])))))
+
 (deftest with-folded-salt-equals-combine-with-variables
   (testing "Partial-literal salt-key: macro output equals combine"
     (let [attacker :rat-3

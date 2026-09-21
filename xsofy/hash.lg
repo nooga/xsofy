@@ -364,7 +364,18 @@
     ;; value (it's whatever expression the caller wrote), so we can't fold
     ;; the hash itself — only the input bytes.
     (and (vector? salt-key) (every? salt-literal? salt-key))
-    (let [bytes-literal (encode-salt salt-key)]
+    ;; `vec` is not redundant: encode-salt builds its result with conj, and
+    ;; let-go's conj promotes ArrayVector -> PersistentVector above 32
+    ;; elements. A PersistentVector spliced in as a compile-time constant
+    ;; emits no bytecode at all — compileForm's type switch has no case for
+    ;; it and no default — so the call panics with `index out of range [-1]`
+    ;; at runtime while compiling clean. `vec` rebuilds as an ArrayVector,
+    ;; which the compiler does handle. The other splice sites in this macro
+    ;; already go through `vec`, which is why only this branch broke.
+    ;; Remove once let-go#943 ships —
+    ;; with-folded-salt-fully-literal-over-32-bytes in hash_test.lg is what
+    ;; fails if it goes early.
+    (let [bytes-literal (vec (encode-salt salt-key))]
       `(xsofy.hash/xxh3-64 ~bytes-literal ~seed))
 
     ;; Partially-literal vector: fold the leading literal prefix, emit
