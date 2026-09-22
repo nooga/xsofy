@@ -46,7 +46,7 @@ The `:ensouled` policy demonstrates how a more sophisticated perception and util
 ```clojure
 (require '[xsofy.balance :as b])
 
-; Quick smoke test (4 runs, should finish in ~10 seconds)
+; Quick smoke test (4 runs, ~5 seconds)
 (def report (b/explore {:n-runs 4 
                         :loadouts [:starter] 
                         :policies [:greedy-melee]
@@ -55,7 +55,7 @@ The `:ensouled` policy demonstrates how a more sophisticated perception and util
                         :seed 42}))
 (b/print-report report)
 
-; Medium sweep (40 runs across 2 loadouts × 2 policies)
+; Medium sweep (40 runs across 2 loadouts × 2 policies; up to ~13 minutes)
 (def report (b/explore {:n-runs 40
                         :loadouts [:starter :starter-with-damage-rune]
                         :policies [:greedy-melee :ensouled]
@@ -71,23 +71,23 @@ The `:ensouled` policy demonstrates how a more sophisticated perception and util
 lg xsofy/test/balance_explore.lg
 ```
 
-The script runs with **small parameters by default** (n-runs=6, max-turns=200, target-depth=3) for quick feedback. See the script (`xsofy/test/balance_explore.lg`) to adjust for longer sweeps.
+The script runs with **small parameters by default** (n-runs=6, max-turns=400, target-depth=4, a 40×25 map; about 4 seconds) for quick feedback. `n-runs` is the total across all loadout × policy combos, rounded down to a multiple of the combo count, so the script's 6 runs over 2 × 2 combos run 4 simulations. See the script (`xsofy/test/balance_explore.lg`) to adjust for longer sweeps.
 
 ## Runtime Cost & Warnings
 
-⚠️ **A turn takes ~20–25 ms.** Wall time = n-runs × max-turns × ~0.02 seconds.
+⚠️ **A turn takes ~9–10 ms natively** (let-go 1.13, measured with `bench/native.lg`; originally ~20–25 ms). Worst-case wall time = n-runs × max-turns × ~0.01 seconds, plus ~1 s of startup. Runs that end early (death, target depth) finish sooner.
 
-Default parameters (n-runs=40, max-turns=2000) = 40 × 2000 × 0.02 = **~27 minutes of continuous computation** with **no progress output**. This is the bug we fixed.
+Default parameters (n-runs=40, max-turns=2000) = 40 × 2000 × 0.01 = **up to ~13 minutes of continuous computation**. Before per-run progress output was added, that looked like a hang.
 
-### How to Avoid the Silent 30-Minute Hang
+### How to Avoid a Silent Multi-Minute Run
 
 1. **Start small.** Always use small parameters on first run:
    ```clojure
-   {:n-runs 3 :max-turns 60 :target-depth 3}  ; ~3 seconds
+   {:n-runs 3 :max-turns 60 :target-depth 3}  ; ~2 seconds
    ```
    Watch the progress lines appear in real time (one per completed run).
 
-2. **Estimate before scaling.** If 3 runs × 60 turns = 3.6 seconds, then 40 runs × 2000 turns = ~27 minutes (40/3 × 2000/60 ≈ 450 wall time).
+2. **Estimate before scaling.** 3 runs × 60 turns ≈ 1.8 seconds of turns (~2 s with startup); 40 runs × 2000 turns is 40/3 × 2000/60 ≈ 444× that, so ~13 minutes.
 
 3. **Use `:seed` for reproducibility.** Include a `:seed` in your params so you get the same run sequence every time. Without it, timings vary due to procedural generation differences.
 
@@ -103,8 +103,12 @@ Each outcome record includes `:seed` (the initial RNG seed for that run) and `:a
               :seed 12345
               :action-log [:autoexplore :autoexplore :up ...]})
 
-; Replay: same seed + same actions = identical world
-(def replayed (dispatch/replay 50 30 (:seed outcome) (:action-log outcome)))
+; Replay: same seed + same loadout + same actions = identical world.
+; Start from the loadout world; plain dispatch/replay uses the default
+; starting kit and diverges.
+(def replayed (reduce dispatch/dispatch
+                      (b/make-loadout-world 50 30 (get b/all-loadouts (:loadout outcome)) (:seed outcome))
+                      (:action-log outcome)))
 ; replayed has the same :depth, :turn, :entities, :terrain, etc. as the live run
 ```
 
@@ -207,8 +211,10 @@ Run `./bin/lg xsofy/test/run.lg` to verify the harness compiles and tests pass.
                                      (:outcomes report1))))
 
 ; 3. Replay it for debugging
-(def replayed-world (dispatch/replay 50 30 (:seed interesting-death) 
-                                    (:action-log interesting-death)))
+(def replayed-world (reduce dispatch/dispatch
+                            (b/make-loadout-world 50 30 (get b/all-loadouts :starter)
+                                                  (:seed interesting-death))
+                            (:action-log interesting-death)))
 (println "Replayed death at depth" (:depth replayed-world))
 
 ; 4. Ask follow-up questions
@@ -219,7 +225,7 @@ Run `./bin/lg xsofy/test/run.lg` to verify the harness compiles and tests pass.
 
 ## Sample Sweep & Findings (2026-05-30)
 
-A 40-run sweep across all 4 loadouts × all 5 policies (`max-turns 250`, `target-depth 5`, `seed 7`), ~20s wall time:
+A 40-run sweep across all 4 loadouts × all 5 policies (`max-turns 250`, `target-depth 5`, `seed 7`). It took ~20 s when recorded; the same command takes ~37 s on current main (let-go 1.13). The findings below are from the original run.
 
 ```
 Per-loadout outcomes:                          mean-turns survived

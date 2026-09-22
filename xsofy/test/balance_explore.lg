@@ -7,12 +7,14 @@
    Adjust the call to b/explore below to vary loadouts, policies, run
    count, etc. See xsofy/balance.lg for available knobs.
 
-   This script uses SMALL parameters (n-runs=6, max-turns=200) for quick
-   smoke testing. For a full balance sweep, increase n-runs to 40+ and
-   max-turns to 2000, but expect ~30 minutes of runtime."
+   This script uses SMALL parameters (n-runs=6, max-turns=400) for quick
+   smoke testing; n-runs is split across the 2x2 loadout/policy combos, so
+   it runs 4 simulations in about 4 seconds. For a full balance sweep,
+   increase n-runs to 40+ and max-turns to 2000, and expect up to ~13
+   minutes (turns cost ~9-10 ms natively)."
   (:require [xsofy.balance :as b]))
 
-(println "Running balance sweep (small params: 6 runs per policy, should finish in ~30s)...")
+(println "Running balance sweep (small params: 4 runs, should finish in ~5s)...")
 (let [report (b/explore {:n-runs 6
                          :loadouts [:starter :starter-with-damage-rune]
                          :policies [:greedy-descend :ensouled]
