@@ -49,9 +49,20 @@
   [action]
   (not (contains? ui-actions (action-type action))))
 
+(defn- player-dead?
+  "Same test update-world uses to raise the death screen: player entity gone
+   or HP missing / <= 0."
+  [world]
+  (let [hp (get-in world [:entities :player :body :hp])]
+    (or (nil? hp) (<= hp 0))))
+
 (defn dispatch
   "Resolve one input action against the world:
      - ignored actions (unbound key, resize wake, nil) → world unchanged;
+     - replay actions once the player is dead → world unchanged. Live play
+       never gets here (the death screen owns input), but a replayed log can
+       outlive the player — a diverged ?replay= code, or a harness log replayed
+       on the wrong starting world — and turn code assumes a player exists;
      - replay actions → fold into the seed (keyed by the pre-action :turn so the
        fold is stable), resolve via world/update-world, append to :action-log;
      - UI actions → world/update-world unchanged (sets :screen, no fold/log).
@@ -59,6 +70,9 @@
   [world action]
   (cond
     (ignored-action? action)
+    world
+
+    (and (replay-action? action) (player-dead? world))
     world
 
     (replay-action? action)
