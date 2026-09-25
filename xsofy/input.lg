@@ -11,11 +11,19 @@
   (or (= (js/url-param "mode") "dev")
       (let [e (os/getenv "XSOFY_DEV")] (and e (> (count e) 0)))))
 
+;; Movement :keys carry both the ANSI arrow escapes and Plan 9's kernel arrow
+;; runes (Kup U+F00E, Kdown U+F800, Kleft U+F011, Kright U+F012 —
+;; /sys/include/keyboard.h). Which form a terminal delivers varies, so we bind
+;; both: alacritty9 sends ANSI ESC[ for up/left/right but the raw Kdown rune for
+;; DOWN (measured on 9front — down-movement in-game needs U+F800 or it's dead);
+;; the bare text console sends all four as runes; rio's own windows swallow the
+;; arrows for scrollback. Binding both forms makes movement work wherever a key
+;; actually reaches us.
 (def base-key-bindings
-  [{:action :up          :category :movement   :label "Move up"          :keys ["\u001b[A" "k" "8"] :help-keys ["k" "8" "Up"]}
-   {:action :down        :category :movement   :label "Move down"        :keys ["\u001b[B" "j" "2"] :help-keys ["j" "2" "Down"]}
-   {:action :left        :category :movement   :label "Move left"        :keys ["\u001b[D" "h" "4"] :help-keys ["h" "4" "Left"]}
-   {:action :right       :category :movement   :label "Move right"       :keys ["\u001b[C" "l" "6"] :help-keys ["l" "6" "Right"]}
+  [{:action :up          :category :movement   :label "Move up"          :keys ["\u001b[A" "\uf00e" "k" "8"] :help-keys ["k" "8" "Up"]}
+   {:action :down        :category :movement   :label "Move down"        :keys ["\u001b[B" "\uf800" "j" "2"] :help-keys ["j" "2" "Down"]}
+   {:action :left        :category :movement   :label "Move left"        :keys ["\u001b[D" "\uf011" "h" "4"] :help-keys ["h" "4" "Left"]}
+   {:action :right       :category :movement   :label "Move right"       :keys ["\u001b[C" "\uf012" "l" "6"] :help-keys ["l" "6" "Right"]}
    {:action :up-left     :category :movement   :label "Move up-left"     :keys ["y" "7"] :help-keys ["y" "7"]}
    {:action :up-right    :category :movement   :label "Move up-right"    :keys ["u" "9"] :help-keys ["u" "9"]}
    {:action :down-left   :category :movement   :label "Move down-left"   :keys ["b" "1"] :help-keys ["b" "1"]}
