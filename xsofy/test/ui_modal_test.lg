@@ -77,18 +77,60 @@
   (testing "background paints on entry and per resize, not per frame"
     ;; :quick-menu centres a small box and clears only that box, so after a
     ;; resize the old box would otherwise stay on screen beside the new one.
-    (let [frames  (atom 0)
+    (let [ticks   (atom 0)
+          frames  (atom 0)
           painted (atom 0)
           w (ui/modal-loop {:screen :quick-menu}
                            (fn [_] (swap! frames inc))
                            (fn [w _] (dissoc w :screen))
                            {:source      (ui/single-key-source
                                            ui/raw-key->event
-                                           (fn [] (>= @frames 6))
+                                           (fn [] (>= (swap! ticks inc) 6))
                                            (fn [] "q"))
-                            :size-fn     (fn [] (if (< @frames 3) [80 24] [100 30]))
+                            :size-fn     (fn [] (if (< @ticks 3) [80 24] [100 30]))
                             :background! (fn [_] (swap! painted inc))
                             :frame-ms    1})]
       (is (nil? (:screen w)))
       (is (= 2 @painted) "entry plus one size change, not one per frame")
-      (is (>= @frames 6) "the loop really did run several frames"))))
+      (is (= 2 @frames) "the screen repaints with its background, not per frame")
+      (is (>= @ticks 6) "the loop really did run several frames"))))
+
+(deftest modal-loop-repaints-only-when-something-changed
+  (testing "idle ticks paint nothing; a key that changes the world repaints"
+    ;; Review follow-up on #200: modal-loop called render! every 30 ms, where
+    ;; the blocking reads it replaced painted once and waited.
+    (let [queue  (atom [nil nil "j" nil nil "q"])
+          frames (atom 0)
+          src    (ui/single-key-source ui/raw-key->event
+                                       (fn [] (boolean (seq @queue)))
+                                       (fn [] (let [k (first @queue)] (swap! queue rest) k)))
+          ;; nil entries stand in for idle ticks: the key source reports
+          ;; nothing pending for them.
+          idle   (fn [] (if (nil? (first @queue))
+                          (do (swap! queue rest) [])
+                          (src)))
+          w (ui/modal-loop {:screen :inventory :cursor 0}
+                           (fn [_] (swap! frames inc))
+                           (fn [w k] (case k
+                                       "j" (update w :cursor inc)
+                                       "q" (dissoc w :screen)
+                                       w))
+                           {:source idle :size-fn (fn [] [80 24]) :frame-ms 1})]
+      (is (nil? (:screen w)))
+      (is (= 1 (:cursor w)))
+      (is (= 2 @frames) "entry plus the cursor move; idle ticks paint nothing"))))
+
+(deftest prompt-key-paints-the-prompt-once-per-size
+  (testing "the prompt is not redrawn every tick while it waits"
+    (let [ticks  (atom 0)
+          drawn  (atom 0)
+          k (ui/prompt-key! (fn [] (swap! drawn inc)) nil
+                            {:source   (ui/single-key-source
+                                         ui/raw-key->event
+                                         (fn [] (>= (swap! ticks inc) 5))
+                                         (fn [] "y"))
+                             :size-fn  (fn [] [80 24])
+                             :frame-ms 1})]
+      (is (= "y" k))
+      (is (= 1 @drawn))
+      (is (>= @ticks 5)))))
