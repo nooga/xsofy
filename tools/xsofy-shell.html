@@ -507,11 +507,10 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
       window.LetGoHost.setSize(term.cols, term.rows);
       term.onResize(({cols, rows}) => {
         window.LetGoHost.setSize(cols, rows);
-        // Nudge a blocked read-key with a lone BEL (0x07) so the game re-renders
-        // at the new grid size without waiting for a keypress — a native SIGWINCH
-        // analog. parse-key returns :unknown for BEL, and the game's
-        // read-dismiss-key! (main.lg, shipped in #138) discards it, so it never
-        // counts as a real keypress.
+        // Send a lone BEL (0x07) so the game re-renders at the new grid size
+        // without waiting for a keypress — a native SIGWINCH analog. The game
+        // filters it as a nudge rather than a keypress: ui/dismiss-input and
+        // ui/prompt-key! skip it, and the title screen ignores it.
         window.LetGoHost.sendInput("\x07");
       });
       term.onData((d) => window.LetGoHost.sendInput(d));
