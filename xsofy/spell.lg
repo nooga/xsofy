@@ -274,7 +274,7 @@
                       ddx (- tx ox) ddy (- ty oy)
                       ;; normalize to -1/0/1
                       len (max 1 (max (math/abs ddx) (math/abs ddy)))
-                      dx (int (/ ddx len)) dy (int (/ ddy len))]
+                      dx (quot ddx len) dy (quot ddy len)]
                   (fire/place-web-cone world ox oy dx dy)))
               (:world ctx)
               (:cursors ctx))]
