@@ -130,7 +130,9 @@
 ;; (covers typed ASCII and rune glyphs); avoids char-code arithmetic. Multi-byte
 ;; escape sequences (arrows etc.) are length > 1, so they're excluded already.
 (def ^:private control-keys
-  #{"\r" "\n" "\t" ESC DEL BS ETX})
+  ;; The resize nudge is here so a browser resize doesn't type a form feed into
+  ;; the input line, which would echo to xterm as a line feed.
+  #{"\r" "\n" "\t" ESC DEL BS ETX ui/resize-nudge})
 
 (defn- printable? [k]
   (and (string? k) (= 1 (count k)) (not (contains? control-keys k))))

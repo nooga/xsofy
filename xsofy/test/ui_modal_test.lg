@@ -19,7 +19,7 @@
   (testing "EOF closes, matching the blocking read it replaces"
     (is (nil? (:screen (ui/dismiss-input {:screen :help} nil)))))
   (testing "the shell's resize nudge is not a keypress"
-    (is (= :help (:screen (ui/dismiss-input {:screen :help} ui/bel))))))
+    (is (= :help (:screen (ui/dismiss-input {:screen :help} ui/resize-nudge))))))
 
 (deftest modal-loop-leaves-queued-keys-for-the-next-screen
   (testing "a key behind a :screen handoff is not consumed and dropped"
@@ -67,8 +67,8 @@
       (is (>= @painted 1) "painted at least once despite a nil size"))))
 
 (deftest prompt-key-skips-the-resize-nudge
-  (testing "a lone BEL is not the answer to a y/n prompt"
-    (let [queue (atom [ui/bel "n"])
+  (testing "the resize nudge is not the answer to a y/n prompt"
+    (let [queue (atom [ui/resize-nudge "n"])
           k (ui/prompt-key! (fn [] nil) nil
                             {:source (queued-source queue) :frame-ms 1})]
       (is (= "n" k)))))

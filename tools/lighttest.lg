@@ -468,7 +468,7 @@
           :else (let [st2 (render! (demo-step st1))]
                   (sleep (:frame-ms st2))
                   (recur st2))))
-      ;; keyboard-only: block until a key (read-key wakes with BEL on resize,
+      ;; keyboard-only: block until a key (read-key wakes with a form feed on resize,
       ;; so render! still runs and repaints at the new size), then react
       :else
       (recur (render! (update-state st (term/read-key)))))))
