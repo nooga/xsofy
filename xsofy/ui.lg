@@ -310,10 +310,13 @@
 ;; pumping. These live here rather than in main.lg because main.lg calls -main
 ;; at load time and so cannot be required from a test.
 
-(def bel
-  "The shell's lone-BEL resize nudge (see xsofy-shell.html refit()). It arrives
-   as a keypress but is not one, so dismiss-on-any-key screens must filter it."
-  (str (char 7)))
+(def resize-nudge
+  "The shell's resize nudge, a lone form feed (Ctrl-L, 0x0c; see
+   xsofy-shell.html refit()). Form feed rather than BEL because curses programs
+   already read Ctrl-L as \"redraw\", and BEL means \"ring the bell\". It
+   arrives as a keypress but is not one, so dismiss-on-any-key screens and text
+   inputs must filter it."
+  (str (char 12)))
 
 (defn single-key-source
   "Like `input-source`, but reads at most one key per tick.
@@ -332,9 +335,9 @@
 
 (defn dismiss-input
   "Key reducer for screens that close on any key: clear :screen, except on the
-   BEL resize nudge. EOF (nil) closes, matching the blocking path it replaces."
+   resize nudge. EOF (nil) closes, matching the blocking path it replaces."
   [world k]
-  (if (= k bel) world (dissoc world :screen)))
+  (if (= k resize-nudge) world (dissoc world :screen)))
 
 (defn modal-loop
   "Run a modal screen as a nested poll loop rather than a blocking read.
@@ -350,14 +353,19 @@
    (:quick-menu centres a small box and clears only that box). Without it a
    resize draws the box at its new centre and leaves the old one behind. It is
    called with the world on entry and whenever the size changes, never per
-   frame. Screens that clear the whole terminal do not need it."
+   frame. Screens that clear the whole terminal do not need it.
+
+   `render!` is likewise called on entry, on a size change, and when a key
+   changes the world, not every tick: the blocking path painted once and
+   waited, and none of these screens animate."
   ([world render! input] (modal-loop world render! input {}))
   ([world render! input {:keys [background! source size-fn frame-ms]
                          :or   {source   (single-key-source)
                                 size-fn  term/size
                                 frame-ms 30}}]
    (let [from    (:screen world)
-         painted (atom :unpainted)]
+         painted (atom :unpainted)
+         shown   (atom :unpainted)]
      (run-loop
        {:sources  [source (clock-source 0)]
         :state    world
@@ -369,20 +377,22 @@
                           (if (= (:screen w') from) w' (reduced w')))
                         w)))
         :render   (fn [w]
-                    (when background!
-                      (let [size (size-fn)]
-                        (when (not= size @painted)
-                          (reset! painted size)
-                          (background! w))))
-                    (render! w))
+                    (let [size    (size-fn)
+                          resized (not= size @painted)]
+                      (when resized
+                        (reset! painted size)
+                        (when background! (background! w)))
+                      (when (or resized (not (identical? w @shown)))
+                        (reset! shown w)
+                        (render! w))))
         :frame-ms frame-ms}))))
 
 (defn prompt-key!
   "Poll for one real keypress while `prompt!` stays painted, returning the key
-   (nil on EOF, nil-safe on the BEL nudge, which is skipped).
+   (nil on EOF, nil-safe on the resize nudge, which is skipped).
 
-   `background!` repaints whatever sits behind the prompt, and only when the
-   terminal size changes rather than every frame — the confirms previously
+   `background!` and `prompt!` repaint only when the terminal size changes
+   rather than every frame — the confirms previously
    painted once and then blocked, so a per-frame full repaint would cost what
    the blocking version never did. Pass nil to paint nothing behind: the death
    screen must not be repainted with the gameplay renderer.
@@ -401,14 +411,13 @@
         :state    nil
         :step     (fn [st ev]
                     (let [[kind payload] ev]
-                      (if (and (= kind :action) (not= payload bel))
+                      (if (and (= kind :action) (not= payload resize-nudge))
                         (reduced (if (= payload :eof) nil payload))
                         st)))
         :render   (fn [_]
-                    (when background!
-                      (let [size (size-fn)]
-                        (when (not= size @painted)
-                          (reset! painted size)
-                          (background!))))
-                    (prompt!))
+                    (let [size (size-fn)]
+                      (when (not= size @painted)
+                        (reset! painted size)
+                        (when background! (background!))
+                        (prompt!))))
         :frame-ms frame-ms}))))

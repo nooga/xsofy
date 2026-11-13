@@ -5,7 +5,8 @@
    pure pieces: run-command (what submit wraps) and the render-free editing keys."
   (:require [test :refer [deftest is testing]]
             [string :as str]
-            [xsofy.console :as console]))
+            [xsofy.console :as console]
+            [xsofy.ui :as ui]))
 
 (def world
   {:entities {:player {:body {:hp 5 :max-hp 20} :pos [3 4]}}
@@ -64,6 +65,13 @@
                (console/handle-key [:action "b"]))]
     (is (= "ab" (:input st)))
     (is (= 2 (:cursor st)))))
+
+(deftest resize-nudge-is-not-typed
+  (let [st (-> (console/init-state world [80 24])
+               (console/handle-key [:action "a"])
+               (console/handle-key [:action ui/resize-nudge]))]
+    (is (= "a" (:input st)))
+    (is (= 1 (:cursor st)))))
 
 (deftest backspace-deletes-before-cursor
   (let [st (-> (console/init-state world [80 24])

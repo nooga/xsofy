@@ -507,12 +507,13 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
       window.LetGoHost.setSize(term.cols, term.rows);
       term.onResize(({cols, rows}) => {
         window.LetGoHost.setSize(cols, rows);
-        // Nudge a blocked read-key with a lone BEL (0x07) so the game re-renders
-        // at the new grid size without waiting for a keypress — a native SIGWINCH
-        // analog. parse-key returns :unknown for BEL, and the game's
-        // read-dismiss-key! (main.lg, shipped in #138) discards it, so it never
-        // counts as a real keypress.
-        window.LetGoHost.sendInput("\x07");
+        // Send a lone form feed (Ctrl-L, 0x0c), the curses "redraw" key, so the
+        // game re-renders at the new grid size without waiting for a keypress —
+        // a native SIGWINCH analog. The game
+        // filters it as a nudge rather than a keypress: ui/dismiss-input and
+        // ui/prompt-key! skip it (ui/resize-nudge), and the title screen and dev
+        // console ignore it.
+        window.LetGoHost.sendInput("\x0c");
       });
       term.onData((d) => window.LetGoHost.sendInput(d));
     }
@@ -582,7 +583,7 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
     clearTimeout(refitPending);  // cancel any pending debounced fit
     applyFit();                  // fit now — no 100ms unfitted flash/lurch
     // The box re-fits in-frame, but xterm reflows the OLD frame's content into
-    // the new grid — a garbled flash until the game's repaint (BEL nudge round
+    // the new grid — a garbled flash until the game's repaint (resize-nudge round
     // trip) lands. Clear the viewport so the interim is clean background
     // instead. Only when the grid actually changed: same-dims means no reflow
     // AND no resize nudge, so a clear would sit blank until the next keypress.
