@@ -297,7 +297,7 @@
           (if (< b 0.05)
             (do (term/set-fg 10 10 10) (term/set-bg 10 10 10) (term/write " "))
             (do (term/set-fg (int (* cr b)) (int (* cg b)) (int (* cb b)))
-                (term/set-bg (from-bg (* cr 0.12) b) (from-bg (* cg 0.12) b) (from-bg (* cb 0.12) b))
+                (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
                 (term/write (:glyph r))))))
       ;; depth label
       (let [dx (max 1 (- cx (quot (count depth-str) 2)))
