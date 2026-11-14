@@ -87,7 +87,10 @@
 (defn xxh3-64
   "xxh3-64 of a byte vector with optional seed (default 0). Backed by let-go's
    native xxh3 interop (github.com/zeebo/xxh3) — bit-identical to the former
-   pure-Lisp implementation (verified at seed 0 and nonzero)."
+   pure-Lisp implementation (verified at seed 0 and nonzero).
+
+   To hash a string, pass (bytes s), its UTF-8 bytes; byte-array rejects
+   a string's characters."
   ([input] (xxh3-64 input 0))
   ([input seed]
    (let [len (count input)
