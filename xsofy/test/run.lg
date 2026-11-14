@@ -11,6 +11,7 @@
             [xsofy.test.det-test]
             [xsofy.test.world-seed-test]
             [xsofy.test.floor-corpus-test]
+            [xsofy.test.terrain-ca-test]
             [xsofy.test.world-shape-test]
             [xsofy.test.percept-test]
             [xsofy.test.fov-test]

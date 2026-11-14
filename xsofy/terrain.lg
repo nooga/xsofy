@@ -152,23 +152,55 @@
 ;; Generates organic shapes for caves, lakes, grass patches.
 ;; birth/survive are sets of neighbor counts.
 
-(defn ca-step [cells bw bh birth survive]
-  (let [out (int-array (* bw bh))]
+;; The CA runs on a copy of the blob with a one-cell border of zeros, so every
+;; cell's 8 neighbours are in bounds and the count is 8 plain reads. Off-grid
+;; neighbours count as dead either way, so the result is the same as checking
+;; bounds per neighbour, at a fraction of the interpreted operations.
+
+(defn- pad-cells [cells bw bh]
+  (let [pw (+ bw 2)
+        out (int-array (* pw (+ bh 2)))]
     (dotimes [y bh]
       (dotimes [x bw]
-        (let [n (loop [neighbors 0 di 0]
-                  (if (>= di 8) neighbors
-                    (let [nx (+ x (aget dir8-dx di)) ny (+ y (aget dir8-dy di))]
-                      (recur (if (and (>= nx 0) (< nx bw) (>= ny 0) (< ny bh)
-                                      (> (aget cells (+ nx (* ny bw))) 0))
-                               (inc neighbors) neighbors)
-                             (inc di)))))
-              alive (> (aget cells (+ x (* y bw))) 0)
-              new-alive (if alive
-                          (contains? survive n)
-                          (contains? birth n))]
-          (aset out (+ x (* y bw)) (if new-alive 1 0)))))
+        (aset out (+ x 1 (* (inc y) pw)) (aget cells (+ x (* y bw))))))
     out))
+
+(defn- unpad-cells [padded bw bh]
+  (let [pw (+ bw 2)
+        out (int-array (* bw bh))]
+    (dotimes [y bh]
+      (dotimes [x bw]
+        (aset out (+ x (* y bw)) (aget padded (+ x 1 (* (inc y) pw))))))
+    out))
+
+(defn- count-table
+  "A 9-slot int-array, 1 at each neighbour count in s."
+  [s]
+  (let [t (int-array 9)]
+    (dotimes [n 9]
+      (when (contains? s n) (aset t n 1)))
+    t))
+
+(defn- ca-step-padded
+  "One CA round on a padded buffer; writes only interior cells, so the zero
+   border survives. Cells hold 0 or 1, so summing neighbours counts the live
+   ones."
+  [c bw bh birth-t survive-t]
+  (let [pw (+ bw 2)
+        out (int-array (* pw (+ bh 2)))]
+    (dotimes [y bh]
+      (dotimes [x bw]
+        (let [i (+ x 1 (* (inc y) pw))
+              n (+ (aget c (- i pw 1)) (aget c (- i pw)) (aget c (- i pw -1))
+                   (aget c (- i 1)) (aget c (+ i 1))
+                   (aget c (+ i pw -1)) (aget c (+ i pw)) (aget c (+ i pw 1)))]
+          (aset out i (aget (if (> (aget c i) 0) survive-t birth-t) n)))))
+    out))
+
+(defn ca-step [cells bw bh birth survive]
+  (unpad-cells (ca-step-padded (pad-cells cells bw bh) bw bh
+                               (count-table birth) (count-table survive))
+               bw bh))
 
 ;; --- Array-based BFS queue ---
 ;; Marks visited before enqueueing so queue stays bounded to w*h.
@@ -226,8 +258,12 @@
               (aset @cells i (if (< r seed-pct) 1 0))
               (recur (inc i) w'))))]
     ;; run CA rounds (deterministic, no rolls)
-    (dotimes [_ rounds]
-      (reset! cells (ca-step @cells bw bh birth survive)))
+    (let [birth-t (count-table birth)
+          survive-t (count-table survive)]
+      (loop [i 0 c (pad-cells @cells bw bh)]
+        (if (< i rounds)
+          (recur (inc i) (ca-step-padded c bw bh birth-t survive-t))
+          (reset! cells (unpad-cells c bw bh)))))
     ;; find largest connected blob via flood fill using array BFS
     (let [labels (int-array sz)
           final-cells @cells]

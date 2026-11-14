@@ -1,0 +1,50 @@
+(ns xsofy.test.terrain-ca-test
+  "terrain/ca-step against the bounds-checked version it replaced, on grids
+   of many shapes, including 1-wide strips where every cell is an edge cell."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.terrain :as terrain]))
+
+(def ^:private dx (ints [-1 0 1 -1 1 -1 0 1]))
+(def ^:private dy (ints [-1 -1 -1 0 0 1 1 1]))
+
+(defn- reference-ca-step
+  "ca-step as it was before the padded buffer (xsofy 3eb626c)."
+  [cells bw bh birth survive]
+  (let [out (int-array (* bw bh))]
+    (dotimes [y bh]
+      (dotimes [x bw]
+        (let [n (loop [neighbors 0 di 0]
+                  (if (>= di 8) neighbors
+                    (let [nx (+ x (aget dx di)) ny (+ y (aget dy di))]
+                      (recur (if (and (>= nx 0) (< nx bw) (>= ny 0) (< ny bh)
+                                      (> (aget cells (+ nx (* ny bw))) 0))
+                               (inc neighbors) neighbors)
+                             (inc di)))))
+              alive (> (aget cells (+ x (* y bw))) 0)
+              new-alive (if alive
+                          (contains? survive n)
+                          (contains? birth n))]
+          (aset out (+ x (* y bw)) (if new-alive 1 0)))))
+    out))
+
+(defn- noise
+  "A deterministic 0/1 grid: an LCG, so the test needs no RNG state."
+  [bw bh pct state]
+  (let [a (int-array (* bw bh))]
+    (loop [i 0 s state]
+      (if (< i (* bw bh))
+        (let [s' (mod (+ (* s 1103515245) 12345) 2147483648)]
+          (aset a i (if (< (mod (quot s' 65536) 100) pct) 1 0))
+          (recur (inc i) s'))
+        a))))
+
+(deftest ca-step-matches-reference
+  (testing "same next state as the bounds-checked CA for every shape and rule"
+    (doseq [[bw bh] [[1 1] [1 7] [7 1] [2 2] [3 5] [12 9] [31 17]]
+            pct [20 55 90]
+            [birth survive] [[#{5 6 7 8} #{4 5 6 7 8}] [#{3} #{2 3}] [#{0 8} #{0 1 8}]]
+            st [1 2]]
+      (let [cells (noise bw bh pct (+ st (* 31 bw) (* 7 bh) pct))]
+        (is (= (vec (reference-ca-step cells bw bh birth survive))
+               (vec (terrain/ca-step cells bw bh birth survive)))
+            (str bw "x" bh " pct " pct " birth " birth " survive " survive))))))
