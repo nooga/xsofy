@@ -10,6 +10,7 @@
             [xsofy.test.hash-test]
             [xsofy.test.det-test]
             [xsofy.test.world-seed-test]
+            [xsofy.test.floor-corpus-test]
             [xsofy.test.world-shape-test]
             [xsofy.test.percept-test]
             [xsofy.test.fov-test]

@@ -1,0 +1,66 @@
+(ns xsofy.test.floor-corpus-test
+  "Golden corpus for floor generation: a fingerprint of every floor built from
+   a fixed set of seeds and depths. Speedups to generation must leave every
+   floor identical, and one changed roll shifts every roll after it, so a
+   wrong byte anywhere shows up here as a changed fingerprint.
+
+   A change that is meant to alter floors regenerates the goldens on purpose,
+   in its own commit that says seeds changed: run
+   (xsofy.test.floor-corpus-test/print-goldens) and paste the output."
+  (:require [test :refer [deftest is testing]]
+            [xsofy.world :as world]
+            [xsofy.hash :as h]
+            [xsofy.debug :as dbg]))
+
+(def corpus-seeds (range 1000 1010))
+(def corpus-depths (range 1 11))
+
+(def ^:private array-type (type (int-array 0)))
+
+(defn canon
+  "v with maps and sets sorted by printed key, so the printed form doesn't
+   depend on let-go's iteration order, which has changed between versions."
+  [v]
+  (cond
+    (map? v) (into [:map] (map (fn [[k x]] [(canon k) (canon x)])
+                               (sort-by (comp pr-str key) v)))
+    (set? v) (into [:set] (map canon (sort-by pr-str v)))
+    (= (type v) array-type) (into [:array] v)
+    (sequential? v) (into [:seq] (map canon v))
+    :else v))
+
+
+(defn floor-fingerprint [seed depth]
+  ;; dbg/log fsyncs debug.log on every call natively, and generation logs per
+  ;; room; stubbing it keeps this test to seconds.
+  (with-redefs [dbg/log (fn [& _] nil)]
+    (let [floor (world/generate-floor 79 30 depth (world/make-player) seed)]
+      (h/xxh3-64 (bytes (pr-str (canon floor))) 0))))
+
+(defn print-goldens []
+  (println "(def corpus-goldens")
+  (println (str "  {" (apply str (interpose "\n   "
+                                   (for [d corpus-depths]
+                                     (str d " " (mapv #(floor-fingerprint % d) corpus-seeds)))))
+                "})")))
+
+;; seeds 1000-1009 at each depth, recorded on xsofy 3eb626c
+(def corpus-goldens
+  {1 [-4585424689729155256 -1480137512112775253 3299487618850035113 3113040962288579565 -2992815004787898106 -974927691333194636 -8184607015304105310 -8362144953466477109 4191427128520364387 -6151489897287525387]
+   2 [-7420393043318125338 9194269746462174607 8572869789672826556 -5025774499567940766 -4140485174448872197 1209891683709086546 853615683521365663 6912140224387392853 7974646795828410551 -7094009682992257666]
+   3 [-1741064321892972781 -5639488585520125619 2493823558472933466 -7277541946001389366 3158315578976062736 -1418612288620413124 5955849823728780927 -5912318539095506118 -223702961312798224 2287794002670344384]
+   4 [-7314806066143508987 1721786717387053627 9113092999687707407 3373265790548698802 -1603356269619324293 4999474161353757885 1867589321689251830 4919617985274408983 -3671319986122470368 -2070193944317565188]
+   5 [3270089603116594795 -8858105781188100322 -333271981223902738 -5128502712511265900 -4693572836720635890 -5754202451920576964 -8700788817790080945 -3699551282391178115 -7065445777209110489 -1641349093646460355]
+   6 [-976922650869612683 -6306718911756171953 -1732994429620888923 3742951623991693301 -3974598641478992080 2892686670075990249 -1091447138101442596 566405018703898268 4752681702480297993 6162532586788991620]
+   7 [253898829227811650 837183236951620466 -5787018481002339579 2170377495303474113 -4123631956875720641 -7933999135918894478 -342835013525297731 5087885146850656070 5547390024419618912 29560816464810749]
+   8 [120582934273532833 -2857240118813867998 6907846315167668842 3767599970943886731 -3286491656910338663 2689225649382764348 9145768919132925767 -3998578597038041855 5354424522758320284 4279911812398165600]
+   9 [-8490358771628358674 8682693632681661934 4243830442656830052 -2981324945533549238 117924903182926837 -6304750111945605097 5473307356343695933 -3266956430055213065 -8759110752480238519 -4330587465642810866]
+   10 [911021682710392244 5646199885253917504 -1524697081294484116 7717175689574485236 -4922416255769491965 -3959800468446323629 1876912527884393689 6912584824763657906 4434531326263613860 5195635434218650014]})
+
+(deftest floor-corpus-matches-goldens
+  (testing "every corpus floor matches its recorded fingerprint"
+    (is (= (set corpus-depths) (set (keys corpus-goldens))) "goldens cover every depth")
+    (doseq [d corpus-depths
+            [seed want] (map vector corpus-seeds (get corpus-goldens d))]
+      (is (= want (floor-fingerprint seed d))
+          (str "floor changed: seed " seed " depth " d)))))
