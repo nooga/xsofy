@@ -107,10 +107,19 @@
 ;; under wasm load, which made a frame-counted fade run short. The audio lane
 ;; times the music fade-in against the black hold, so these are named defs
 ;; rather than literals.
-(def title-black-ms 1000)            ;; pure black before anything shows
-(def title-runes-in-ms [title-black-ms 2500]) ;; runes ramp from black
-(def title-text-in-ms [2000 4000])   ;; title ramps from black
-(def title-prompt-in-ms [4000 5500]) ;; "Press any key" + seed ramp in
+(def title-black-ms 500)        ;; pure black before anything shows
+(def title-runes-rise-ms 2000)  ;; runes ramp from black
+(def title-overlap-ms 300)      ;; title starts this long before the runes finish
+(def title-text-rise-ms 2000)   ;; title ramps from black
+(def title-prompt-rise-ms 1500) ;; "Press any key" + seed ramp in, after the title
+
+(def title-runes-in-ms [title-black-ms (+ title-black-ms title-runes-rise-ms)])
+(def title-text-in-ms
+  (let [from (- (second title-runes-in-ms) title-overlap-ms)]
+    [from (+ from title-text-rise-ms)]))
+(def title-prompt-in-ms
+  (let [from (second title-text-in-ms)]
+    [from (+ from title-prompt-rise-ms)]))
 
 (defn- ramp
   "0.0 before `from`, 1.0 after `to`, linear between."
