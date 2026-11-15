@@ -304,3 +304,10 @@
         shuffled (v (d/permute {:seed seed} coll))]
     (and (= (count coll) (count shuffled))
          (= (set coll) (set shuffled)))))
+
+(deftest roll-100-is-int-in-0-100
+  (testing "roll-100 gives the same roll and the same next seed as (int-in w 0 100)"
+    (doseq [seed (concat (range -50 50) [Long/MAX_VALUE Long/MIN_VALUE 9007199254740993])]
+      (let [w {:seed seed :other :kept}]
+        (is (= (d/int-in w 0 100) (d/roll-100 w)) (str "seed " seed))))
+    (is (= (d/int-in {} 0 100) (d/roll-100 {})) "missing :seed defaults to 0 both ways")))

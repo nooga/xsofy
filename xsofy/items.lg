@@ -387,7 +387,7 @@
   "Pick a quality tier deterministically. Returns [tier-keyword world']."
   [world depth slot]
   (let [world (det/with-context world [:itemgen :quality-tier depth slot])
-        [r world] (det/int-in world 0 100)]
+        [r world] (det/roll-100 world)]
     [(cond
        (< r 55) :useful
        (< r 80) :powerful

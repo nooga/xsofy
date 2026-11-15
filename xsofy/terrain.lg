@@ -252,7 +252,7 @@
         (loop [i 0 w w-ctx]
           (if (>= i sz)
             w
-            (let [p (det/int-in w 0 100)
+            (let [p (det/roll-100 w)
                   r (first p)
                   w' (second p)]
               (aset @cells i (if (< r seed-pct) 1 0))
@@ -468,7 +468,7 @@
                               (if (and (in-bounds? w h nx ny)
                                        (= (aget visited idx) 0)
                                        (contains? allowed-tiles (tget grid w nx ny)))
-                                (let [p (det/int-in w-inner 0 100)
+                                (let [p (det/roll-100 w-inner)
                                       r (first p)
                                       w-next (second p)]
                                   (if (< r prob)

@@ -294,6 +294,12 @@
   [seed salt-key]
   (xxh3-64 (encode-salt salt-key) seed))
 
+(defn combine-encoded
+  "(combine seed salt-key) for a salt already encoded: pass
+   (byte-array (encode-salt salt-key)), built once and reused."
+  [seed salt-bytes]
+  (xxh3/HashSeed salt-bytes seed))
+
 ;; ============================================================================
 ;; Macro Layer 1 — compile-time fold of constant salt-key prefix
 ;; ============================================================================
