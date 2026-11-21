@@ -102,13 +102,52 @@
 ;; clear-screen, rune-glyphs) live in xsofy.screenfx, shared with the death
 ;; screen.
 
-(defn draw-frame [runes title subtitle tw th frame seed]
+;; Opening sequence, in wall-clock ms from the title screen's first frame.
+;; Wall clock rather than frame count: frames are paced at ~120 ms but slip
+;; under wasm load, which made a frame-counted fade run short. The audio lane
+;; times the music fade-in against the black hold, so these are named defs
+;; rather than literals.
+(def title-black-ms 500)        ;; pure black before anything shows
+(def title-runes-rise-ms 2000)  ;; runes ramp from black
+(def title-overlap-ms 300)      ;; title starts this long before the runes finish
+(def title-text-rise-ms 2000)   ;; title ramps from black
+(def title-prompt-rise-ms 1500) ;; "Press any key" + seed ramp in, after the title
+
+(def title-runes-in-ms [title-black-ms (+ title-black-ms title-runes-rise-ms)])
+(def title-text-in-ms
+  (let [from (- (second title-runes-in-ms) title-overlap-ms)]
+    [from (+ from title-text-rise-ms)]))
+(def title-prompt-in-ms
+  (let [from (second title-text-in-ms)]
+    [from (+ from title-prompt-rise-ms)]))
+
+(defn- ramp
+  "0.0 before `from`, 1.0 after `to`, linear between."
+  [ms [from to]]
+  (-> (/ (float (- ms from)) (float (- to from))) (max 0.0) (min 1.0)))
+
+(def ^:private bg 10)  ;; the screen background, every channel
+
+(defn- from-bg
+  "Channel value `f` of the way from the background to `c`, so a fading text
+   starts invisible against the background rather than darker than it."
+  [c f]
+  (int (+ bg (* (- c bg) f))))
+
+(defn draw-frame
+  ;; The 7-arity derives elapsed from the frame at the nominal 120 ms pace, for
+  ;; callers (the smoke test) that only have a frame.
+  ([runes title subtitle tw th frame seed]
+   (draw-frame runes title subtitle tw th frame seed (* frame 120)))
+  ([runes title subtitle tw th frame seed elapsed-ms]
   (sfx/with-frame
   (let [cx (quot tw 2)
         cy (quot th 2)
         tx (max 1 (- cx (quot (count title) 2)))
         sx (max 1 (- cx (quot (count subtitle) 2)))
-        title-fade (min 1.0 (/ (float frame) 20.0))
+        runes-fade (ramp elapsed-ms title-runes-in-ms)
+        title-fade (ramp elapsed-ms title-text-in-ms)
+        prompt-fade (ramp elapsed-ms title-prompt-in-ms)
         sline (when seed (str "seed " seed))
         ssx (if sline (max 1 (- cx (quot (count sline) 2))) cx)
         ;; Text "moat": the pulsing runes scatter to random cells (screenfx/
@@ -128,11 +167,14 @@
     (doseq [r runes]
       (when-not (and (>= (:x r) moat-x0) (<= (:x r) moat-x1)
                      (>= (:y r) moat-y0) (<= (:y r) moat-y1))
-        (let [b (sfx/rune-brightness (:phase r) frame)
+        (let [b (* runes-fade (sfx/rune-brightness (:phase r) frame))
               [cr cg cb] (:color r)
-              fr (int (* cr b))
-              fg (int (* cg b))
-              fb (int (* cb b))]
+              ;; from the background, not from 0: a dim rune drawn below the
+              ;; bg level shows as a black glyph, which the fade-in ramp
+              ;; would hold on screen for a second
+              fr (from-bg cr b)
+              fg (from-bg cg b)
+              fb (from-bg cb b)]
           (term/move-cursor (:x r) (:y r))
           (if (< b 0.05)
             ;; dim enough to hide — draw blank
@@ -140,36 +182,42 @@
                 (term/set-bg 10 10 10)
                 (term/write " "))
             (do (term/set-fg fr fg fb)
-                (term/set-bg (int (* cr b 0.12)) (int (* cg b 0.12)) (int (* cb b 0.12)))
+                (term/set-bg (from-bg (* cr 0.12) b) (from-bg (* cg 0.12) b) (from-bg (* cb 0.12) b))
                 (term/write (:glyph r)))))))
     ;; title
     (term/move-cursor tx cy)
-    (term/set-fg (int (* 255 title-fade)) (int (* 220 title-fade)) (int (* 120 title-fade)))
+    (term/set-fg (from-bg 255 title-fade) (from-bg 220 title-fade) (from-bg 120 title-fade))
     (term/set-bg 10 10 10)
     (term/write title)
     ;; subtitle
-    (when (> frame 30)
-      (let [sf (min 1.0 (/ (float (- frame 30)) 20.0))
-            pulse (sfx/rune-brightness 0 frame)
-            bright (int (+ 50 (* 70 sf pulse)))]
+    (when (> prompt-fade 0.0)
+      (let [pulse (sfx/rune-brightness 0 frame)
+            bright (from-bg (+ 50 (* 70 pulse)) prompt-fade)]
         (term/move-cursor sx (+ cy 2))
         (term/set-fg bright bright bright)
         (term/set-bg 10 10 10)
         (term/write subtitle)))
     ;; seed — dim, under the subtitle. Note it to replay this run via ?seed=.
-    (when (and sline (> frame 30))
+    (when (and sline (> prompt-fade 0.0))
       (term/move-cursor ssx (+ cy 4))
-      (term/set-fg 90 85 70)
+      (term/set-fg (from-bg 90 prompt-fade) (from-bg 85 prompt-fade) (from-bg 70 prompt-fade))
       (term/set-bg 10 10 10)
-      (term/write sline)))))
+      (term/write sline))))))
 
-(defn show-title-screen [rng]
+(defn show-title-screen
+  ;; `on-start` runs once at the sequence's t=0, before the first frame paints;
+  ;; the audio lane starts its music fade from it, which keeps this ns free of
+  ;; an audio dependency.
+  ([rng] (show-title-screen rng {}))
+  ([rng {:keys [on-start]}]
   (let [seed (:seed rng)   ;; capture before picks advance the rng — this is the run seed
         [tw th] (or (term/size) [100 36])
         [title rng]  (generate-title rng)
         subtitle "Press any key"
         [scheme rng] (pick-scheme rng)]
     (sfx/clear-screen tw th)
+    (let [t0 (ui/millis)]
+    (when on-start (on-start))
     ;; Animate via the poll-based event loop: a cosmetic clock advances the
     ;; particle frame each tick; any key ends the screen. Never blocks while
     ;; idle, so it stays responsive in native + wasm (see xsofy.ui / #56).
@@ -201,9 +249,10 @@
                        st)))
        :render   (fn [st]
                    (let [[tw th] (:size st)]
-                     (draw-frame (:runes st) title subtitle tw th (:frame st) seed)))
-       :frame-ms 120})
-    {:title title :scheme scheme :rng rng}))
+                     (draw-frame (:runes st) title subtitle tw th (:frame st) seed
+                                 (- (ui/millis) t0))))
+       :frame-ms 120}))
+    {:title title :scheme scheme :rng rng})))
 
 ;; --- Descending Screen ---
 ;; Shown while terrain generates. Runes rise upward, flicker and fade.

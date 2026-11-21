@@ -478,7 +478,9 @@ body.dpad-cool #xsofy-shell button.dpad .label { color: rgba(168, 198, 224, 0.55
   const term = new Terminal({
     fontFamily: sysFont ? MONO : '"Fairfax HD", ' + MONO,
     fontSize: 16,
-    theme: { background: '#0a0e14', foreground: '#d4c5a0', cursor: '#ff6b35' },
+    // Matches the game's 10,10,10 so boot doesn't shift navy → grey under the
+    // title screen's black hold.
+    theme: { background: '#0a0a0a', foreground: '#d4c5a0', cursor: '#ff6b35' },
     allowProposedApi: true,
     convertEol: true,
   });
