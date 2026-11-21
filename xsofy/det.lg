@@ -91,6 +91,17 @@
       [(unchecked-add lo (mod new-seed span))
        (assoc world :seed new-seed)])))
 
+(def ^:private roll-100-salt (byte-array (h/encode-salt [:int-in 0 100])))
+
+(defn roll-100
+  "(int-in world 0 100), the commonest roll, with its salt encoded once at
+   load. The hash sees the same bytes as int-in's, so the roll is the same.
+   (with-folded-salt also encodes it once, but as a byte vector that each
+   call converts to an array, which costs 3x the hash.) Returns [i world']."
+  [world]
+  (let [new-seed (h/combine-encoded (or (:seed world) 0) roll-100-salt)]
+    [(mod new-seed 100) (assoc world :seed new-seed)]))
+
 (defn pick
   "Pick an element from coll. Returns [nil world] if coll is empty.
 
@@ -109,7 +120,7 @@
   "True with probability chance/100, where chance is an int in [0, 100].
    Returns [bool world']."
   [world chance]
-  (let [[i w'] (int-in world 0 100)]
+  (let [[i w'] (roll-100 world)]
     [(< i chance) w']))
 
 (defn unit
