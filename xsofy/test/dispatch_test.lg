@@ -130,3 +130,21 @@
       (is (= (vec (seq (:terrain a))) (vec (seq (:terrain b)))) "results' terrain identical")
       (is (= (:log a) (:log b)) "results' log identical")
       (is (= (:seed a) (:seed b)) "results' seed identical"))))
+
+(deftest actions-after-death-are-noops
+  (testing "once the player is dead, world-mutating actions leave world, seed and
+            log untouched — a replay whose log outlives the player (a diverged
+            ?replay= code, a harness log replayed on the wrong starting world)
+            stops at death instead of crashing in autoexplore / stairs code"
+    (let [w0 (world/make-world 40 20 7)
+          ;; the shape update-world leaves on death: player entity gone, :death screen
+          removed (-> w0 (update :entities dissoc :player) (assoc :screen :death))
+          ;; and the in-between shape: player still present at 0 HP
+          zero-hp (assoc-in w0 [:entities :player :body :hp] 0)]
+      (doseq [[label dead] [["player removed" removed] ["player at 0 hp" zero-hp]]
+              a [:autoexplore :descend :ascend :wait :rest :up :pickup :fire
+                 {:type :use-item :id :nothing}]]
+        (let [w1 (dispatch/dispatch dead a)]
+          (is (= (:seed dead) (:seed w1)) (str label " " a ": seed unchanged"))
+          (is (= (:turn dead) (:turn w1)) (str label " " a ": turn unchanged"))
+          (is (= [] (:action-log w1)) (str label " " a ": nothing logged")))))))
